@@ -131,3 +131,66 @@ def test_parameter_stability_rejects_weak_neighborhood():
     ]
     evidence = parameter_stability_evidence(candidate, center, neighbors, policy())
     assert evidence.passed is False
+
+
+def test_policy_rejects_invalid_thresholds():
+    with pytest.raises(ValueError, match="min_trades_per_slice"):
+        replace(policy(), min_trades_per_slice=0)
+    for field in (
+        "min_profitable_slice_ratio",
+        "max_drawdown",
+        "max_return_degradation",
+        "min_stable_neighbor_ratio",
+    ):
+        with pytest.raises(ValueError, match=field):
+            replace(policy(), **{field: 1.1})
+
+
+def test_walk_forward_rejects_empty_or_wrong_candidate_identity():
+    candidate = genome()
+    with pytest.raises(ValueError, match="at least one evaluation"):
+        walk_forward_evidence(candidate, [], policy())
+
+    fold = result(candidate, dataset_hash="1" * 64)
+    with pytest.raises(ValueError, match="strategy_id"):
+        walk_forward_evidence(candidate, [replace(fold, strategy_id="other")], policy())
+    with pytest.raises(ValueError, match="genome_hash"):
+        walk_forward_evidence(candidate, [replace(fold, genome_hash="g" * 64)], policy())
+
+
+def test_walk_forward_rejects_mixed_engine_identity():
+    candidate = genome()
+    first = result(candidate, dataset_hash="1" * 64)
+    with pytest.raises(ValueError, match="same engine"):
+        walk_forward_evidence(candidate, [first, replace(first, engine="other")], policy())
+    with pytest.raises(ValueError, match="engine_version"):
+        walk_forward_evidence(candidate, [first, replace(first, engine_version="other")], policy())
+
+
+def test_cost_stress_requires_same_dataset_and_handles_nonpositive_base():
+    candidate = genome()
+    base = result(candidate, dataset_hash="b" * 64, total_return=-0.01)
+    wrong_dataset = replace(base, dataset_hash="d" * 64, fees=0.003)
+    with pytest.raises(ValueError, match="same dataset_hash"):
+        cost_stress_evidence(candidate, base, wrong_dataset, policy())
+
+    improved = replace(base, total_return=0.01, fees=0.003)
+    evidence = cost_stress_evidence(candidate, base, improved, policy())
+    assert evidence.passed is True
+    assert evidence.metrics["return_degradation"] == 0.0
+
+
+def test_parameter_stability_rejects_empty_or_mismatched_neighbors():
+    candidate = genome()
+    center = result(candidate, dataset_hash="b" * 64, total_return=-0.01)
+    with pytest.raises(ValueError, match="at least one parameter neighbor"):
+        parameter_stability_evidence(candidate, center, [], policy())
+
+    neighbor = result(candidate, dataset_hash="b" * 64, total_return=-0.01)
+    with pytest.raises(ValueError, match="neighbor strategy_id"):
+        parameter_stability_evidence(candidate, center, [replace(neighbor, strategy_id="other")], policy())
+    with pytest.raises(ValueError, match="same dataset_hash"):
+        parameter_stability_evidence(candidate, center, [replace(neighbor, dataset_hash="d" * 64)], policy())
+
+    evidence = parameter_stability_evidence(candidate, center, [neighbor], policy())
+    assert evidence.metrics["minimum_acceptable_neighbor_return"] == center.total_return
