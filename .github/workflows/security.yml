@@ -1,0 +1,35 @@
+name: Public Repo Security
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  secret-and-dependency-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install audit tools
+        run: pip install pip-audit detect-secrets
+      - name: Scan committed content for likely secrets
+        run: detect-secrets scan --all-files --exclude-files '(^|/)\.git/' > .secrets.baseline
+      - name: Fail on high-risk credential names in tracked files
+        shell: bash
+        run: |
+          if git grep -nEi '(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|aws_secret_access_key[[:space:]]*=|api[_-]?secret[[:space:]]*=[[:space:]]*[^[:space:]#]{8,}|seed phrase[[:space:]]*=)' -- ':!*.example' ':!MASTER_PLAN.md'; then
+            echo 'Potential committed secret detected'
+            exit 1
+          fi
+      - name: Dependency audit
+        run: |
+          pip install -e ".[dev]"
+          pip-audit
