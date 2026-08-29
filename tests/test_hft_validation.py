@@ -68,7 +68,13 @@ def test_hft_report_produces_all_required_specialist_evidence():
         records,
     )
     assert decision.allowed is False
-    assert decision.missing_evidence == frozenset({"walk_forward", "cost_stress", "parameter_stability"})
+    assert decision.missing_evidence == frozenset({
+        "walk_forward",
+        "cost_stress",
+        "parameter_stability",
+        "purged_cpcv",
+        "monte_carlo",
+    })
 
 
 def test_hft_stress_failure_blocks_its_specialist_record():
