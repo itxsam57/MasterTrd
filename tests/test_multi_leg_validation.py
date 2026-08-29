@@ -92,6 +92,8 @@ def test_multi_leg_stress_closes_family_specific_robust_gate():
         base_record(genome, "walk_forward"),
         base_record(genome, "cost_stress"),
         base_record(genome, "parameter_stability"),
+        base_record(genome, "purged_cpcv"),
+        base_record(genome, "monte_carlo"),
         stress,
     ]
     decision = evaluate_validated_promotion(
