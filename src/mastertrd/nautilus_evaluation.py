@@ -62,6 +62,7 @@ def run_binance_spot_evaluation(
     fees: float = 0.0,
     slippage: float = 0.0,
     starting_balances: Sequence[str] = ("100000 USDT",),
+    trade_size_override: str | None = None,
 ) -> EvaluationResult:
     if not dataset_hash or not code_hash:
         raise ValueError("dataset_hash and code_hash are required")
@@ -72,7 +73,11 @@ def run_binance_spot_evaluation(
     if not events:
         raise ValueError("historical data is required")
 
-    strategy = compile_genome_to_nautilus(genome, instrument=instrument)
+    strategy = compile_genome_to_nautilus(
+        genome,
+        instrument=instrument,
+        trade_size_override=trade_size_override,
+    )
     engine = _build_binance_spot_engine(
         instrument=instrument,
         starting_balances=starting_balances,
