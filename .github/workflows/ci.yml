@@ -23,8 +23,8 @@ jobs:
           pip install -e ".[dev]"
       - name: Test core
         run: |
-          pytest -q tests --ignore=tests/integration \
-            --cov=mastertrd \
-            --cov-omit='src/mastertrd/research/*,src/mastertrd/nautilus_binance.py' \
-            --cov-report=term-missing \
-            --cov-fail-under=90
+          coverage run \
+            --source=mastertrd \
+            --omit='src/mastertrd/research/*,src/mastertrd/nautilus_binance.py' \
+            -m pytest -q tests --ignore=tests/integration
+          coverage report --show-missing --fail-under=90
