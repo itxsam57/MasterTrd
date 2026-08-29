@@ -5,14 +5,18 @@ on:
     paths:
       - 'src/mastertrd/execution.py'
       - 'src/mastertrd/nautilus_binance.py'
+      - 'src/mastertrd/nautilus_backtest.py'
       - 'tests/integration/test_nautilus_binance_adapter.py'
+      - 'tests/integration/test_nautilus_backtest.py'
       - 'pyproject.toml'
       - '.github/workflows/execution-stack.yml'
   pull_request:
     paths:
       - 'src/mastertrd/execution.py'
       - 'src/mastertrd/nautilus_binance.py'
+      - 'src/mastertrd/nautilus_backtest.py'
       - 'tests/integration/test_nautilus_binance_adapter.py'
+      - 'tests/integration/test_nautilus_backtest.py'
       - 'pyproject.toml'
       - '.github/workflows/execution-stack.yml'
   workflow_dispatch:
@@ -35,4 +39,4 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,execution]"
       - name: Test Nautilus Binance bridge
-        run: pytest -q tests/test_execution_profile.py tests/integration/test_nautilus_binance_adapter.py
+        run: pytest -q tests/test_execution_profile.py tests/integration/test_nautilus_binance_adapter.py tests/integration/test_nautilus_backtest.py
