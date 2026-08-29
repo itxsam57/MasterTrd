@@ -34,20 +34,25 @@ def test_compiled_genome_generates_real_simulated_orders_and_fills():
     )
     base_ns = 1_700_000_000_000_000_000
     bars = []
+    previous_close = prices[0] + 1
     for index, close in enumerate(prices):
-        value = Price.from_str(f"{close:.2f}")
+        open_value = float(previous_close)
+        close_value = float(close)
+        high_value = max(open_value, close_value) + 1.0
+        low_value = min(open_value, close_value) - 1.0
         bars.append(
             Bar(
                 bar_type=bar_type,
-                open=value,
-                high=value,
-                low=value,
-                close=value,
+                open=Price.from_str(f"{open_value:.2f}"),
+                high=Price.from_str(f"{high_value:.2f}"),
+                low=Price.from_str(f"{low_value:.2f}"),
+                close=Price.from_str(f"{close_value:.2f}"),
                 volume=Quantity.from_str("1.00000"),
                 ts_event=base_ns + index * 60_000_000_000,
                 ts_init=base_ns + index * 60_000_000_000,
             )
         )
+        previous_close = close
 
     summary = run_binance_spot_strategy_history(
         instrument=instrument,
