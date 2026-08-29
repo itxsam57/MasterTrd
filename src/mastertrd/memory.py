@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -24,7 +24,16 @@ class JsonlResearchMemory:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
 
-    def append(self, genome: StrategyGenome, *, status: str, engine: str, score: float, reason: str = "", metadata: Mapping[str, Any] | None = None) -> ResearchRecord:
+    def append(
+        self,
+        genome: StrategyGenome,
+        *,
+        status: str,
+        engine: str,
+        score: float,
+        reason: str = "",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> ResearchRecord:
         record = ResearchRecord(
             genome_hash=genome.genome_hash,
             status=status,
@@ -36,7 +45,7 @@ class JsonlResearchMemory:
         )
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record.__dict__, sort_keys=True, separators=(",", ":")) + "\n")
+            f.write(json.dumps(asdict(record), sort_keys=True, separators=(",", ":")) + "\n")
         return record
 
     def read_all(self) -> list[ResearchRecord]:
