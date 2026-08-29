@@ -1,0 +1,56 @@
+name: Full Stack Compatibility
+
+on:
+  push:
+    paths:
+      - 'pyproject.toml'
+      - 'src/**'
+      - 'tests/**'
+      - '.github/workflows/full-stack.yml'
+  pull_request:
+    paths:
+      - 'pyproject.toml'
+      - 'src/**'
+      - 'tests/**'
+      - '.github/workflows/full-stack.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  full-stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Install all admitted subsystems together
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,storage,research,execution,hft,data-fallback,indicators]"
+          pip check
+      - name: Smoke import every external engine
+        run: |
+          python - <<'PY'
+          import arch
+          import ccxt
+          import duckdb
+          import hftbacktest
+          import nautilus_trader
+          import optuna
+          import pymoo
+          import quantstats
+          import river
+          import ruptures
+          import skfolio
+          import statsmodels
+          import talib
+          import vectorbt
+          print('full-stack imports: OK')
+          PY
+      - name: Run cumulative tests
+        run: pytest -q
