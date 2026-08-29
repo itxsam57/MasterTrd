@@ -37,7 +37,10 @@ def _rules(family: str, rng: random.Random) -> tuple[dict, dict, dict]:
     common_exit = {"type": "atr_bracket", "stop_atr": atr, "target_atr": round(atr * rng.uniform(1.2, 2.5), 2)}
 
     rules = {
-        "trend": ({"type": "ema_cross", "fast": fast, "slow": slow}, common_exit, {"adx_min": rng.randint(15, 30)}),
+        # Stable Nautilus v1 ships a real EMACross strategy whose exit semantic is
+        # crossover reversal. Keep this baseline honest rather than pretending the
+        # built-in strategy implements an ATR bracket it does not have.
+        "trend": ({"type": "ema_cross", "fast": fast, "slow": slow}, {"type": "cross_reverse"}, {"adx_min": rng.randint(15, 30)}),
         "momentum": ({"type": "rsi_momentum", "period": rsi, "threshold": rng.randint(52, 68)}, common_exit, {"volume_confirm": True}),
         "breakout": ({"type": "donchian_breakout", "window": rng.randint(10, 80)}, common_exit, {"atr_min": round(rng.uniform(0.2, 2.0), 2)}),
         "mean_reversion": ({"type": "zscore_reversion", "window": rng.randint(12, 80), "z": round(rng.uniform(1.2, 3.0), 2)}, {"type": "mean_or_atr_stop", "stop_atr": atr}, {"rsi_period": rsi}),
