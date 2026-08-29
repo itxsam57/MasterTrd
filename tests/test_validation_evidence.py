@@ -38,6 +38,7 @@ def generic_robust_records(g: StrategyGenome) -> list[ValidationEvidence]:
         evidence(g, "parameter_stability"),
         evidence(g, "purged_cpcv"),
         evidence(g, "monte_carlo"),
+        evidence(g, "asset_transfer"),
     ]
 
 
