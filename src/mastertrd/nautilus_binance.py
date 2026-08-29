@@ -21,16 +21,19 @@ def build_nautilus_binance_configs(
     if not account_id:
         raise ValueError("account_id is required")
 
-    from nautilus_trader.adapters.binance import BinanceDataClientConfig
-    from nautilus_trader.adapters.binance import BinanceEnvironment
-    from nautilus_trader.adapters.binance import BinanceExecutionClientConfig
-    from nautilus_trader.adapters.binance import BinanceProductType
-    from nautilus_trader.model import AccountId
+    # MasterTrd deliberately targets the latest stable NautilusTrader API for
+    # any path that can reach real capital. The v1.231 line exposes Binance
+    # configs from config.py and environment/account enums from common.enums.
+    from nautilus_trader.adapters.binance.common.enums import BinanceAccountType
+    from nautilus_trader.adapters.binance.common.enums import BinanceEnvironment
+    from nautilus_trader.adapters.binance.config import BinanceDataClientConfig
+    from nautilus_trader.adapters.binance.config import BinanceExecClientConfig
+    from nautilus_trader.model.identifiers import AccountId
 
-    product_map = {
-        BinanceProduct.SPOT: BinanceProductType.SPOT,
-        BinanceProduct.USD_M: BinanceProductType.USD_M,
-        BinanceProduct.COIN_M: BinanceProductType.COIN_M,
+    account_type_map = {
+        BinanceProduct.SPOT: BinanceAccountType.SPOT,
+        BinanceProduct.USD_M: BinanceAccountType.USDT_FUTURES,
+        BinanceProduct.COIN_M: BinanceAccountType.COIN_FUTURES,
     }
     environment_map = {
         "LIVE": BinanceEnvironment.LIVE,
@@ -38,20 +41,20 @@ def build_nautilus_binance_configs(
         "DEMO": BinanceEnvironment.DEMO,
     }
     try:
-        product_type = product_map[profile.product]
+        account_type = account_type_map[profile.product]
         environment = environment_map[profile.environment]
     except KeyError as exc:
         raise ValueError("unsupported Binance product or environment") from exc
 
     data = BinanceDataClientConfig(
-        product_type=product_type,
+        account_type=account_type,
         environment=environment,
         api_key=profile.api_key,
         api_secret=profile.api_secret,
     )
-    execution = BinanceExecutionClientConfig(
+    execution = BinanceExecClientConfig(
         account_id=AccountId.from_str(account_id),
-        product_type=product_type,
+        account_type=account_type,
         environment=environment,
         api_key=profile.api_key,
         api_secret=profile.api_secret,
