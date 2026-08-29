@@ -14,7 +14,7 @@ def test_stable_nautilus_replays_local_binance_history():
         TradeTick(
             instrument_id=instrument.id,
             price=Price.from_str(f"{2000 + index * 0.01:.2f}"),
-            size=Quantity.from_str("0.010"),
+            size=Quantity.from_str("0.01000"),
             aggressor_side=AggressorSide.BUYER if index % 2 == 0 else AggressorSide.SELLER,
             trade_id=TradeId(str(index + 1)),
             ts_event=base_ns + index * 1_000_000_000,
