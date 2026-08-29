@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import AbstractSet, Mapping
+from typing import AbstractSet, Iterable, Mapping
 
 from .contracts import StrategyState
+from .genome import StrategyGenome
+from .validation import ValidationEvidence, extra_evidence_for_target, validated_evidence_types
 
 
 _REQUIRED_EVIDENCE: Mapping[StrategyState, frozenset[str]] = {
@@ -48,3 +50,22 @@ def evaluate_promotion(current: StrategyState, target: StrategyState, evidence: 
     if missing:
         return PromotionDecision(False, target, missing, "required evidence missing")
     return PromotionDecision(True, target, reason="all promotion gates satisfied")
+
+
+def evaluate_validated_promotion(
+    current: StrategyState,
+    target: StrategyState,
+    genome: StrategyGenome,
+    records: Iterable[ValidationEvidence],
+) -> PromotionDecision:
+    evidence = validated_evidence_types(genome, records)
+    base = evaluate_promotion(current, target, evidence)
+    if not base.allowed:
+        return base
+    if target in {StrategyState.REJECTED, StrategyState.QUARANTINED}:
+        return base
+    extra_required = extra_evidence_for_target(genome, target)
+    missing = frozenset(extra_required.difference(evidence))
+    if missing:
+        return PromotionDecision(False, target, missing, "family-specific validation evidence missing")
+    return PromotionDecision(True, target, reason="validated promotion evidence satisfied")
