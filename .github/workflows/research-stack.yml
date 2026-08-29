@@ -33,4 +33,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,storage,research]"
       - name: Run research integration tests
-        run: pytest -q tests/integration/test_research_stack.py
+        run: |
+          pytest -q \
+            tests/integration/test_research_stack.py \
+            tests/integration/test_advanced_research.py
