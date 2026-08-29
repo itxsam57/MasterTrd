@@ -110,6 +110,12 @@ def paper_minimum_evidence(
     else:
         engine_version = "1.231.0"
 
+    nonempty_code_hashes = {record.code_hash for record in records if record.code_hash}
+    if len(nonempty_code_hashes) > 1:
+        raise ValueError("code_hash must match across paper sessions")
+    code_hash = next(iter(nonempty_code_hashes), candidate.genome_hash)
+    code_identity_valid = bool(records) and all(record.code_hash == code_hash for record in records)
+
     duration_seconds = sum(record.duration_seconds for record in records)
     closed_trades = sum(record.closed_trades for record in records)
     reconciliation_errors = sum(record.reconciliation_errors for record in records)
@@ -120,6 +126,8 @@ def paper_minimum_evidence(
         growth *= 1.0 + record.total_return
     total_return = growth - 1.0
 
+    verified_sessions = sum(1 for record in records if record.provenance_verified)
+    reconciled_sessions = sum(1 for record in records if record.reconciliation_checks > 0)
     passed = (
         len(records) >= policy.min_sessions
         and duration_seconds >= policy.min_duration_seconds
@@ -128,6 +136,9 @@ def paper_minimum_evidence(
         and max_drawdown <= policy.max_drawdown
         and reconciliation_errors == 0
         and all(record.completed for record in records)
+        and code_identity_valid
+        and verified_sessions == len(records)
+        and reconciled_sessions == len(records)
     )
 
     report_hash = _reports_hash(records)
@@ -136,7 +147,7 @@ def paper_minimum_evidence(
         genome_hash=candidate.genome_hash,
         evidence_type="paper_minimum_evidence",
         dataset_hash=report_hash,
-        code_hash=candidate.genome_hash,
+        code_hash=code_hash,
         engine="nautilus_trader",
         engine_version=engine_version,
         passed=passed,
@@ -148,5 +159,7 @@ def paper_minimum_evidence(
             "max_drawdown": float(max_drawdown),
             "reconciliation_errors": float(reconciliation_errors),
             "completed_sessions": float(sum(1 for record in records if record.completed)),
+            "verified_sessions": float(verified_sessions),
+            "reconciled_sessions": float(reconciled_sessions),
         },
     )
