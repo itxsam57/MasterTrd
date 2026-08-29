@@ -24,6 +24,10 @@ class PaperForwardReport:
     max_drawdown: float
     reconciliation_errors: int
     completed: bool
+    code_hash: str = ""
+    reconciliation_checks: int = 0
+    session_event_hash: str = ""
+    provenance_verified: bool = False
 
     def __post_init__(self) -> None:
         identity = (
@@ -36,7 +40,12 @@ class PaperForwardReport:
         )
         if not all(identity):
             raise ValueError("paper forward report identity fields are required")
-        if self.duration_seconds < 0 or self.closed_trades < 0 or self.reconciliation_errors < 0:
+        if (
+            self.duration_seconds < 0
+            or self.closed_trades < 0
+            or self.reconciliation_errors < 0
+            or self.reconciliation_checks < 0
+        ):
             raise ValueError("paper forward counts cannot be negative")
         if not isfinite(float(self.total_return)) or not isfinite(float(self.max_drawdown)):
             raise ValueError("paper forward metrics must be finite")
@@ -44,6 +53,8 @@ class PaperForwardReport:
             raise ValueError("total_return cannot be below -1")
         if not 0.0 <= self.max_drawdown <= 1.0:
             raise ValueError("max_drawdown must be between 0 and 1")
+        if self.provenance_verified and (not self.code_hash or not self.session_event_hash):
+            raise ValueError("verified paper reports require code_hash and session_event_hash")
 
 
 @dataclass(frozen=True, slots=True)
