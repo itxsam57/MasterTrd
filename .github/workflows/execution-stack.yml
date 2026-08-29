@@ -9,6 +9,7 @@ on:
       - 'src/mastertrd/nautilus_strategy.py'
       - 'src/mastertrd/nautilus_evaluation.py'
       - 'src/mastertrd/nautilus_paper.py'
+      - 'src/mastertrd/nautilus_data.py'
       - 'src/mastertrd/paper_evidence.py'
       - 'tests/integration/test_nautilus_binance_adapter.py'
       - 'tests/integration/test_nautilus_backtest.py'
@@ -16,6 +17,7 @@ on:
       - 'tests/integration/test_nautilus_strategy_activity.py'
       - 'tests/integration/test_nautilus_evaluation.py'
       - 'tests/integration/test_nautilus_paper_sandbox.py'
+      - 'tests/integration/test_nautilus_market_bar_bridge.py'
       - 'pyproject.toml'
       - '.github/workflows/execution-stack.yml'
   pull_request:
@@ -26,6 +28,7 @@ on:
       - 'src/mastertrd/nautilus_strategy.py'
       - 'src/mastertrd/nautilus_evaluation.py'
       - 'src/mastertrd/nautilus_paper.py'
+      - 'src/mastertrd/nautilus_data.py'
       - 'src/mastertrd/paper_evidence.py'
       - 'tests/integration/test_nautilus_binance_adapter.py'
       - 'tests/integration/test_nautilus_backtest.py'
@@ -33,6 +36,7 @@ on:
       - 'tests/integration/test_nautilus_strategy_activity.py'
       - 'tests/integration/test_nautilus_evaluation.py'
       - 'tests/integration/test_nautilus_paper_sandbox.py'
+      - 'tests/integration/test_nautilus_market_bar_bridge.py'
       - 'pyproject.toml'
       - '.github/workflows/execution-stack.yml'
   workflow_dispatch:
@@ -55,4 +59,4 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,execution]"
       - name: Test Nautilus execution bridges
-        run: pytest -q tests/test_execution_profile.py tests/integration/test_nautilus_binance_adapter.py tests/integration/test_nautilus_backtest.py tests/integration/test_nautilus_strategy_compiler.py tests/integration/test_nautilus_strategy_activity.py tests/integration/test_nautilus_evaluation.py tests/integration/test_nautilus_paper_sandbox.py
+        run: pytest -q tests/test_execution_profile.py tests/integration/test_nautilus_binance_adapter.py tests/integration/test_nautilus_backtest.py tests/integration/test_nautilus_strategy_compiler.py tests/integration/test_nautilus_strategy_activity.py tests/integration/test_nautilus_evaluation.py tests/integration/test_nautilus_paper_sandbox.py tests/integration/test_nautilus_market_bar_bridge.py
