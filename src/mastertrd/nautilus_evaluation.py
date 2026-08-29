@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from importlib.metadata import version
-from math import isfinite, prod, sqrt
+from math import isfinite, prod
 from statistics import mean, stdev
 from typing import Iterable, Sequence
 
@@ -82,20 +82,15 @@ def run_binance_spot_evaluation(
         engine.add_strategy(strategy)
         engine.run()
 
-        from nautilus_trader.analysis.reporter import ReportProvider
+        # Stable NautilusTrader 1.231 exposes completed position state through the
+        # cache, while BacktestResult does not expose the newer returns_series API.
+        # Use the actual realized return of every closed simulated position.
+        closed_positions = engine.cache.positions_closed()
+        raw_returns = [float(position.realized_return) for position in closed_positions]
+        trade_count = len(closed_positions)
 
-        backtest_result = engine.get_result()
-        orders = engine.cache.orders()
-        fills_report = ReportProvider.generate_fills_report(orders)
-        trade_count = int(len(fills_report.index))
-
-        returns_series = backtest_result.returns_series
-        if hasattr(returns_series, "values"):
-            raw_returns = list(returns_series.values())
-        else:
-            raw_returns = list(returns_series)
         total_return, sharpe, sortino, max_drawdown, profit_factor = _return_metrics(raw_returns)
-        expectancy = total_return / trade_count if trade_count else 0.0
+        expectancy = mean(raw_returns) if raw_returns else 0.0
 
         return EvaluationResult(
             strategy_id=genome.strategy_id,
