@@ -25,6 +25,6 @@ jobs:
         run: |
           coverage run \
             --source=mastertrd \
-            --omit='src/mastertrd/research/*,src/mastertrd/nautilus_binance.py,src/mastertrd/nautilus_backtest.py,src/mastertrd/nautilus_strategy.py,src/mastertrd/nautilus_evaluation.py,src/mastertrd/nautilus_paper.py,src/mastertrd/nautilus_data.py,src/mastertrd/memory_duckdb.py' \
+            --omit='src/mastertrd/research/*,src/mastertrd/nautilus_binance.py,src/mastertrd/nautilus_backtest.py,src/mastertrd/nautilus_strategy.py,src/mastertrd/nautilus_evaluation.py,src/mastertrd/nautilus_paper.py,src/mastertrd/nautilus_data.py,src/mastertrd/memory_duckdb.py,src/mastertrd/research_cycle.py' \
             -m pytest -q tests --ignore=tests/integration
           coverage report --show-missing --fail-under=90
