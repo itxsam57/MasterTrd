@@ -34,7 +34,7 @@ research = [
   "quantstats>=0.0.77,<0.1",
 ]
 execution = [
-  "nautilus_trader>=1.220,<3",
+  "nautilus_trader>=1.231,<2",
 ]
 hft = [
   "hftbacktest>=2,<3",
