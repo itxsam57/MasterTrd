@@ -1,7 +1,7 @@
 import pytest
 
 from mastertrd.contracts import RuntimeMode
-from mastertrd.live_node import NodeReadiness, preflight_node
+from mastertrd.live_node import NodeReadiness, preflight_node, run_node
 from mastertrd.runtime import RuntimeConfig
 
 
@@ -51,3 +51,22 @@ def test_research_and_backtest_do_not_run_as_persistent_execution_nodes():
     for mode in (RuntimeMode.RESEARCH, RuntimeMode.BACKTEST):
         with pytest.raises(RuntimeError, match="not a persistent execution mode"):
             preflight_node(runtime(mode), {})
+
+
+def test_run_node_stays_alive_until_stop_requested_after_preflight():
+    stop_states = iter((False, False, True))
+    sleeps: list[float] = []
+    heartbeats: list[NodeReadiness] = []
+
+    readiness = run_node(
+        runtime(RuntimeMode.PAPER),
+        {},
+        stop_requested=lambda: next(stop_states),
+        sleep=lambda seconds: sleeps.append(seconds),
+        heartbeat=lambda state: heartbeats.append(state),
+        interval_seconds=5.0,
+    )
+
+    assert readiness is NodeReadiness.PAPER_READY
+    assert sleeps == [5.0, 5.0]
+    assert heartbeats == [NodeReadiness.PAPER_READY, NodeReadiness.PAPER_READY]
