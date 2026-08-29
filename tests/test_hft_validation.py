@@ -74,6 +74,7 @@ def test_hft_report_produces_all_required_specialist_evidence():
         "parameter_stability",
         "purged_cpcv",
         "monte_carlo",
+        "asset_transfer",
     })
 
 
