@@ -31,6 +31,16 @@ def evidence(g: StrategyGenome, kind: str, *, passed: bool = True) -> Validation
     )
 
 
+def generic_robust_records(g: StrategyGenome) -> list[ValidationEvidence]:
+    return [
+        evidence(g, "walk_forward"),
+        evidence(g, "cost_stress"),
+        evidence(g, "parameter_stability"),
+        evidence(g, "purged_cpcv"),
+        evidence(g, "monte_carlo"),
+    ]
+
+
 def test_evidence_hash_is_deterministic_across_metric_order():
     g = genome()
     a = evidence(g, "walk_forward")
@@ -68,27 +78,18 @@ def test_failed_or_wrong_genome_evidence_is_not_accepted():
 
 def test_trend_strategy_requires_real_robustness_records_for_promotion():
     g = genome("trend")
-    records = [
-        evidence(g, "walk_forward"),
-        evidence(g, "cost_stress"),
-        evidence(g, "parameter_stability"),
-    ]
     decision = evaluate_validated_promotion(
         StrategyState.BACKTESTED,
         StrategyState.ROBUST,
         g,
-        records,
+        generic_robust_records(g),
     )
     assert decision.allowed
 
 
 def test_hft_strategy_cannot_become_robust_without_hft_specialist_evidence():
     g = genome("scalping")
-    generic = [
-        evidence(g, "walk_forward"),
-        evidence(g, "cost_stress"),
-        evidence(g, "parameter_stability"),
-    ]
+    generic = generic_robust_records(g)
     denied = evaluate_validated_promotion(
         StrategyState.BACKTESTED,
         StrategyState.ROBUST,
