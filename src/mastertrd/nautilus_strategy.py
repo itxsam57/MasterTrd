@@ -11,10 +11,16 @@ _TIMEFRAME_COMPONENTS = {
     "5m": "5-MINUTE",
     "15m": "15-MINUTE",
     "1h": "1-HOUR",
+    "4h": "4-HOUR",
 }
 
 
-def compile_genome_to_nautilus(genome: StrategyGenome, *, instrument):
+def compile_genome_to_nautilus(
+    genome: StrategyGenome,
+    *,
+    instrument,
+    trade_size_override: str | None = None,
+):
     if instrument is None:
         raise ValueError("instrument is required")
 
@@ -26,24 +32,34 @@ def compile_genome_to_nautilus(genome: StrategyGenome, *, instrument):
     if tuple(genome.instruments) != (instrument_id,):
         raise ValueError("genome instrument must exactly match the Nautilus instrument")
 
-    if genome.entry.get("kind") != "ema_cross":
+    entry_kind = genome.entry.get("kind", genome.entry.get("type"))
+    if entry_kind != "ema_cross":
         raise ValueError("unsupported Nautilus entry kind")
-    if genome.exit.get("kind") != "cross_reverse":
+
+    exit_kind = genome.exit.get("kind", genome.exit.get("type"))
+    if exit_kind != "cross_reverse":
         raise ValueError("unsupported Nautilus exit kind")
 
     try:
-        fast_period = int(genome.entry["fast_period"])
-        slow_period = int(genome.entry["slow_period"])
-    except (KeyError, TypeError, ValueError) as exc:
+        fast_value = genome.entry.get("fast_period", genome.entry.get("fast"))
+        slow_value = genome.entry.get("slow_period", genome.entry.get("slow"))
+        fast_period = int(fast_value)
+        slow_period = int(slow_value)
+    except (TypeError, ValueError) as exc:
         raise ValueError("EMA periods must be positive integers") from exc
     if fast_period <= 0 or slow_period <= 0:
         raise ValueError("EMA periods must be positive integers")
     if fast_period >= slow_period:
         raise ValueError("fast_period must be less than slow_period")
 
+    raw_trade_size = trade_size_override
+    if raw_trade_size is None:
+        raw_trade_size = genome.entry.get("trade_size")
     try:
-        trade_size = Decimal(str(genome.entry["trade_size"]))
-    except (KeyError, InvalidOperation, TypeError, ValueError) as exc:
+        if raw_trade_size is None:
+            raise ValueError("trade_size is required")
+        trade_size = Decimal(str(raw_trade_size))
+    except (InvalidOperation, TypeError, ValueError) as exc:
         raise ValueError("trade_size must be a positive decimal") from exc
     if not trade_size.is_finite() or trade_size <= 0:
         raise ValueError("trade_size must be a positive decimal")
