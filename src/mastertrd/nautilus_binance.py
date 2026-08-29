@@ -53,7 +53,7 @@ def build_nautilus_binance_configs(
         api_secret=profile.api_secret,
     )
     execution = BinanceExecClientConfig(
-        account_id=AccountId.from_str(account_id),
+        account_id=AccountId(account_id),
         account_type=account_type,
         environment=environment,
         api_key=profile.api_key,
