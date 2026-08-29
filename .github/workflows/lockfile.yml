@@ -1,0 +1,33 @@
+name: Dependency Lock Artifact
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - pyproject.toml
+      - .github/workflows/lockfile.yml
+
+permissions:
+  contents: read
+
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install uv
+        run: python -m pip install --disable-pip-version-check uv
+      - name: Resolve lock
+        run: uv lock
+      - name: Verify lock is internally consistent
+        run: uv lock --check
+      - name: Upload lock artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mastertrd-uv-lock
+          path: uv.lock
+          if-no-files-found: error
+          retention-days: 7
