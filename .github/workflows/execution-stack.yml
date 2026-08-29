@@ -10,6 +10,7 @@ on:
       - 'tests/integration/test_nautilus_binance_adapter.py'
       - 'tests/integration/test_nautilus_backtest.py'
       - 'tests/integration/test_nautilus_strategy_compiler.py'
+      - 'tests/integration/test_nautilus_strategy_activity.py'
       - 'pyproject.toml'
       - '.github/workflows/execution-stack.yml'
   pull_request:
@@ -21,6 +22,7 @@ on:
       - 'tests/integration/test_nautilus_binance_adapter.py'
       - 'tests/integration/test_nautilus_backtest.py'
       - 'tests/integration/test_nautilus_strategy_compiler.py'
+      - 'tests/integration/test_nautilus_strategy_activity.py'
       - 'pyproject.toml'
       - '.github/workflows/execution-stack.yml'
   workflow_dispatch:
@@ -43,4 +45,4 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,execution]"
       - name: Test Nautilus Binance bridge
-        run: pytest -q tests/test_execution_profile.py tests/integration/test_nautilus_binance_adapter.py tests/integration/test_nautilus_backtest.py tests/integration/test_nautilus_strategy_compiler.py
+        run: pytest -q tests/test_execution_profile.py tests/integration/test_nautilus_binance_adapter.py tests/integration/test_nautilus_backtest.py tests/integration/test_nautilus_strategy_compiler.py tests/integration/test_nautilus_strategy_activity.py
