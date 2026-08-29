@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
+from mastertrd.advanced_validation import AdvancedValidationPolicy
 from mastertrd.contracts import MarketBar, StrategyState
 from mastertrd.nautilus_data import market_bars_to_nautilus
 from mastertrd.research.generator import generate_candidate
@@ -52,6 +53,14 @@ def test_generated_candidate_runs_real_robustness_suite_and_can_reach_robust():
         ("fold-b", _bars(candidate, instrument, start=start + fold_span * 2, offset=25.0)),
         ("fold-c", _bars(candidate, instrument, start=start + fold_span * 3, offset=-25.0)),
     ]
+    cpcv = [
+        (f"cpcv-{index}", _bars(candidate, instrument, start=start + fold_span * (4 + index), offset=offset))
+        for index, offset in enumerate((10.0, -10.0, 20.0, -20.0))
+    ]
+    monte_carlo = [
+        (f"mc-{index}", _bars(candidate, instrument, start=start + fold_span * (8 + index), offset=offset))
+        for index, offset in enumerate((5.0, -5.0, 15.0, -15.0, 30.0))
+    ]
     policy = RobustnessPolicy(
         min_trades_per_slice=1,
         min_profitable_slice_ratio=0.67,
@@ -60,6 +69,14 @@ def test_generated_candidate_runs_real_robustness_suite_and_can_reach_robust():
         max_return_degradation=1.0,
         min_stable_neighbor_ratio=0.50,
     )
+    advanced_policy = AdvancedValidationPolicy(
+        min_evaluations=4,
+        min_trades_per_evaluation=1,
+        min_positive_ratio=0.50,
+        max_drawdown=0.90,
+        min_monte_carlo_survival_ratio=0.80,
+        max_monte_carlo_loss=-1.0,
+    )
 
     cycle = run_generated_robustness_cycle(
         candidate=candidate,
@@ -67,9 +84,12 @@ def test_generated_candidate_runs_real_robustness_suite_and_can_reach_robust():
         data=base,
         dataset_hash="robustness-base-v1",
         fold_datasets=folds,
+        cpcv_datasets=cpcv,
+        monte_carlo_datasets=monte_carlo,
         code_hash="robustness-code-v1",
         trade_size="0.01000",
         policy=policy,
+        advanced_policy=advanced_policy,
         stressed_fees=0.001,
         stressed_slippage=0.001,
         starting_balances=("10 ETH", "100000 USDT"),
@@ -79,10 +99,14 @@ def test_generated_candidate_runs_real_robustness_suite_and_can_reach_robust():
     assert cycle.stressed_result.total_return < cycle.base_result.total_return
     assert len(cycle.fold_results) == 3
     assert len(cycle.neighbor_results) >= 2
+    assert len(cycle.cpcv_results) == 4
+    assert len(cycle.monte_carlo_results) == 5
     assert {record.evidence_type for record in cycle.evidence} == {
         "walk_forward",
         "cost_stress",
         "parameter_stability",
+        "purged_cpcv",
+        "monte_carlo",
     }
     assert all(record.passed for record in cycle.evidence)
     assert cycle.promotion.allowed is True
