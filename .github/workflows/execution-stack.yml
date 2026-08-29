@@ -1,0 +1,38 @@
+name: Execution Stack
+
+on:
+  push:
+    paths:
+      - 'src/mastertrd/execution.py'
+      - 'src/mastertrd/nautilus_binance.py'
+      - 'tests/integration/test_nautilus_binance_adapter.py'
+      - 'pyproject.toml'
+      - '.github/workflows/execution-stack.yml'
+  pull_request:
+    paths:
+      - 'src/mastertrd/execution.py'
+      - 'src/mastertrd/nautilus_binance.py'
+      - 'tests/integration/test_nautilus_binance_adapter.py'
+      - 'pyproject.toml'
+      - '.github/workflows/execution-stack.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nautilus-binance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Install execution stack
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,execution]"
+      - name: Test Nautilus Binance bridge
+        run: pytest -q tests/test_execution_profile.py tests/integration/test_nautilus_binance_adapter.py
