@@ -5,7 +5,12 @@ from mastertrd.governor import evaluate_promotion
 def test_governor_requires_all_evidence():
     denied = evaluate_promotion(StrategyState.BACKTESTED, StrategyState.ROBUST, {"walk_forward"})
     assert not denied.allowed
-    assert denied.missing_evidence == {"cost_stress", "parameter_stability"}
+    assert denied.missing_evidence == {
+        "cost_stress",
+        "parameter_stability",
+        "purged_cpcv",
+        "monte_carlo",
+    }
 
 
 def test_governor_allows_only_next_state():
