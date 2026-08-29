@@ -1,7 +1,9 @@
+import signal
+
 import pytest
 
 from mastertrd.contracts import RuntimeMode
-from mastertrd.live_node import NodeReadiness, preflight_node, run_node
+from mastertrd.live_node import NodeReadiness, preflight_node, run_node, run_service
 from mastertrd.runtime import RuntimeConfig
 
 
@@ -70,3 +72,35 @@ def test_run_node_stays_alive_until_stop_requested_after_preflight():
     assert readiness is NodeReadiness.PAPER_READY
     assert sleeps == [5.0, 5.0]
     assert heartbeats == [NodeReadiness.PAPER_READY, NodeReadiness.PAPER_READY]
+
+
+def test_run_service_builds_runtime_and_stops_cleanly_on_sigterm():
+    handlers: dict[int, object] = {}
+    heartbeats: list[NodeReadiness] = []
+    sleeps: list[float] = []
+
+    def register(sig: int, handler: object) -> None:
+        handlers[sig] = handler
+
+    def heartbeat(state: NodeReadiness) -> None:
+        heartbeats.append(state)
+        handler = handlers[signal.SIGTERM]
+        handler(signal.SIGTERM, None)  # type: ignore[operator]
+
+    readiness = run_service(
+        {
+            "MASTERTRD_MODE": "PAPER",
+            "LIVE_TRADING_ENABLED": "false",
+            "ORACLE_ENABLED": "false",
+        },
+        register_signal=register,
+        sleep=lambda seconds: sleeps.append(seconds),
+        heartbeat=heartbeat,
+        interval_seconds=3.0,
+    )
+
+    assert signal.SIGINT in handlers
+    assert signal.SIGTERM in handlers
+    assert readiness is NodeReadiness.PAPER_READY
+    assert heartbeats == [NodeReadiness.PAPER_READY]
+    assert sleeps == [3.0]
