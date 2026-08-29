@@ -32,4 +32,4 @@ jobs:
       - name: Dependency audit
         run: |
           pip install -e ".[dev]"
-          pip-audit
+          pip-audit --skip-editable
