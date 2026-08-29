@@ -13,7 +13,6 @@ dependencies = []
 dev = [
   "pytest>=9.0.3,<10",
   "pytest-cov>=7,<8",
-  "requests>=2.32,<3",
 ]
 storage = [
   "duckdb>=1.3,<2",
