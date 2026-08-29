@@ -18,7 +18,7 @@ def test_demo_usdm_profile_maps_to_stable_nautilus_binance_configs():
     assert configs.execution.account_type is BinanceAccountType.USDT_FUTURES
     assert configs.data.environment is BinanceEnvironment.DEMO
     assert configs.execution.environment is BinanceEnvironment.DEMO
-    assert str(configs.execution.account_id) == "BINANCE-001"
+    assert configs.account_id == "BINANCE-001"
 
 
 def test_spot_testnet_profile_maps_without_enabling_margin_or_options():
@@ -36,3 +36,4 @@ def test_spot_testnet_profile_maps_without_enabling_margin_or_options():
     assert configs.execution.account_type is BinanceAccountType.SPOT
     assert configs.data.environment is BinanceEnvironment.TESTNET
     assert configs.execution.environment is BinanceEnvironment.TESTNET
+    assert configs.account_id == "BINANCE-TEST-001"
