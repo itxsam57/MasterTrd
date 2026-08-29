@@ -56,8 +56,10 @@ def compile_genome_to_nautilus(genome: StrategyGenome, *, instrument):
     from nautilus_trader.examples.strategies.ema_cross import EMACross, EMACrossConfig
     from nautilus_trader.model.data import BarType
 
+    # MasterTrd currently supplies fully formed historical/venue bars directly to Nautilus.
+    # Such bars are EXTERNAL data. INTERNAL is reserved for bars Nautilus aggregates itself.
     bar_type = BarType.from_str(
-        f"{instrument_id}-{timeframe_component}-LAST-INTERNAL"
+        f"{instrument_id}-{timeframe_component}-LAST-EXTERNAL"
     )
     config = EMACrossConfig(
         instrument_id=instrument.id,
