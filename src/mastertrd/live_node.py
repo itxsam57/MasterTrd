@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from enum import StrEnum
+import os
+import signal
+import time
+from threading import Event
+from typing import Any
 
 from .contracts import RuntimeMode
 from .credentials import load_binance_credentials
@@ -44,3 +49,42 @@ def run_node(
         heartbeat(readiness)
         sleep(interval_seconds)
     return readiness
+
+
+def run_service(
+    environ: Mapping[str, str],
+    *,
+    register_signal: Callable[[int, Any], Any],
+    sleep: Callable[[float], None],
+    heartbeat: Callable[[NodeReadiness], None],
+    interval_seconds: float = 30.0,
+) -> NodeReadiness:
+    runtime = RuntimeConfig.from_env(dict(environ))
+    stopped = Event()
+
+    def request_stop(_signum: int, _frame: Any) -> None:
+        stopped.set()
+
+    register_signal(signal.SIGINT, request_stop)
+    register_signal(signal.SIGTERM, request_stop)
+    return run_node(
+        runtime,
+        environ,
+        stop_requested=stopped.is_set,
+        sleep=sleep,
+        heartbeat=heartbeat,
+        interval_seconds=interval_seconds,
+    )
+
+
+def main() -> None:
+    run_service(
+        os.environ,
+        register_signal=signal.signal,
+        sleep=time.sleep,
+        heartbeat=lambda state: print(f"MasterTrd heartbeat: {state}", flush=True),
+    )
+
+
+if __name__ == "__main__":
+    main()
