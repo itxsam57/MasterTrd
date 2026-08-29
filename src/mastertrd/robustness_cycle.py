@@ -3,6 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
+from .advanced_validation import (
+    AdvancedValidationPolicy,
+    monte_carlo_evidence,
+    purged_cpcv_evidence,
+)
 from .contracts import EvaluationResult, StrategyState
 from .genome import StrategyGenome
 from .governor import PromotionDecision, evaluate_validated_promotion
@@ -22,6 +27,8 @@ class GeneratedRobustnessCycle:
     stressed_result: EvaluationResult
     fold_results: tuple[EvaluationResult, ...]
     neighbor_results: tuple[EvaluationResult, ...]
+    cpcv_results: tuple[EvaluationResult, ...]
+    monte_carlo_results: tuple[EvaluationResult, ...]
     evidence: tuple[ValidationEvidence, ...]
     promotion: PromotionDecision
 
@@ -76,6 +83,23 @@ def _ema_neighbors(candidate: StrategyGenome) -> tuple[StrategyGenome, ...]:
     return tuple(neighbors)
 
 
+def _evaluate_datasets(
+    *,
+    candidate: StrategyGenome,
+    datasets: Sequence[tuple[str, Iterable[object]]],
+    common: dict[str, object],
+) -> tuple[EvaluationResult, ...]:
+    return tuple(
+        run_binance_spot_evaluation(
+            genome=candidate,
+            data=tuple(events),
+            dataset_hash=dataset_hash,
+            **common,
+        )
+        for dataset_hash, events in datasets
+    )
+
+
 def run_generated_robustness_cycle(
     *,
     candidate: StrategyGenome,
@@ -83,9 +107,12 @@ def run_generated_robustness_cycle(
     data: Iterable[object],
     dataset_hash: str,
     fold_datasets: Sequence[tuple[str, Iterable[object]]],
+    cpcv_datasets: Sequence[tuple[str, Iterable[object]]],
+    monte_carlo_datasets: Sequence[tuple[str, Iterable[object]]],
     code_hash: str,
     trade_size: str,
     policy: RobustnessPolicy,
+    advanced_policy: AdvancedValidationPolicy,
     stressed_fees: float,
     stressed_slippage: float,
     starting_balances: Sequence[str] = ("100000 USDT",),
@@ -95,10 +122,14 @@ def run_generated_robustness_cycle(
         raise ValueError("base robustness dataset is required")
     if not fold_datasets:
         raise ValueError("walk-forward fold datasets are required")
+    if not cpcv_datasets:
+        raise ValueError("purged/CPCV datasets are required")
+    if not monte_carlo_datasets:
+        raise ValueError("Monte Carlo datasets are required")
     if stressed_fees <= 0.0 and stressed_slippage <= 0.0:
         raise ValueError("cost stress must increase fees or slippage")
 
-    common = dict(
+    common: dict[str, object] = dict(
         instrument=instrument,
         code_hash=code_hash,
         trade_size_override=trade_size,
@@ -119,15 +150,7 @@ def run_generated_robustness_cycle(
         **common,
     )
 
-    fold_results = tuple(
-        run_binance_spot_evaluation(
-            genome=candidate,
-            data=tuple(fold_data),
-            dataset_hash=fold_hash,
-            **common,
-        )
-        for fold_hash, fold_data in fold_datasets
-    )
+    fold_results = _evaluate_datasets(candidate=candidate, datasets=fold_datasets, common=common)
 
     neighbors = _ema_neighbors(candidate)
     neighbor_results = tuple(
@@ -140,10 +163,19 @@ def run_generated_robustness_cycle(
         for neighbor in neighbors
     )
 
+    cpcv_results = _evaluate_datasets(candidate=candidate, datasets=cpcv_datasets, common=common)
+    monte_carlo_results = _evaluate_datasets(
+        candidate=candidate,
+        datasets=monte_carlo_datasets,
+        common=common,
+    )
+
     evidence = (
         walk_forward_evidence(candidate, fold_results, policy),
         cost_stress_evidence(candidate, base_result, stressed_result, policy),
         parameter_stability_evidence(candidate, base_result, neighbor_results, policy),
+        purged_cpcv_evidence(candidate, cpcv_results, advanced_policy),
+        monte_carlo_evidence(candidate, monte_carlo_results, advanced_policy),
     )
     promotion = evaluate_validated_promotion(
         StrategyState.BACKTESTED,
@@ -156,6 +188,8 @@ def run_generated_robustness_cycle(
         stressed_result=stressed_result,
         fold_results=fold_results,
         neighbor_results=neighbor_results,
+        cpcv_results=cpcv_results,
+        monte_carlo_results=monte_carlo_results,
         evidence=evidence,
         promotion=promotion,
     )
