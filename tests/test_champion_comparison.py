@@ -41,6 +41,22 @@ def paper(candidate: StrategyGenome, *, total_return: float, drawdown: float, tr
     )
 
 
+def altered(record: ValidationEvidence, **changes) -> ValidationEvidence:
+    values = {
+        "strategy_id": record.strategy_id,
+        "genome_hash": record.genome_hash,
+        "evidence_type": record.evidence_type,
+        "dataset_hash": record.dataset_hash,
+        "code_hash": record.code_hash,
+        "engine": record.engine,
+        "engine_version": record.engine_version,
+        "passed": record.passed,
+        "metrics": dict(record.metrics),
+    }
+    values.update(changes)
+    return ValidationEvidence(**values)
+
+
 def policy() -> ChampionComparisonPolicy:
     return ChampionComparisonPolicy(
         min_closed_trades=10,
@@ -122,6 +138,85 @@ def test_failed_or_wrong_identity_paper_evidence_is_rejected():
             policy(),
         )
 
+    wrong_genome = altered(
+        paper(candidate, total_return=0.10, drawdown=0.05),
+        genome_hash="different-genome-hash",
+    )
+    with pytest.raises(ValueError, match="genome_hash"):
+        champion_comparison_evidence(candidate, wrong_genome, None, policy())
+
+
+def test_comparison_rejects_wrong_evidence_type_and_engine():
+    candidate = genome("S-candidate")
+    base = paper(candidate, total_return=0.10, drawdown=0.05)
+
+    with pytest.raises(ValueError, match="paper_minimum_evidence"):
+        champion_comparison_evidence(
+            candidate,
+            altered(base, evidence_type="screen"),
+            None,
+            policy(),
+        )
+
+    with pytest.raises(ValueError, match="nautilus_trader"):
+        champion_comparison_evidence(
+            candidate,
+            altered(base, engine="other_engine"),
+            None,
+            policy(),
+        )
+
+
+def test_comparison_rejects_missing_required_metric():
+    candidate = genome("S-candidate")
+    base = paper(candidate, total_return=0.10, drawdown=0.05)
+    metrics = dict(base.metrics)
+    metrics.pop("total_return")
+
+    with pytest.raises(ValueError, match="total_return"):
+        champion_comparison_evidence(
+            candidate,
+            altered(base, metrics=metrics),
+            None,
+            policy(),
+        )
+
+
+def test_incumbent_must_be_a_different_strategy():
+    candidate = genome("S-candidate")
+    challenger = paper(candidate, total_return=0.10, drawdown=0.05)
+
+    with pytest.raises(ValueError, match="different strategy_id"):
+        champion_comparison_evidence(
+            candidate,
+            challenger,
+            challenger,
+            policy(),
+        )
+
+
+def test_zero_drawdown_incumbent_requires_zero_drawdown_challenger():
+    candidate = genome("S-challenger")
+    incumbent = genome("S-incumbent")
+
+    blocked = champion_comparison_evidence(
+        candidate,
+        paper(candidate, total_return=0.20, drawdown=0.01),
+        paper(incumbent, total_return=0.05, drawdown=0.0),
+        policy(),
+    )
+    assert blocked.passed is False
+    assert blocked.metrics["drawdown_ok"] == 0.0
+
+    allowed = champion_comparison_evidence(
+        candidate,
+        paper(candidate, total_return=0.20, drawdown=0.0),
+        paper(incumbent, total_return=0.05, drawdown=0.0),
+        policy(),
+    )
+    assert allowed.passed is True
+    assert allowed.metrics["drawdown_ok"] == 1.0
+
 
 def test_policy_rejects_impossible_values():
     with pytest.raises(ValueError):
@@ -130,3 +225,7 @@ def test_policy_rejects_impossible_values():
         ChampionComparisonPolicy(10, -0.01, 1.25)
     with pytest.raises(ValueError):
         ChampionComparisonPolicy(10, 0.02, 0.0)
+    with pytest.raises(ValueError):
+        ChampionComparisonPolicy(10, float("inf"), 1.25)
+    with pytest.raises(ValueError):
+        ChampionComparisonPolicy(10, 0.02, float("inf"))
