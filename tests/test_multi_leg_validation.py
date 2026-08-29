@@ -94,6 +94,7 @@ def test_multi_leg_stress_closes_family_specific_robust_gate():
         base_record(genome, "parameter_stability"),
         base_record(genome, "purged_cpcv"),
         base_record(genome, "monte_carlo"),
+        base_record(genome, "asset_transfer"),
         stress,
     ]
     decision = evaluate_validated_promotion(
@@ -134,35 +135,15 @@ def test_leg_imbalance_or_residual_exposure_fails_stress():
 def test_report_must_match_candidate_and_actual_leg_count():
     genome = candidate()
     with pytest.raises(ValueError, match="strategy_id"):
-        multi_leg_execution_stress_evidence(
-            genome,
-            report(genome, strategy_id="OTHER"),
-            policy(),
-        )
+        multi_leg_execution_stress_evidence(genome, report(genome, strategy_id="OTHER"), policy())
     with pytest.raises(ValueError, match="genome_hash"):
-        multi_leg_execution_stress_evidence(
-            genome,
-            report(genome, genome_hash="wrong"),
-            policy(),
-        )
+        multi_leg_execution_stress_evidence(genome, report(genome, genome_hash="wrong"), policy())
     with pytest.raises(ValueError, match="expected_legs"):
-        multi_leg_execution_stress_evidence(
-            genome,
-            report(genome, expected_legs=3, leg_fill_counts=(25, 25, 25)),
-            policy(),
-        )
+        multi_leg_execution_stress_evidence(genome, report(genome, expected_legs=3, leg_fill_counts=(25, 25, 25)), policy())
     with pytest.raises(ValueError, match="at least two"):
-        multi_leg_execution_stress_evidence(
-            single_leg_candidate(),
-            report(single_leg_candidate(), expected_legs=2),
-            policy(),
-        )
+        multi_leg_execution_stress_evidence(single_leg_candidate(), report(single_leg_candidate(), expected_legs=2), policy())
     with pytest.raises(ValueError, match="nautilus_trader"):
-        multi_leg_execution_stress_evidence(
-            genome,
-            report(genome, engine="other_engine"),
-            policy(),
-        )
+        multi_leg_execution_stress_evidence(genome, report(genome, engine="other_engine"), policy())
 
 
 def test_multi_leg_policy_rejects_impossible_thresholds():
