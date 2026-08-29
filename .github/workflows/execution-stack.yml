@@ -11,6 +11,7 @@ on:
       - 'src/mastertrd/nautilus_paper.py'
       - 'src/mastertrd/nautilus_data.py'
       - 'src/mastertrd/paper_evidence.py'
+      - 'src/mastertrd/paper_cycle.py'
       - 'src/mastertrd/research/generator.py'
       - 'tests/integration/test_nautilus_binance_adapter.py'
       - 'tests/integration/test_nautilus_backtest.py'
@@ -20,6 +21,7 @@ on:
       - 'tests/integration/test_nautilus_cost_stress.py'
       - 'tests/integration/test_nautilus_paper_sandbox.py'
       - 'tests/integration/test_nautilus_paper_session_identity.py'
+      - 'tests/integration/test_generated_paper_start_cycle.py'
       - 'tests/integration/test_nautilus_market_bar_bridge.py'
       - 'tests/integration/test_generated_strategy_execution_contract.py'
       - 'tests/integration/test_generated_strategy_evaluation.py'
@@ -35,6 +37,7 @@ on:
       - 'src/mastertrd/nautilus_paper.py'
       - 'src/mastertrd/nautilus_data.py'
       - 'src/mastertrd/paper_evidence.py'
+      - 'src/mastertrd/paper_cycle.py'
       - 'src/mastertrd/research/generator.py'
       - 'tests/integration/test_nautilus_binance_adapter.py'
       - 'tests/integration/test_nautilus_backtest.py'
@@ -44,6 +47,7 @@ on:
       - 'tests/integration/test_nautilus_cost_stress.py'
       - 'tests/integration/test_nautilus_paper_sandbox.py'
       - 'tests/integration/test_nautilus_paper_session_identity.py'
+      - 'tests/integration/test_generated_paper_start_cycle.py'
       - 'tests/integration/test_nautilus_market_bar_bridge.py'
       - 'tests/integration/test_generated_strategy_execution_contract.py'
       - 'tests/integration/test_generated_strategy_evaluation.py'
@@ -69,4 +73,4 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,execution]"
       - name: Test Nautilus execution bridges
-        run: pytest -q tests/test_execution_profile.py tests/integration/test_nautilus_binance_adapter.py tests/integration/test_nautilus_backtest.py tests/integration/test_nautilus_strategy_compiler.py tests/integration/test_nautilus_strategy_activity.py tests/integration/test_nautilus_evaluation.py tests/integration/test_nautilus_cost_stress.py tests/integration/test_nautilus_paper_sandbox.py tests/integration/test_nautilus_paper_session_identity.py tests/integration/test_nautilus_market_bar_bridge.py tests/integration/test_generated_strategy_execution_contract.py tests/integration/test_generated_strategy_evaluation.py
+        run: pytest -q tests/test_execution_profile.py tests/integration/test_nautilus_binance_adapter.py tests/integration/test_nautilus_backtest.py tests/integration/test_nautilus_strategy_compiler.py tests/integration/test_nautilus_strategy_activity.py tests/integration/test_nautilus_evaluation.py tests/integration/test_nautilus_cost_stress.py tests/integration/test_nautilus_paper_sandbox.py tests/integration/test_nautilus_paper_session_identity.py tests/integration/test_generated_paper_start_cycle.py tests/integration/test_nautilus_market_bar_bridge.py tests/integration/test_generated_strategy_execution_contract.py tests/integration/test_generated_strategy_evaluation.py
