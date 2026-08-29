@@ -86,6 +86,8 @@ def test_options_records_close_family_specific_robust_gate():
         base_record(genome, "walk_forward"),
         base_record(genome, "cost_stress"),
         base_record(genome, "parameter_stability"),
+        base_record(genome, "purged_cpcv"),
+        base_record(genome, "monte_carlo"),
         greeks,
         surface,
     ]
