@@ -22,7 +22,7 @@ def build_nautilus_binance_configs(
     if not account_id:
         raise ValueError("account_id is required")
 
-    # Paths that can reach real capital intentionally target the latest stable
+    # Paths that can reach real capital intentionally target the locked stable
     # NautilusTrader v1 API. Stable v1.231 derives the venue account identity
     # after connecting, so account_id is retained by MasterTrd as its own
     # routing/reconciliation label rather than injected into BinanceExecClientConfig.
@@ -30,6 +30,7 @@ def build_nautilus_binance_configs(
     from nautilus_trader.adapters.binance.common.enums import BinanceEnvironment
     from nautilus_trader.adapters.binance.config import BinanceDataClientConfig
     from nautilus_trader.adapters.binance.config import BinanceExecClientConfig
+    from nautilus_trader.adapters.binance.config import BinanceInstrumentProviderConfig
 
     account_type_map = {
         BinanceProduct.SPOT: BinanceAccountType.SPOT,
@@ -47,13 +48,19 @@ def build_nautilus_binance_configs(
     except KeyError as exc:
         raise ValueError("unsupported Binance product or environment") from exc
 
+    # NautilusTrader 1.231's LiveDataClientConfig requires an explicit
+    # instrument-provider configuration. Loading the full venue universe keeps
+    # startup deterministic and avoids a hidden dependency on ad-hoc symbols.
+    instrument_provider = BinanceInstrumentProviderConfig(load_all=True)
     data = BinanceDataClientConfig(
+        instrument_provider=instrument_provider,
         account_type=account_type,
         environment=environment,
         api_key=profile.api_key,
         api_secret=profile.api_secret,
     )
     execution = BinanceExecClientConfig(
+        instrument_provider=instrument_provider,
         account_type=account_type,
         environment=environment,
         api_key=profile.api_key,
