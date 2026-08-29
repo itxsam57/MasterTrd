@@ -15,8 +15,11 @@ def genome() -> StrategyGenome:
 
 
 def test_stable_nautilus_sandbox_can_initialize_connect_and_disconnect_without_credentials():
-    receipt = probe_nautilus_sandbox_session(genome())
+    candidate = genome()
+    receipt = probe_nautilus_sandbox_session(candidate)
 
+    assert receipt.strategy_id == candidate.strategy_id
+    assert receipt.genome_hash == candidate.genome_hash
     assert receipt.engine == "nautilus_trader"
     assert receipt.engine_version == "1.231.0"
     assert receipt.venue == "SANDBOX"
