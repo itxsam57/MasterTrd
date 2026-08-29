@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import FrozenSet
+from dataclasses import asdict, dataclass, field
+import hashlib
+import json
+from math import isfinite
+from typing import FrozenSet, Iterable, Mapping
 
+from .contracts import StrategyState
 from .genome import StrategyGenome
 from .strategy_families import DataLevel, family_spec
 
@@ -33,6 +37,41 @@ class ValidationProfile:
     required_evidence: FrozenSet[str]
 
 
+@dataclass(frozen=True, slots=True)
+class ValidationEvidence:
+    strategy_id: str
+    genome_hash: str
+    evidence_type: str
+    dataset_hash: str
+    code_hash: str
+    engine: str
+    engine_version: str
+    passed: bool
+    metrics: Mapping[str, float] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        identity = (
+            self.strategy_id,
+            self.genome_hash,
+            self.evidence_type,
+            self.dataset_hash,
+            self.code_hash,
+            self.engine,
+            self.engine_version,
+        )
+        if not all(identity):
+            raise ValueError("validation evidence identity fields are required")
+        if not all(isfinite(float(value)) for value in self.metrics.values()):
+            raise ValueError("validation evidence metrics must be finite")
+
+    @property
+    def evidence_hash(self) -> str:
+        payload = asdict(self)
+        payload["metrics"] = {key: payload["metrics"][key] for key in sorted(payload["metrics"])}
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+
 def validation_profile(genome: StrategyGenome) -> ValidationProfile:
     spec = family_spec(genome.family)
     evidence = set(BASE_EVIDENCE)
@@ -43,3 +82,32 @@ def validation_profile(genome: StrategyGenome) -> ValidationProfile:
     if genome.family == "options":
         evidence.update({"options_greeks_validation", "volatility_surface_stress"})
     return ValidationProfile(spec.key, spec.min_data_level, frozenset(evidence))
+
+
+def validated_evidence_types(
+    genome: StrategyGenome,
+    records: Iterable[ValidationEvidence],
+) -> frozenset[str]:
+    accepted = {
+        record.evidence_type
+        for record in records
+        if record.passed
+        and record.strategy_id == genome.strategy_id
+        and record.genome_hash == genome.genome_hash
+    }
+    return frozenset(accepted)
+
+
+def extra_evidence_for_target(genome: StrategyGenome, target: StrategyState) -> frozenset[str]:
+    required: set[str] = set()
+    spec = family_spec(genome.family)
+    if target is StrategyState.ROBUST:
+        if spec.requires_hft_validation:
+            required.update(HFT_EVIDENCE)
+        if genome.family in {"stat_arb", "cross_venue_arb", "funding_basis", "delta_neutral"}:
+            required.add("multi_leg_execution_stress")
+        if genome.family == "options":
+            required.update({"options_greeks_validation", "volatility_surface_stress"})
+    if target is StrategyState.HIDDEN_PASS:
+        required.add("regime_test")
+    return frozenset(required)
