@@ -11,6 +11,7 @@ from .venue import BinanceProduct
 class NautilusBinanceConfigs:
     data: Any
     execution: Any
+    account_id: str
 
 
 def build_nautilus_binance_configs(
@@ -21,14 +22,14 @@ def build_nautilus_binance_configs(
     if not account_id:
         raise ValueError("account_id is required")
 
-    # MasterTrd deliberately targets the latest stable NautilusTrader API for
-    # any path that can reach real capital. The v1.231 line exposes Binance
-    # configs from config.py and environment/account enums from common.enums.
+    # Paths that can reach real capital intentionally target the latest stable
+    # NautilusTrader v1 API. Stable v1.231 derives the venue account identity
+    # after connecting, so account_id is retained by MasterTrd as its own
+    # routing/reconciliation label rather than injected into BinanceExecClientConfig.
     from nautilus_trader.adapters.binance.common.enums import BinanceAccountType
     from nautilus_trader.adapters.binance.common.enums import BinanceEnvironment
     from nautilus_trader.adapters.binance.config import BinanceDataClientConfig
     from nautilus_trader.adapters.binance.config import BinanceExecClientConfig
-    from nautilus_trader.model.identifiers import AccountId
 
     account_type_map = {
         BinanceProduct.SPOT: BinanceAccountType.SPOT,
@@ -53,10 +54,13 @@ def build_nautilus_binance_configs(
         api_secret=profile.api_secret,
     )
     execution = BinanceExecClientConfig(
-        account_id=AccountId(account_id),
         account_type=account_type,
         environment=environment,
         api_key=profile.api_key,
         api_secret=profile.api_secret,
     )
-    return NautilusBinanceConfigs(data=data, execution=execution)
+    return NautilusBinanceConfigs(
+        data=data,
+        execution=execution,
+        account_id=account_id,
+    )
