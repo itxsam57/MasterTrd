@@ -6,7 +6,7 @@ import json
 from math import isfinite
 from typing import FrozenSet, Iterable, Mapping
 
-from .contracts import StrategyState
+from .contracts import EvaluationResult, StrategyState
 from .genome import StrategyGenome
 from .strategy_families import DataLevel, family_spec
 
@@ -70,6 +70,38 @@ class ValidationEvidence:
         payload["metrics"] = {key: payload["metrics"][key] for key in sorted(payload["metrics"])}
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
+
+
+def nautilus_backtest_evidence(result: EvaluationResult) -> ValidationEvidence:
+    execution_score = float(result.scores.get("execution_backtest", 0.0))
+    passed = (
+        result.engine == "nautilus_trader"
+        and result.trade_count > 0
+        and execution_score > 0.0
+    )
+    return ValidationEvidence(
+        strategy_id=result.strategy_id,
+        genome_hash=result.genome_hash,
+        evidence_type="nautilus_backtest",
+        dataset_hash=result.dataset_hash,
+        code_hash=result.code_hash,
+        engine=result.engine,
+        engine_version=result.engine_version,
+        passed=passed,
+        metrics={
+            "total_return": result.total_return,
+            "sharpe": result.sharpe,
+            "sortino": result.sortino,
+            "max_drawdown": result.max_drawdown,
+            "profit_factor": result.profit_factor,
+            "expectancy": result.expectancy,
+            "trade_count": float(result.trade_count),
+            "turnover": result.turnover,
+            "fees": result.fees,
+            "slippage": result.slippage,
+            "execution_backtest": execution_score,
+        },
+    )
 
 
 def validation_profile(genome: StrategyGenome) -> ValidationProfile:
