@@ -11,7 +11,13 @@ from .validation import ValidationEvidence, extra_evidence_for_target, validated
 _REQUIRED_EVIDENCE: Mapping[StrategyState, frozenset[str]] = {
     StrategyState.SCREENED: frozenset({"screen"}),
     StrategyState.BACKTESTED: frozenset({"nautilus_backtest"}),
-    StrategyState.ROBUST: frozenset({"walk_forward", "cost_stress", "parameter_stability"}),
+    StrategyState.ROBUST: frozenset({
+        "walk_forward",
+        "cost_stress",
+        "parameter_stability",
+        "purged_cpcv",
+        "monte_carlo",
+    }),
     StrategyState.HIDDEN_PASS: frozenset({"hidden_test"}),
     StrategyState.PAPER: frozenset({"paper_started"}),
     StrategyState.CHALLENGER: frozenset({"paper_minimum_evidence"}),
