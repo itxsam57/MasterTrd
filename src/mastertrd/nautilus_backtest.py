@@ -95,8 +95,11 @@ def run_binance_spot_strategy_history(
         engine.add_strategy(strategy)
         engine.run()
 
-        orders_report = engine.generate_orders_report()
-        fills_report = engine.generate_fills_report()
+        from nautilus_trader.analysis.reporter import ReportProvider
+
+        orders = engine.cache.orders()
+        orders_report = ReportProvider.generate_orders_report(orders)
+        fills_report = ReportProvider.generate_fills_report(orders)
         return NautilusStrategyReplaySummary(
             engine="nautilus_trader",
             instrument_id=instrument.id.value,
