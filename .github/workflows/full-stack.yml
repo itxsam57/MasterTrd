@@ -35,7 +35,7 @@ jobs:
         run: |
           uv lock --check
           uv sync --locked --all-extras
-          uv run python -m pip check
+          uv pip check
       - name: Smoke import every external engine
         run: |
           uv run python - <<'PY'
