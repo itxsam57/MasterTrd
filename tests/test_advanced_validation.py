@@ -81,7 +81,7 @@ def test_advanced_anti_overfit_evidence_is_required_for_robust_promotion():
     ]
     blocked = evaluate_validated_promotion(StrategyState.BACKTESTED, StrategyState.ROBUST, genome, records)
     assert blocked.allowed is False
-    assert blocked.missing_evidence == frozenset({"purged_cpcv", "monte_carlo"})
+    assert blocked.missing_evidence == frozenset({"purged_cpcv", "monte_carlo", "asset_transfer"})
 
     cpcv = purged_cpcv_evidence(
         genome,
@@ -110,7 +110,7 @@ def test_advanced_anti_overfit_evidence_is_required_for_robust_promotion():
         StrategyState.BACKTESTED,
         StrategyState.ROBUST,
         genome,
-        [*records, cpcv, monte],
+        [*records, cpcv, monte, base_evidence(genome, "asset_transfer")],
     )
     assert promoted.allowed is True
 
