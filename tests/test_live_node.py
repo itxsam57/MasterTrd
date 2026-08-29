@@ -1,0 +1,53 @@
+import pytest
+
+from mastertrd.contracts import RuntimeMode
+from mastertrd.live_node import NodeReadiness, preflight_node
+from mastertrd.runtime import RuntimeConfig
+
+
+def runtime(mode: RuntimeMode, *, live: bool = False, oracle: bool = False) -> RuntimeConfig:
+    return RuntimeConfig(mode=mode, live_trading_enabled=live, oracle_enabled=oracle)
+
+
+def test_paper_node_is_ready_without_exchange_credentials():
+    readiness = preflight_node(runtime(RuntimeMode.PAPER), {})
+    assert readiness is NodeReadiness.PAPER_READY
+
+
+def test_demo_and_testnet_require_their_own_credentials():
+    with pytest.raises(ValueError, match="Missing Binance DEMO credentials"):
+        preflight_node(runtime(RuntimeMode.DEMO), {})
+
+    ready = preflight_node(
+        runtime(RuntimeMode.TESTNET),
+        {
+            "BINANCE_TESTNET_API_KEY": "key",
+            "BINANCE_TESTNET_API_SECRET": "secret",
+            "BINANCE_TESTNET_ACCOUNT_ID": "acct",
+        },
+    )
+    assert ready is NodeReadiness.EXCHANGE_READY
+
+
+def test_live_requires_runtime_live_enable_and_live_credentials():
+    with pytest.raises(RuntimeError, match="LIVE mode requires live_trading_enabled"):
+        preflight_node(runtime(RuntimeMode.LIVE, live=False), {})
+
+    with pytest.raises(ValueError, match="Missing Binance LIVE credentials"):
+        preflight_node(runtime(RuntimeMode.LIVE, live=True), {})
+
+    ready = preflight_node(
+        runtime(RuntimeMode.LIVE, live=True),
+        {
+            "BINANCE_LIVE_API_KEY": "key",
+            "BINANCE_LIVE_API_SECRET": "secret",
+            "BINANCE_LIVE_ACCOUNT_ID": "acct",
+        },
+    )
+    assert ready is NodeReadiness.LIVE_READY
+
+
+def test_research_and_backtest_do_not_run_as_persistent_execution_nodes():
+    for mode in (RuntimeMode.RESEARCH, RuntimeMode.BACKTEST):
+        with pytest.raises(RuntimeError, match="not a persistent execution mode"):
+            preflight_node(runtime(mode), {})
