@@ -66,6 +66,8 @@ def run_binance_spot_evaluation(
 ) -> EvaluationResult:
     if not dataset_hash or not code_hash:
         raise ValueError("dataset_hash and code_hash are required")
+    if not isfinite(float(fees)) or not isfinite(float(slippage)):
+        raise ValueError("fees and slippage must be finite")
     if fees < 0.0 or slippage < 0.0:
         raise ValueError("fees and slippage cannot be negative")
 
@@ -89,13 +91,19 @@ def run_binance_spot_evaluation(
 
         # Stable NautilusTrader 1.231 exposes completed position state through the
         # cache, while BacktestResult does not expose the newer returns_series API.
-        # Use the actual realized return of every closed simulated position.
+        # position.realized_return already contains Nautilus's native simulated
+        # instrument commissions. ``fees`` and ``slippage`` are additional,
+        # deterministic research-stress fractions applied per completed round trip;
+        # this makes robustness reruns materially harsher without pretending they
+        # changed the historical market path or the strategy's trade decisions.
         closed_positions = engine.cache.positions_closed()
         raw_returns = [float(position.realized_return) for position in closed_positions]
+        stress_drag = float(fees) + float(slippage)
+        stressed_returns = [value - stress_drag for value in raw_returns]
         trade_count = len(closed_positions)
 
-        total_return, sharpe, sortino, max_drawdown, profit_factor = _return_metrics(raw_returns)
-        expectancy = mean(raw_returns) if raw_returns else 0.0
+        total_return, sharpe, sortino, max_drawdown, profit_factor = _return_metrics(stressed_returns)
+        expectancy = mean(stressed_returns) if stressed_returns else 0.0
 
         return EvaluationResult(
             strategy_id=genome.strategy_id,
