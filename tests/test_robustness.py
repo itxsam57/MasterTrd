@@ -2,6 +2,11 @@ from dataclasses import replace
 
 import pytest
 
+from mastertrd.advanced_validation import (
+    AdvancedValidationPolicy,
+    monte_carlo_evidence,
+    purged_cpcv_evidence,
+)
 from mastertrd.contracts import EvaluationResult, StrategyState
 from mastertrd.genome import StrategyGenome
 from mastertrd.governor import evaluate_validated_promotion
@@ -67,7 +72,18 @@ def policy() -> RobustnessPolicy:
     )
 
 
-def test_all_three_robustness_records_allow_promotion():
+def advanced_policy() -> AdvancedValidationPolicy:
+    return AdvancedValidationPolicy(
+        min_evaluations=4,
+        min_trades_per_evaluation=5,
+        min_positive_ratio=0.75,
+        max_drawdown=0.25,
+        min_monte_carlo_survival_ratio=0.80,
+        max_monte_carlo_loss=-0.10,
+    )
+
+
+def test_five_layer_robustness_records_allow_promotion():
     candidate = genome()
     folds = [
         result(candidate, dataset_hash="1" * 64, total_return=0.08),
@@ -87,16 +103,37 @@ def test_all_three_robustness_records_allow_promotion():
     ]
     stability = parameter_stability_evidence(candidate, base, neighbors, policy())
 
-    assert walk.passed is True
-    assert cost.passed is True
-    assert stability.passed is True
-    assert len({walk.evidence_hash, cost.evidence_hash, stability.evidence_hash}) == 3
+    cpcv = purged_cpcv_evidence(
+        candidate,
+        [
+            result(candidate, dataset_hash="4" * 64, total_return=0.08),
+            result(candidate, dataset_hash="5" * 64, total_return=0.05),
+            result(candidate, dataset_hash="6" * 64, total_return=0.02),
+            result(candidate, dataset_hash="7" * 64, total_return=-0.01),
+        ],
+        advanced_policy(),
+    )
+    monte = monte_carlo_evidence(
+        candidate,
+        [
+            result(candidate, dataset_hash="8" * 64, total_return=0.04),
+            result(candidate, dataset_hash="9" * 64, total_return=0.02),
+            result(candidate, dataset_hash="a" * 64, total_return=0.01),
+            result(candidate, dataset_hash="d" * 64, total_return=0.03),
+            result(candidate, dataset_hash="e" * 64, total_return=-0.05),
+        ],
+        advanced_policy(),
+    )
+
+    records = [walk, cost, stability, cpcv, monte]
+    assert all(record.passed for record in records)
+    assert len({record.evidence_hash for record in records}) == 5
 
     decision = evaluate_validated_promotion(
         StrategyState.BACKTESTED,
         StrategyState.ROBUST,
         candidate,
-        [walk, cost, stability],
+        records,
     )
     assert decision.allowed is True
 
