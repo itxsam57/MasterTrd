@@ -33,6 +33,8 @@ def report(
     total_return: float = 0.02,
     drawdown: float = 0.05,
     reconciliation_errors: int = 0,
+    code_hash: str = "code-v1",
+    verified: bool = True,
 ) -> PaperForwardReport:
     return PaperForwardReport(
         strategy_id=candidate.strategy_id,
@@ -47,6 +49,10 @@ def report(
         max_drawdown=drawdown,
         reconciliation_errors=reconciliation_errors,
         completed=True,
+        code_hash=code_hash if verified else "",
+        reconciliation_checks=1 if verified else 0,
+        session_event_hash=(session_id.encode().hex().ljust(64, "0")[:64] if verified else ""),
+        provenance_verified=verified,
     )
 
 
@@ -60,7 +66,7 @@ def policy() -> PaperMinimumPolicy:
     )
 
 
-def test_multiple_real_forward_sessions_allow_challenger_promotion():
+def test_multiple_verified_forward_sessions_allow_challenger_promotion():
     candidate = genome()
     evidence = paper_minimum_evidence(
         candidate,
@@ -70,6 +76,7 @@ def test_multiple_real_forward_sessions_allow_challenger_promotion():
 
     assert evidence.evidence_type == "paper_minimum_evidence"
     assert evidence.passed is True
+    assert evidence.code_hash == "code-v1"
     assert evidence.metrics["session_count"] == 2.0
     assert evidence.metrics["closed_trades"] == 12.0
     assert evidence.metrics["duration_seconds"] == 7200.0
@@ -81,6 +88,34 @@ def test_multiple_real_forward_sessions_allow_challenger_promotion():
         [evidence],
     )
     assert decision.allowed is True
+
+
+def test_unverified_or_unreconciled_forward_reports_cannot_promote():
+    candidate = genome()
+    unverified = [
+        report(candidate, "session-1", verified=False),
+        report(candidate, "session-2", verified=False),
+    ]
+    assert paper_minimum_evidence(candidate, unverified, policy()).passed is False
+
+    unreconciled = [
+        replace(report(candidate, "session-1"), reconciliation_checks=0),
+        replace(report(candidate, "session-2"), reconciliation_checks=0),
+    ]
+    assert paper_minimum_evidence(candidate, unreconciled, policy()).passed is False
+
+
+def test_mixed_code_hashes_cannot_be_combined_into_paper_evidence():
+    candidate = genome()
+    with pytest.raises(ValueError, match="code_hash"):
+        paper_minimum_evidence(
+            candidate,
+            [
+                report(candidate, "session-1", code_hash="code-v1"),
+                report(candidate, "session-2", code_hash="code-v2"),
+            ],
+            policy(),
+        )
 
 
 def test_duplicate_sessions_cannot_inflate_forward_evidence():
