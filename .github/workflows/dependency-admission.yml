@@ -35,7 +35,7 @@ jobs:
           - {name: arch, install: 'arch>=7,<9', module: arch}
           - {name: ruptures, install: 'ruptures>=1.1,<2', module: ruptures}
           - {name: river, install: 'river>=0.22,<0.24', module: river}
-          - {name: skfolio, install: 'skfolio>=0.10,<0.12 cvxpy-base>=1.5,<1.9 pandas>=2.2,<3', module: skfolio}
+          - {name: skfolio, install: 'git+https://github.com/skfolio/skfolio.git@69bb9cbdd1f34628ddb9bdad077e6b1336f3b8e3', module: skfolio}
           - {name: quantstats, install: 'quantstats>=0.0.77,<0.1', module: quantstats}
           - {name: hftbacktest, install: 'hftbacktest>=2,<3', module: hftbacktest}
           - {name: talib, install: 'TA-Lib>=0.6,<0.7', module: talib}

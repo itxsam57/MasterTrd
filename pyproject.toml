@@ -30,8 +30,7 @@ research = [
   "arch>=7,<9",
   "ruptures>=1.1,<2",
   "river>=0.22,<0.24",
-  "cvxpy-base>=1.5,<1.9",
-  "skfolio>=0.10,<0.12",
+  "skfolio @ git+https://github.com/skfolio/skfolio.git@69bb9cbdd1f34628ddb9bdad077e6b1336f3b8e3",
   "quantstats>=0.0.77,<0.1",
 ]
 execution = [
