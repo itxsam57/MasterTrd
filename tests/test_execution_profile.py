@@ -57,3 +57,16 @@ def test_paper_mode_cannot_construct_exchange_execution_profile():
             api_key="x",
             api_secret="y",
         )
+
+
+def test_execution_profile_repr_never_exposes_credentials():
+    profile = BinanceExecutionProfile(
+        product=BinanceProduct.SPOT,
+        environment="TESTNET",
+        api_key="visible-key-should-not-appear",
+        api_secret="visible-secret-should-not-appear",
+    )
+
+    rendered = repr(profile)
+    assert "visible-key-should-not-appear" not in rendered
+    assert "visible-secret-should-not-appear" not in rendered
