@@ -33,7 +33,7 @@ def test_systemd_unit_restarts_and_loads_protected_environment():
     assert "mastertrd.live_node" in unit
 
 
-def test_bootstrap_targets_arm64_or_amd64_linux_and_installs_health/recovery_hooks():
+def test_bootstrap_targets_arm64_or_amd64_linux_and_installs_health_recovery_hooks():
     script = render_bootstrap_script(spec())
     assert "uname -s" in script
     assert "aarch64|arm64|x86_64|amd64" in script
