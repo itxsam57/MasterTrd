@@ -16,8 +16,12 @@ def test_oracle_adapter_is_dormant_and_never_embeds_secrets():
     assert "ORACLE_ENABLED=false" in text
     assert "LIVE_TRADING_ENABLED=false" in text
     assert "MASTERTRD_MODE=PAPER" in text
-    assert "BINANCE_API_KEY=" in text
-    assert "BINANCE_API_SECRET=" in text
+    for namespace in ("DEMO", "TESTNET", "LIVE"):
+        assert f"BINANCE_{namespace}_API_KEY=" in text
+        assert f"BINANCE_{namespace}_API_SECRET=" in text
+        assert f"BINANCE_{namespace}_ACCOUNT_ID=" in text
+    assert "BINANCE_API_KEY=" not in text
+    assert "BINANCE_API_SECRET=" not in text
     assert "changeme" not in text.lower()
 
 
