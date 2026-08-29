@@ -17,6 +17,7 @@ _REQUIRED_EVIDENCE: Mapping[StrategyState, frozenset[str]] = {
         "parameter_stability",
         "purged_cpcv",
         "monte_carlo",
+        "asset_transfer",
     }),
     StrategyState.HIDDEN_PASS: frozenset({"hidden_test"}),
     StrategyState.PAPER: frozenset({"paper_started"}),
