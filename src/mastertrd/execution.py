@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .contracts import RuntimeMode
 from .runtime import RuntimeConfig
@@ -11,8 +11,8 @@ from .venue import BinanceProduct
 class BinanceExecutionProfile:
     product: BinanceProduct
     environment: str
-    api_key: str
-    api_secret: str
+    api_key: str = field(repr=False)
+    api_secret: str = field(repr=False)
 
 
 def build_binance_execution_profile(
