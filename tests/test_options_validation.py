@@ -88,6 +88,7 @@ def test_options_records_close_family_specific_robust_gate():
         base_record(genome, "parameter_stability"),
         base_record(genome, "purged_cpcv"),
         base_record(genome, "monte_carlo"),
+        base_record(genome, "asset_transfer"),
         greeks,
         surface,
     ]
@@ -102,19 +103,11 @@ def test_options_records_close_family_specific_robust_gate():
 
 def test_bad_greeks_do_not_hide_a_good_surface_and_vice_versa():
     genome = candidate()
-    bad_greeks, good_surface = options_stress_evidence(
-        genome,
-        report(genome, delta_error=0.20),
-        policy(),
-    )
+    bad_greeks, good_surface = options_stress_evidence(genome, report(genome, delta_error=0.20), policy())
     assert bad_greeks.passed is False
     assert good_surface.passed is True
 
-    good_greeks, bad_surface = options_stress_evidence(
-        genome,
-        report(genome, monotonicity_violations=1),
-        policy(),
-    )
+    good_greeks, bad_surface = options_stress_evidence(genome, report(genome, monotonicity_violations=1), policy())
     assert good_greeks.passed is True
     assert bad_surface.passed is False
 
