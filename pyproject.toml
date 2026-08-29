@@ -16,7 +16,7 @@ dev = [
 ]
 storage = [
   "duckdb>=1.3,<2",
-  "pyarrow>=20,<23",
+  "pyarrow>=25,<26",
   "pandas>=2.2,<3",
 ]
 research = [
