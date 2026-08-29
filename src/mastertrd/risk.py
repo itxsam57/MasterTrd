@@ -37,10 +37,11 @@ class RiskSnapshot:
     orders_last_minute: int
     data_stale: bool = False
     reconciliation_ok: bool = True
+    emergency_stop: bool = False
 
 
 def evaluate_risk(limits: RiskLimits, s: RiskSnapshot) -> RiskAction:
-    if s.data_stale or not s.reconciliation_ok:
+    if s.emergency_stop or s.data_stale or not s.reconciliation_ok:
         return RiskAction.KILL_SYSTEM
     if s.daily_pnl <= -limits.max_daily_loss or s.drawdown >= limits.max_drawdown:
         return RiskAction.KILL_STRATEGY
