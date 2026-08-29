@@ -7,6 +7,7 @@ from mastertrd.advanced_validation import (
     monte_carlo_evidence,
     purged_cpcv_evidence,
 )
+from mastertrd.asset_transfer import AssetTransferPolicy, asset_transfer_evidence
 from mastertrd.contracts import EvaluationResult, StrategyState
 from mastertrd.genome import StrategyGenome
 from mastertrd.governor import evaluate_validated_promotion
@@ -18,12 +19,12 @@ from mastertrd.robustness import (
 )
 
 
-def genome() -> StrategyGenome:
+def genome(instrument: str = "BTCUSDT.BINANCE") -> StrategyGenome:
     return StrategyGenome(
         strategy_id="S-robust-trend",
         family="trend",
         style="day",
-        instruments=("BTCUSDT.BINANCE",),
+        instruments=(instrument,),
         timeframe="1m",
         entry={"kind": "ema_cross", "fast_period": 5, "slow_period": 20, "trade_size": "0.10"},
         exit={"kind": "cross_reverse"},
@@ -83,7 +84,17 @@ def advanced_policy() -> AdvancedValidationPolicy:
     )
 
 
-def test_five_layer_robustness_records_allow_promotion():
+def transfer_policy() -> AssetTransferPolicy:
+    return AssetTransferPolicy(
+        min_transfer_assets=2,
+        min_trades_per_asset=5,
+        min_pass_ratio=0.50,
+        min_total_return=0.0,
+        max_drawdown=0.25,
+    )
+
+
+def test_six_layer_robustness_records_allow_promotion():
     candidate = genome()
     folds = [
         result(candidate, dataset_hash="1" * 64, total_return=0.08),
@@ -125,9 +136,20 @@ def test_five_layer_robustness_records_allow_promotion():
         advanced_policy(),
     )
 
-    records = [walk, cost, stability, cpcv, monte]
+    eth = genome("ETHUSDT.BINANCE")
+    sol = genome("SOLUSDT.BINANCE")
+    transfer = asset_transfer_evidence(
+        candidate,
+        [
+            (eth, result(eth, dataset_hash="f" * 64, total_return=0.04)),
+            (sol, result(sol, dataset_hash="0" * 64, total_return=-0.01)),
+        ],
+        transfer_policy(),
+    )
+
+    records = [walk, cost, stability, cpcv, monte, transfer]
     assert all(record.passed for record in records)
-    assert len({record.evidence_hash for record in records}) == 5
+    assert len({record.evidence_hash for record in records}) == 6
 
     decision = evaluate_validated_promotion(
         StrategyState.BACKTESTED,
