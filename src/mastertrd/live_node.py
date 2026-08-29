@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from enum import StrEnum
 
 from .contracts import RuntimeMode
@@ -28,3 +28,19 @@ def preflight_node(runtime: RuntimeConfig, environ: Mapping[str, str]) -> NodeRe
     if runtime.mode is RuntimeMode.LIVE:
         return NodeReadiness.LIVE_READY
     return NodeReadiness.EXCHANGE_READY
+
+
+def run_node(
+    runtime: RuntimeConfig,
+    environ: Mapping[str, str],
+    *,
+    stop_requested: Callable[[], bool],
+    sleep: Callable[[float], None],
+    heartbeat: Callable[[NodeReadiness], None],
+    interval_seconds: float,
+) -> NodeReadiness:
+    readiness = preflight_node(runtime, environ)
+    while not stop_requested():
+        heartbeat(readiness)
+        sleep(interval_seconds)
+    return readiness
