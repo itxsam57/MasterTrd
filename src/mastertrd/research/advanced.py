@@ -90,10 +90,16 @@ def independent_metrics(returns, *, periods: int) -> IndependentMetrics:
     if periods <= 0:
         raise ValueError("periods must be positive")
 
+    import pandas as pd
     import quantstats as qs
 
+    series = returns if isinstance(returns, pd.Series) else pd.Series(returns, dtype=float)
+    if not isinstance(series.index, pd.DatetimeIndex):
+        series = series.copy()
+        series.index = pd.date_range("2000-01-01", periods=len(series), freq="D")
+
     return IndependentMetrics(
-        sharpe=float(qs.stats.sharpe(returns, periods=periods)),
-        sortino=float(qs.stats.sortino(returns, periods=periods)),
-        max_drawdown=float(qs.stats.max_drawdown(returns)),
+        sharpe=float(qs.stats.sharpe(series, periods=periods)),
+        sortino=float(qs.stats.sortino(series, periods=periods)),
+        max_drawdown=float(qs.stats.max_drawdown(series)),
     )
