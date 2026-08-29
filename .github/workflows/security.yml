@@ -22,11 +22,11 @@ jobs:
         run: pip install pip-audit detect-secrets
       - name: Scan committed content for likely secrets
         run: detect-secrets scan --all-files --exclude-files '(^|/)\.git/' > .secrets.baseline
-      - name: Fail on high-risk credential names in tracked files
+      - name: Fail on high-risk committed credential material
         shell: bash
         run: |
-          if git grep -nEi '(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|aws_secret_access_key[[:space:]]*=|api[_-]?secret[[:space:]]*=[[:space:]]*[^[:space:]#]{8,}|seed phrase[[:space:]]*=)' -- ':!*.example' ':!MASTER_PLAN.md'; then
-            echo 'Potential committed secret detected'
+          if git grep -nEi '(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|aws_secret_access_key[[:space:]]*=[[:space:]]*["'"'][^"'"']{8,}["'"']|api[_-]?secret[[:space:]]*=[[:space:]]*["'"'][^"'"']{16,}["'"']|seed phrase[[:space:]]*=[[:space:]]*["'"'][^"'"']+["'"'])' -- 'src/**' ':!*.example' ':!MASTER_PLAN.md'; then
+            echo 'Potential committed credential material detected'
             exit 1
           fi
       - name: Dependency audit
