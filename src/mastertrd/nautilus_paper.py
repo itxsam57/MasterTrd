@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import hashlib
 from importlib.metadata import version
+from pathlib import Path
 
 from .genome import StrategyGenome
 from .paper_evidence import PaperStartReceipt
+from .paper_session import JsonPaperSessionStore, PaperSessionJournal
+
+
+@dataclass(frozen=True, slots=True)
+class PersistentPaperSession:
+    journal: PaperSessionJournal
+    store: JsonPaperSessionStore
+    resumed: bool
 
 
 def probe_nautilus_sandbox_session(
@@ -69,3 +79,38 @@ def probe_nautilus_sandbox_session(
         if client is not None and client.is_connected:
             client.disconnect()
         loop.close()
+
+
+def open_persistent_paper_session(
+    candidate: StrategyGenome,
+    *,
+    state_path: str | Path,
+    code_hash: str,
+    started_ns: int | None = None,
+    session_nonce: str = "default-session",
+    resume: bool = False,
+) -> PersistentPaperSession:
+    if not code_hash:
+        raise ValueError("code_hash is required")
+    path = Path(state_path)
+    store = JsonPaperSessionStore(path)
+
+    if resume:
+        journal = store.load()
+        if journal.strategy_id != candidate.strategy_id:
+            raise ValueError("strategy_id does not match persisted paper session")
+        if journal.genome_hash != candidate.genome_hash:
+            raise ValueError("genome_hash does not match persisted paper session")
+        if journal.code_hash != code_hash:
+            raise ValueError("code_hash does not match persisted paper session")
+        return PersistentPaperSession(journal=journal, store=store, resumed=True)
+
+    if started_ns is None:
+        raise ValueError("started_ns is required for a new paper session")
+    if path.exists():
+        raise ValueError("paper session state already exists; use resume=True")
+
+    receipt = probe_nautilus_sandbox_session(candidate, session_nonce=session_nonce)
+    journal = PaperSessionJournal(receipt, code_hash=code_hash, started_ns=int(started_ns))
+    store.save(journal)
+    return PersistentPaperSession(journal=journal, store=store, resumed=False)

@@ -43,6 +43,18 @@ class PaperSessionJournal:
         return self._receipt.session_id
 
     @property
+    def strategy_id(self) -> str:
+        return self._receipt.strategy_id
+
+    @property
+    def genome_hash(self) -> str:
+        return self._receipt.genome_hash
+
+    @property
+    def code_hash(self) -> str:
+        return self._code_hash
+
+    @property
     def latest_timestamp_ns(self) -> int:
         if self._events:
             return self._events[-1].timestamp_ns

@@ -43,8 +43,17 @@ def run_node(
     sleep: Callable[[float], None],
     heartbeat: Callable[[NodeReadiness], None],
     interval_seconds: float,
+    execution_runtime: Any | None = None,
 ) -> NodeReadiness:
     readiness = preflight_node(runtime, environ)
+    if execution_runtime is not None:
+        heartbeat(readiness)
+        execution_runtime.run(stop_requested=stop_requested)
+        return readiness
+
+    # Backward-compatible observability-only loop for callers which have not yet
+    # supplied a concrete ExecutionRuntime. Production execution callers should
+    # always provide execution_runtime rather than treating heartbeat as work.
     while not stop_requested():
         heartbeat(readiness)
         sleep(interval_seconds)
@@ -58,6 +67,7 @@ def run_service(
     sleep: Callable[[float], None],
     heartbeat: Callable[[NodeReadiness], None],
     interval_seconds: float = 30.0,
+    execution_runtime: Any | None = None,
 ) -> NodeReadiness:
     runtime = RuntimeConfig.from_env(dict(environ))
     stopped = Event()
@@ -74,6 +84,7 @@ def run_service(
         sleep=sleep,
         heartbeat=heartbeat,
         interval_seconds=interval_seconds,
+        execution_runtime=execution_runtime,
     )
 
 
