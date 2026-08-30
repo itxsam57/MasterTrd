@@ -43,15 +43,18 @@ def _snapshot(**overrides):
     return RiskSnapshot(**values)
 
 
-def _intent():
-    return OrderIntent(
+def _intent(**overrides):
+    values = dict(
         strategy_id="S-1",
         symbol="ETHUSDT.BINANCE",
         venue="BINANCE",
         side="BUY",
         quantity=0.1,
         order_type="MARKET",
+        portfolio_id="P-1",
     )
+    values.update(overrides)
+    return OrderIntent(**values)
 
 
 def test_risk_runtime_records_allow_and_blocks_duplicate_inside_window():
@@ -70,24 +73,50 @@ def test_risk_runtime_records_allow_and_blocks_duplicate_inside_window():
     assert len(runtime.decisions) == 3
 
 
-def test_kill_scopes_block_matching_intents_and_system_kill_blocks_everything():
-    runtime = RiskRuntime(_limits())
-    runtime.kill(KillScope.STRATEGY, "manual strategy stop", key="S-1")
-    denied = runtime.check_order(_intent(), _snapshot())
-    assert denied.action is RiskAction.KILL_STRATEGY
-    assert "manual strategy stop" in denied.reason
+def test_kill_scopes_block_only_matching_intents_and_system_kill_blocks_everything():
+    cases = (
+        (KillScope.STRATEGY, "S-1", _intent(), RiskAction.KILL_STRATEGY),
+        (KillScope.SYMBOL, "ETHUSDT.BINANCE", _intent(), RiskAction.KILL_SYMBOL),
+        (KillScope.VENUE, "BINANCE", _intent(), RiskAction.KILL_VENUE),
+        (KillScope.PORTFOLIO, "P-1", _intent(), RiskAction.KILL_PORTFOLIO),
+    )
+    for scope, key, intent, expected in cases:
+        runtime = RiskRuntime(_limits())
+        runtime.kill(scope, f"manual {scope.value.lower()} stop", key=key)
+        denied = runtime.check_order(intent, _snapshot())
+        assert denied.action is expected
+        assert "manual" in denied.reason
 
+        other = _intent(
+            strategy_id="S-2",
+            symbol="BTCUSDT.OTHER",
+            venue="OTHER",
+            portfolio_id="P-2",
+        )
+        assert runtime.check_order(other, _snapshot()).action is RiskAction.ALLOW
+
+    runtime = RiskRuntime(_limits())
     runtime.kill(KillScope.SYSTEM, "emergency")
     system_denied = runtime.check_order(
-        OrderIntent(
-            strategy_id="S-2",
-            symbol="BTCUSDT.BINANCE",
-            venue="BINANCE",
-            side="SELL",
-            quantity=0.2,
-            order_type="MARKET",
-        ),
+        _intent(strategy_id="S-2", symbol="BTCUSDT.OTHER", venue="OTHER", portfolio_id="P-2"),
         _snapshot(),
     )
     assert system_denied.action is RiskAction.KILL_SYSTEM
     assert "emergency" in system_denied.reason
+
+
+def test_runtime_owned_api_health_and_correlation_snapshots_feed_order_checks():
+    runtime = RiskRuntime(_limits())
+    runtime.update_api_health(
+        venue="BINANCE",
+        healthy=False,
+        error_rate=0.25,
+        latency_ms=2_000.0,
+    )
+    api_denied = runtime.check_order(_intent(), _snapshot())
+    assert api_denied.action is RiskAction.KILL_SYSTEM
+
+    runtime = RiskRuntime(_limits())
+    runtime.update_correlated_exposure(portfolio_id="P-1", exposure=30_000.0)
+    correlation_denied = runtime.check_order(_intent(), _snapshot())
+    assert correlation_denied.action is RiskAction.BLOCK_ORDER
