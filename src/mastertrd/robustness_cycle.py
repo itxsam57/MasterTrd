@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from numbers import Integral, Real
 from typing import Iterable, Sequence
 
 from .advanced_validation import (
@@ -35,53 +36,116 @@ class GeneratedRobustnessCycle:
     promotion: PromotionDecision
 
 
-def _ema_neighbors(candidate: StrategyGenome) -> tuple[StrategyGenome, ...]:
-    entry = dict(candidate.entry)
-    kind = entry.get("kind", entry.get("type"))
-    if kind != "ema_cross":
-        raise ValueError("automatic parameter neighborhood currently supports ema_cross only")
+def _candidate_with_section(
+    candidate: StrategyGenome,
+    section: str,
+    values: dict[str, object],
+) -> StrategyGenome:
+    payload = {
+        "strategy_id": candidate.strategy_id,
+        "family": candidate.family,
+        "style": candidate.style,
+        "instruments": tuple(candidate.instruments),
+        "timeframe": candidate.timeframe,
+        "entry": dict(candidate.entry),
+        "exit": dict(candidate.exit),
+        "filters": dict(candidate.filters),
+        "risk": dict(candidate.risk),
+        "data_requirements": tuple(candidate.data_requirements),
+        "allow_short": candidate.allow_short,
+    }
+    payload[section] = values
+    return StrategyGenome(**payload)
 
-    fast_key = "fast_period" if "fast_period" in entry else "fast"
-    slow_key = "slow_period" if "slow_period" in entry else "slow"
-    if fast_key not in entry or slow_key not in entry:
-        raise ValueError("ema_cross requires fast and slow parameters")
 
-    fast = int(entry[fast_key])
-    slow = int(entry[slow_key])
-    variants: list[tuple[int, int]] = []
-    for new_fast, new_slow in (
-        (fast - 1, slow),
-        (fast + 1, slow),
-        (fast, slow - 1),
-        (fast, slow + 1),
-    ):
-        if new_fast > 0 and new_fast < new_slow and (new_fast, new_slow) != (fast, slow):
-            if (new_fast, new_slow) not in variants:
-                variants.append((new_fast, new_slow))
+def _semantic_neighbor_is_valid(candidate: StrategyGenome) -> bool:
+    entry = candidate.entry
+    fast_key = "fast_period" if "fast_period" in entry else "fast" if "fast" in entry else None
+    slow_key = "slow_period" if "slow_period" in entry else "slow" if "slow" in entry else None
+    if fast_key is not None and slow_key is not None:
+        if float(entry[fast_key]) <= 0.0 or float(entry[slow_key]) <= 0.0:
+            return False
+        if float(entry[fast_key]) >= float(entry[slow_key]):
+            return False
+    for section in (candidate.entry, candidate.exit, candidate.risk):
+        for key, value in section.items():
+            if isinstance(value, bool) or not isinstance(value, Real):
+                continue
+            lowered = str(key).lower()
+            if any(
+                token in lowered
+                for token in (
+                    "period",
+                    "window",
+                    "lookback",
+                    "ticks",
+                    "levels",
+                    "threshold",
+                    "multiplier",
+                    "ratio",
+                    "atr",
+                    "days",
+                    "bps",
+                    "inventory",
+                    "fraction",
+                    "drawdown",
+                )
+            ) and float(value) <= 0.0:
+                return False
+    return True
 
-    if len(variants) < 2:
-        raise ValueError("ema_cross parameter neighborhood is too small")
 
-    neighbors = []
-    for new_fast, new_slow in variants:
-        neighbor_entry = dict(entry)
-        neighbor_entry[fast_key] = new_fast
-        neighbor_entry[slow_key] = new_slow
-        neighbors.append(
-            StrategyGenome(
-                strategy_id=candidate.strategy_id,
-                family=candidate.family,
-                style=candidate.style,
-                instruments=tuple(candidate.instruments),
-                timeframe=candidate.timeframe,
-                entry=neighbor_entry,
-                exit=dict(candidate.exit),
-                filters=dict(candidate.filters),
-                risk=dict(candidate.risk),
-                data_requirements=tuple(candidate.data_requirements),
-                allow_short=candidate.allow_short,
-            )
-        )
+def _numeric_variants(value: Real) -> tuple[Real, ...]:
+    if isinstance(value, Integral) and not isinstance(value, bool):
+        current = int(value)
+        candidates = (current - 1, current + 1)
+        return tuple(item for item in candidates if item > 0 and item != current)
+    current = float(value)
+    width = max(abs(current) * 0.05, 0.01)
+    candidates = (current - width, current + width)
+    if current > 0.0:
+        candidates = tuple(item for item in candidates if item > 0.0)
+    return tuple(item for item in candidates if item != current)
+
+
+def _parameter_neighbors(
+    candidate: StrategyGenome,
+    *,
+    max_neighbors: int = 4,
+) -> tuple[StrategyGenome, ...]:
+    """Build a small deterministic local neighborhood for any numeric genome.
+
+    Only already-declared numeric entry/exit/filter/risk parameters are changed,
+    one coordinate at a time. Strategy identity, family, instruments, timeframe,
+    data requirements, and shorting contract remain fixed. The bounded size keeps
+    robustness evaluation cost predictable while removing the former EMA-only path.
+    """
+    if max_neighbors < 2:
+        raise ValueError("max_neighbors must be at least two")
+
+    neighbors: list[StrategyGenome] = []
+    seen: set[str] = set()
+    for section_name in ("entry", "exit", "filters", "risk"):
+        section = dict(getattr(candidate, section_name))
+        for key in sorted(section):
+            value = section[key]
+            if isinstance(value, bool) or not isinstance(value, Real):
+                continue
+            for variant in _numeric_variants(value):
+                changed = dict(section)
+                changed[key] = variant
+                neighbor = _candidate_with_section(candidate, section_name, changed)
+                if not _semantic_neighbor_is_valid(neighbor):
+                    continue
+                if neighbor.genome_hash == candidate.genome_hash or neighbor.genome_hash in seen:
+                    continue
+                seen.add(neighbor.genome_hash)
+                neighbors.append(neighbor)
+                if len(neighbors) >= max_neighbors:
+                    return tuple(neighbors)
+
+    if len(neighbors) < 2:
+        raise ValueError("strategy parameter neighborhood is too small")
     return tuple(neighbors)
 
 
@@ -160,7 +224,7 @@ def run_generated_robustness_cycle(
 
     fold_results = _evaluate_datasets(candidate=candidate, datasets=fold_datasets, common=common)
 
-    neighbors = _ema_neighbors(candidate)
+    neighbors = _parameter_neighbors(candidate)
     neighbor_results = tuple(
         run_binance_spot_evaluation(
             genome=neighbor,
