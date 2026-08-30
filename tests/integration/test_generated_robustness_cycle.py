@@ -1,6 +1,8 @@
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from mastertrd.advanced_validation import AdvancedValidationPolicy
+from mastertrd.asset_transfer import AssetTransferPolicy
 from mastertrd.contracts import MarketBar, StrategyState
 from mastertrd.nautilus_data import market_bars_to_nautilus
 from mastertrd.research.generator import generate_candidate
@@ -25,8 +27,8 @@ def _bars(candidate, instrument, *, start, offset=0.0):
     for index, close in enumerate(closes):
         market.append(
             MarketBar(
-                venue="BINANCE",
-                instrument="ETHUSDT",
+                venue=str(instrument.id.venue),
+                instrument=str(instrument.raw_symbol),
                 timeframe=candidate.timeframe,
                 timestamp=start + step * index,
                 open=previous,
@@ -44,7 +46,9 @@ def test_generated_candidate_runs_real_robustness_suite_and_can_reach_robust():
     from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
     instrument = TestInstrumentProvider.ethusdt_binance()
+    transfer_instrument = TestInstrumentProvider.btcusdt_binance()
     candidate = generate_candidate(family="trend", instruments=(instrument.id.value,), seed=42)
+    transfer_candidate = replace(candidate, instruments=(transfer_instrument.id.value,))
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     base = _bars(candidate, instrument, start=start)
     fold_span = _step(candidate.timeframe) * 400
@@ -60,6 +64,19 @@ def test_generated_candidate_runs_real_robustness_suite_and_can_reach_robust():
     monte_carlo = [
         (f"mc-{index}", _bars(candidate, instrument, start=start + fold_span * (8 + index), offset=offset))
         for index, offset in enumerate((5.0, -5.0, 15.0, -15.0, 30.0))
+    ]
+    transfer = [
+        (
+            "transfer-btc-v1",
+            transfer_candidate,
+            transfer_instrument,
+            _bars(
+                transfer_candidate,
+                transfer_instrument,
+                start=start + fold_span * 14,
+                offset=0.0,
+            ),
+        )
     ]
     policy = RobustnessPolicy(
         min_trades_per_slice=1,
@@ -77,6 +94,13 @@ def test_generated_candidate_runs_real_robustness_suite_and_can_reach_robust():
         min_monte_carlo_survival_ratio=0.80,
         max_monte_carlo_loss=-1.0,
     )
+    transfer_policy = AssetTransferPolicy(
+        min_transfer_assets=1,
+        min_trades_per_asset=1,
+        min_pass_ratio=1.0,
+        min_total_return=-1.0,
+        max_drawdown=0.90,
+    )
 
     cycle = run_generated_robustness_cycle(
         candidate=candidate,
@@ -86,10 +110,12 @@ def test_generated_candidate_runs_real_robustness_suite_and_can_reach_robust():
         fold_datasets=folds,
         cpcv_datasets=cpcv,
         monte_carlo_datasets=monte_carlo,
+        transfer_datasets=transfer,
         code_hash="robustness-code-v1",
         trade_size="0.01000",
         policy=policy,
         advanced_policy=advanced_policy,
+        transfer_policy=transfer_policy,
         stressed_fees=0.001,
         stressed_slippage=0.001,
         starting_balances=("10 ETH", "100000 USDT"),
@@ -101,12 +127,15 @@ def test_generated_candidate_runs_real_robustness_suite_and_can_reach_robust():
     assert len(cycle.neighbor_results) >= 2
     assert len(cycle.cpcv_results) == 4
     assert len(cycle.monte_carlo_results) == 5
+    assert len(cycle.transfer_results) == 1
+    assert cycle.transfer_results[0].trade_count >= 1
     assert {record.evidence_type for record in cycle.evidence} == {
         "walk_forward",
         "cost_stress",
         "parameter_stability",
         "purged_cpcv",
         "monte_carlo",
+        "asset_transfer",
     }
     assert all(record.passed for record in cycle.evidence)
     assert cycle.promotion.allowed is True
