@@ -96,7 +96,7 @@ jobs:
               if any(marker in text for marker in forbidden_markers):
                   failures.append(f'private-key material in tracked file: {name}')
               for match in assignment.finditer(text):
-                  value = match.group(1).strip().strip('"\'')
+                  value = match.group(1).strip().strip(chr(34) + chr(39))
                   if value and not value.startswith('${{') and value.lower() not in {'false', 'none', 'null'}:
                       failures.append(f'populated sensitive assignment in tracked file: {name}')
                       break
