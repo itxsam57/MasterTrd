@@ -22,12 +22,10 @@ BASE_EVIDENCE: FrozenSet[str] = frozenset({
     "paper_minimum_evidence",
 })
 
-HFT_EVIDENCE: FrozenSet[str] = frozenset({
-    "hft_queue_model",
-    "hft_feed_latency_stress",
-    "hft_order_latency_stress",
-    "spread_stress",
-})
+# Promotion-grade HFT validation is intentionally a single evidence class bound
+# to an integrity-checked historical L2 dataset. Synthetic stress evidence is
+# retained for diagnostics but cannot satisfy promotion gates.
+HFT_EVIDENCE: FrozenSet[str] = frozenset({"hft_real_l2"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +46,7 @@ class ValidationEvidence:
     engine_version: str
     passed: bool
     metrics: Mapping[str, float] = field(default_factory=dict)
+    supporting_only: bool = False
 
     def __post_init__(self) -> None:
         identity = (
@@ -124,6 +123,7 @@ def validated_evidence_types(
         record.evidence_type
         for record in records
         if record.passed
+        and not record.supporting_only
         and record.strategy_id == genome.strategy_id
         and record.genome_hash == genome.genome_hash
     }
