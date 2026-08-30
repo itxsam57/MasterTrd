@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from decimal import Decimal
+
+from nautilus_trader.config import StrategyConfig
+from nautilus_trader.model import Bar, BarType, InstrumentId
+from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.trading.strategy import Strategy
+
+from .contracts import MarketBar
+from .execution_signals import SignalDecision, SignalDirection, evaluate_multileg_signal
+from .genome import StrategyGenome
+
+
+class GeneratedMultiLegStrategyConfig(StrategyConfig):
+    instrument_ids: tuple[InstrumentId, ...]
+    bar_types: tuple[BarType, ...]
+    trade_size: Decimal
+    family: str
+    genome_hash: str
+
+
+class GeneratedMultiLegStrategy(Strategy):
+    def __init__(self, *, config: GeneratedMultiLegStrategyConfig, genome: StrategyGenome) -> None:
+        super().__init__(config)
+        self.genome = genome
+        self._bars: dict[str, list[MarketBar]] = {item.value: [] for item in config.instrument_ids}
+        self._instruments: dict[str, object] = {}
+        self._last_legs: dict[str, int] = {}
+        self.last_decision = SignalDecision(SignalDirection.FLAT, "not_started")
+
+    def on_start(self) -> None:
+        for instrument_id, bar_type in zip(self.config.instrument_ids, self.config.bar_types, strict=True):
+            instrument = self.cache.instrument(instrument_id)
+            if instrument is None:
+                self.log.error(f"Could not find instrument for {instrument_id}")
+                self.stop()
+                return
+            self._instruments[instrument_id.value] = instrument
+            self.subscribe_bars(bar_type)
+
+    def _to_market_bar(self, bar: Bar) -> MarketBar:
+        instrument_id = bar.bar_type.instrument_id
+        return MarketBar(
+            timestamp=datetime.fromtimestamp(bar.ts_event / 1_000_000_000, tz=timezone.utc),
+            venue=instrument_id.venue.value,
+            instrument=instrument_id.value,
+            timeframe=self.genome.timeframe,
+            open=bar.open.as_double(),
+            high=bar.high.as_double(),
+            low=bar.low.as_double(),
+            close=bar.close.as_double(),
+            volume=bar.volume.as_double(),
+        )
+
+    def on_bar(self, bar: Bar) -> None:
+        instrument_id = bar.bar_type.instrument_id.value
+        if instrument_id not in self._bars:
+            return
+        self._bars[instrument_id].append(self._to_market_bar(bar))
+        if any(not values for values in self._bars.values()):
+            return
+        decision = evaluate_multileg_signal(self.genome, self._bars)
+        self.last_decision = decision
+        if dict(decision.legs) == self._last_legs:
+            return
+        self._apply_legs(decision)
+        self._last_legs = dict(decision.legs)
+
+    def _apply_legs(self, decision: SignalDecision) -> None:
+        if not decision.legs:
+            return
+        ids = {item.value: item for item in self.config.instrument_ids}
+        for key, target in decision.legs.items():
+            instrument_id = ids[key]
+            if target == 0:
+                if not self.portfolio.is_flat(instrument_id):
+                    self.close_all_positions(instrument_id)
+                continue
+            if target > 0:
+                if self.portfolio.is_net_long(instrument_id):
+                    continue
+                if self.portfolio.is_net_short(instrument_id):
+                    self.close_all_positions(instrument_id)
+                self._submit_market(instrument_id, OrderSide.BUY)
+            else:
+                if not self.genome.allow_short:
+                    if not self.portfolio.is_flat(instrument_id):
+                        self.close_all_positions(instrument_id)
+                    continue
+                if self.portfolio.is_net_short(instrument_id):
+                    continue
+                if self.portfolio.is_net_long(instrument_id):
+                    self.close_all_positions(instrument_id)
+                self._submit_market(instrument_id, OrderSide.SELL)
+
+    def _submit_market(self, instrument_id: InstrumentId, side: OrderSide) -> None:
+        instrument = self._instruments[instrument_id.value]
+        order = self.order_factory.market(
+            instrument_id=instrument_id,
+            order_side=side,
+            quantity=instrument.make_qty(self.config.trade_size),
+        )
+        self.submit_order(order)
+
+    def on_stop(self) -> None:
+        for instrument_id in self.config.instrument_ids:
+            self.close_all_positions(instrument_id)
