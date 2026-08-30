@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import hashlib
 import json
+from typing import Iterable
 
 from .genome import StrategyGenome
 from .risk import RiskAction, RiskLimits, RiskSnapshot, evaluate_risk
@@ -11,6 +12,13 @@ from .validation import ValidationEvidence
 
 _ENGINE = "mastertrd_safety"
 _ENGINE_VERSION = "1"
+
+LIVE_ELIGIBILITY_EVIDENCE = frozenset({
+    "risk_review",
+    "reconciliation_test",
+    "kill_switch_test",
+    "testnet_smoke",
+})
 
 
 def _hash_payload(payload: object) -> str:
@@ -202,3 +210,23 @@ def kill_switch_test_evidence(
         passed=all(value == 1.0 for value in checks.values()),
         metrics=checks,
     )
+
+
+def live_evidence_bundle_identity_ok(
+    candidate: StrategyGenome,
+    records: Iterable[ValidationEvidence],
+) -> bool:
+    """Require one coherent code+dataset identity to cover every LIVE probe."""
+    grouped: dict[tuple[str, str], set[str]] = {}
+    for record in records:
+        if (
+            not record.passed
+            or record.supporting_only
+            or record.strategy_id != candidate.strategy_id
+            or record.genome_hash != candidate.genome_hash
+            or record.evidence_type not in LIVE_ELIGIBILITY_EVIDENCE
+        ):
+            continue
+        identity = (record.code_hash, record.dataset_hash)
+        grouped.setdefault(identity, set()).add(record.evidence_type)
+    return any(LIVE_ELIGIBILITY_EVIDENCE.issubset(types) for types in grouped.values())
