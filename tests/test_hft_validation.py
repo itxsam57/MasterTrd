@@ -62,6 +62,9 @@ def test_hft_report_produces_supporting_specialist_evidence_only():
     assert all(record.engine == "hftbacktest" for record in records)
     assert all(record.supporting_only for record in records)
 
+    # Generic ROBUST prerequisites are evaluated before family-specific evidence.
+    # The dedicated real-L2 integration test proves hft_real_l2 remains required
+    # once those generic prerequisites are satisfied.
     decision = evaluate_validated_promotion(
         StrategyState.BACKTESTED,
         StrategyState.ROBUST,
@@ -76,7 +79,6 @@ def test_hft_report_produces_supporting_specialist_evidence_only():
         "purged_cpcv",
         "monte_carlo",
         "asset_transfer",
-        "hft_real_l2",
     })
 
 
