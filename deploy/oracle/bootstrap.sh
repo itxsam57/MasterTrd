@@ -64,4 +64,4 @@ systemctl enable mastertrd.service
 
 echo "MasterTrd installed at exact ref ${MASTERTRD_REF}."
 echo "Service was NOT started. Safe defaults remain MASTERTRD_MODE=PAPER, ORACLE_ENABLED=false, LIVE_TRADING_ENABLED=false."
-echo "Populate /etc/mastertrd/mastertrd.env, verify it, then start explicitly with: systemctl start mastertrd.service"
+echo "Populate /etc/mastertrd/mastertrd.env and verify all safety/runtime settings before any separate operator-controlled service start."
