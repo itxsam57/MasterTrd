@@ -56,4 +56,4 @@ jobs:
           print('locked full-stack imports: OK')
           PY
       - name: Run cumulative tests
-        run: uv run pytest -q
+        run: uv run pytest -x -q
