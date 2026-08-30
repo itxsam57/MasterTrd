@@ -28,6 +28,7 @@ on:
       - 'tests/integration/test_generated_strategy_execution_contract.py'
       - 'tests/integration/test_generated_strategy_evaluation.py'
       - 'pyproject.toml'
+      - 'uv.lock'
       - '.github/workflows/execution-stack.yml'
   pull_request:
     paths:
@@ -56,6 +57,7 @@ on:
       - 'tests/integration/test_generated_strategy_execution_contract.py'
       - 'tests/integration/test_generated_strategy_evaluation.py'
       - 'pyproject.toml'
+      - 'uv.lock'
       - '.github/workflows/execution-stack.yml'
   workflow_dispatch:
 
@@ -71,10 +73,26 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-          cache: pip
-      - name: Install execution stack
+      - name: Install locked execution stack
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev,execution]"
+          python -m pip install --disable-pip-version-check 'uv==0.12.7'
+          uv lock --check
+          uv sync --locked --all-extras
+          uv pip check
       - name: Test Nautilus execution bridges
-        run: pytest -q tests/test_execution_profile.py tests/integration/test_nautilus_binance_adapter.py tests/integration/test_nautilus_backtest.py tests/integration/test_nautilus_strategy_compiler.py tests/integration/test_nautilus_strategy_activity.py tests/integration/test_nautilus_evaluation.py tests/integration/test_nautilus_cost_stress.py tests/integration/test_nautilus_paper_sandbox.py tests/integration/test_nautilus_paper_session_identity.py tests/integration/test_nautilus_paper_event_sink.py tests/integration/test_generated_paper_start_cycle.py tests/integration/test_nautilus_market_bar_bridge.py tests/integration/test_generated_strategy_execution_contract.py tests/integration/test_generated_strategy_evaluation.py
+        run: |
+          uv run pytest -q \
+            tests/test_execution_profile.py \
+            tests/integration/test_nautilus_binance_adapter.py \
+            tests/integration/test_nautilus_backtest.py \
+            tests/integration/test_nautilus_strategy_compiler.py \
+            tests/integration/test_nautilus_strategy_activity.py \
+            tests/integration/test_nautilus_evaluation.py \
+            tests/integration/test_nautilus_cost_stress.py \
+            tests/integration/test_nautilus_paper_sandbox.py \
+            tests/integration/test_nautilus_paper_session_identity.py \
+            tests/integration/test_nautilus_paper_event_sink.py \
+            tests/integration/test_generated_paper_start_cycle.py \
+            tests/integration/test_nautilus_market_bar_bridge.py \
+            tests/integration/test_generated_strategy_execution_contract.py \
+            tests/integration/test_generated_strategy_evaluation.py
