@@ -4,6 +4,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Mapping
 
 from .genome import StrategyGenome
+from .risk_runtime import RiskRuntime
 from .strategy_families import family_spec
 
 
@@ -51,7 +52,13 @@ def _bar_type(instrument_id: str, timeframe: str):
     )
 
 
-def _compile_ema_baseline(genome: StrategyGenome, *, instrument, trade_size: Decimal):
+def _compile_ema_baseline(
+    genome: StrategyGenome,
+    *,
+    instrument,
+    trade_size: Decimal,
+    risk_runtime: RiskRuntime | None,
+):
     entry_kind = genome.entry.get("kind", genome.entry.get("type"))
     exit_kind = genome.exit.get("kind", genome.exit.get("type"))
     if entry_kind != "ema_cross":
@@ -68,7 +75,9 @@ def _compile_ema_baseline(genome: StrategyGenome, *, instrument, trade_size: Dec
     if fast_period >= slow_period:
         raise ValueError("fast_period must be less than slow_period")
 
-    from nautilus_trader.examples.strategies.ema_cross import EMACross, EMACrossConfig
+    from nautilus_trader.examples.strategies.ema_cross import EMACrossConfig
+
+    from .nautilus_risk_hook import RiskManagedEMACross
 
     config = EMACrossConfig(
         instrument_id=instrument.id,
@@ -80,7 +89,11 @@ def _compile_ema_baseline(genome: StrategyGenome, *, instrument, trade_size: Dec
         subscribe_trade_ticks=False,
         request_bars=False,
     )
-    return EMACross(config=config)
+    return RiskManagedEMACross(
+        config=config,
+        genome=genome,
+        risk_runtime=risk_runtime,
+    )
 
 
 def compile_genome_to_nautilus(
@@ -88,21 +101,33 @@ def compile_genome_to_nautilus(
     *,
     instrument,
     trade_size_override: str | None = None,
+    trade_size: str | None = None,
     instrument_map: Mapping[str, object] | None = None,
+    risk_runtime: RiskRuntime | None = None,
 ):
     if instrument is None:
         raise ValueError("instrument is required")
+    if trade_size_override is not None and trade_size is not None:
+        raise ValueError("use only one of trade_size_override or trade_size")
 
     spec = family_spec(genome.family)
     if spec.requires_hft_validation:
         raise SpecialistPathRequired(f"{genome.family} requires the specialist HFT path")
 
-    trade_size = _trade_size(genome, trade_size_override)
+    effective_trade_size = _trade_size(
+        genome,
+        trade_size_override if trade_size_override is not None else trade_size,
+    )
 
     if genome.family == "trend":
         if tuple(genome.instruments) != (instrument.id.value,):
             raise ValueError("genome instrument must exactly match the Nautilus instrument")
-        return _compile_ema_baseline(genome, instrument=instrument, trade_size=trade_size)
+        return _compile_ema_baseline(
+            genome,
+            instrument=instrument,
+            trade_size=effective_trade_size,
+            risk_runtime=risk_runtime,
+        )
 
     if genome.family in _MULTI_LEG_FAMILIES:
         if len(genome.instruments) < 2:
@@ -122,11 +147,15 @@ def compile_genome_to_nautilus(
         config = GeneratedMultiLegStrategyConfig(
             instrument_ids=ids,
             bar_types=tuple(_bar_type(key, genome.timeframe) for key in genome.instruments),
-            trade_size=trade_size,
+            trade_size=effective_trade_size,
             family=genome.family,
             genome_hash=genome.genome_hash,
         )
-        return GeneratedMultiLegStrategy(config=config, genome=genome)
+        return GeneratedMultiLegStrategy(
+            config=config,
+            genome=genome,
+            risk_runtime=risk_runtime,
+        )
 
     if tuple(genome.instruments) != (instrument.id.value,):
         raise ValueError("genome instrument must exactly match the Nautilus instrument")
@@ -139,20 +168,28 @@ def compile_genome_to_nautilus(
         config = GeneratedOptionsStrategyConfig(
             instrument_id=instrument.id,
             bar_type=_bar_type(instrument.id.value, genome.timeframe),
-            trade_size=trade_size,
+            trade_size=effective_trade_size,
             family=genome.family,
             genome_hash=genome.genome_hash,
             defined_risk_only=True,
         )
-        return GeneratedOptionsStrategy(config=config, genome=genome)
+        return GeneratedOptionsStrategy(
+            config=config,
+            genome=genome,
+            risk_runtime=risk_runtime,
+        )
 
     from .nautilus_bar_strategy import GeneratedBarStrategy, GeneratedBarStrategyConfig
 
     config = GeneratedBarStrategyConfig(
         instrument_id=instrument.id,
         bar_type=_bar_type(instrument.id.value, genome.timeframe),
-        trade_size=trade_size,
+        trade_size=effective_trade_size,
         family=genome.family,
         genome_hash=genome.genome_hash,
     )
-    return GeneratedBarStrategy(config=config, genome=genome)
+    return GeneratedBarStrategy(
+        config=config,
+        genome=genome,
+        risk_runtime=risk_runtime,
+    )

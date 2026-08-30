@@ -11,6 +11,8 @@ from nautilus_trader.trading.strategy import Strategy
 from .contracts import MarketBar
 from .execution_signals import SignalDecision, SignalDirection, evaluate_multileg_signal
 from .genome import StrategyGenome
+from .nautilus_risk_hook import NautilusRiskMixin
+from .risk_runtime import RiskRuntime
 
 
 class GeneratedMultiLegStrategyConfig(StrategyConfig):
@@ -21,14 +23,21 @@ class GeneratedMultiLegStrategyConfig(StrategyConfig):
     genome_hash: str
 
 
-class GeneratedMultiLegStrategy(Strategy):
-    def __init__(self, *, config: GeneratedMultiLegStrategyConfig, genome: StrategyGenome) -> None:
+class GeneratedMultiLegStrategy(NautilusRiskMixin, Strategy):
+    def __init__(
+        self,
+        *,
+        config: GeneratedMultiLegStrategyConfig,
+        genome: StrategyGenome,
+        risk_runtime: RiskRuntime | None = None,
+    ) -> None:
         super().__init__(config)
         self.genome = genome
         self._bars: dict[str, list[MarketBar]] = {item.value: [] for item in config.instrument_ids}
         self._instruments: dict[str, object] = {}
         self._last_legs: dict[str, int] = {}
         self.last_decision = SignalDecision(SignalDirection.FLAT, "not_started")
+        self._configure_risk_runtime(genome.strategy_id, risk_runtime)
 
     def on_start(self) -> None:
         for instrument_id, bar_type in zip(self.config.instrument_ids, self.config.bar_types, strict=True):
@@ -67,6 +76,12 @@ class GeneratedMultiLegStrategy(Strategy):
             return
         self._apply_legs(decision)
         self._last_legs = dict(decision.legs)
+
+    def _risk_reference_price(self, instrument_id) -> float:
+        values = self._bars.get(instrument_id.value, ())
+        if not values:
+            return 0.0
+        return float(values[-1].close)
 
     def _apply_legs(self, decision: SignalDecision) -> None:
         if not decision.legs:

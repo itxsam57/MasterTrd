@@ -11,6 +11,8 @@ from nautilus_trader.trading.strategy import Strategy
 from .contracts import MarketBar
 from .execution_signals import SignalDecision, SignalDirection, evaluate_bar_signal
 from .genome import StrategyGenome
+from .nautilus_risk_hook import NautilusRiskMixin
+from .risk_runtime import RiskRuntime
 
 
 class GeneratedBarStrategyConfig(StrategyConfig):
@@ -21,13 +23,20 @@ class GeneratedBarStrategyConfig(StrategyConfig):
     genome_hash: str
 
 
-class GeneratedBarStrategy(Strategy):
-    def __init__(self, *, config: GeneratedBarStrategyConfig, genome: StrategyGenome) -> None:
+class GeneratedBarStrategy(NautilusRiskMixin, Strategy):
+    def __init__(
+        self,
+        *,
+        config: GeneratedBarStrategyConfig,
+        genome: StrategyGenome,
+        risk_runtime: RiskRuntime | None = None,
+    ) -> None:
         super().__init__(config)
         self.genome = genome
         self._bars: list[MarketBar] = []
         self.instrument = None
         self.last_decision = SignalDecision(SignalDirection.FLAT, "not_started")
+        self._configure_risk_runtime(genome.strategy_id, risk_runtime)
 
     def on_start(self) -> None:
         self.instrument = self.cache.instrument(self.config.instrument_id)
@@ -57,6 +66,11 @@ class GeneratedBarStrategy(Strategy):
         decision = evaluate_bar_signal(self.genome, self._bars)
         self.last_decision = decision
         self._apply_decision(decision)
+
+    def _risk_reference_price(self, instrument_id) -> float:
+        if not self._bars:
+            return 0.0
+        return float(self._bars[-1].close)
 
     def _apply_decision(self, decision: SignalDecision) -> None:
         if self.instrument is None or decision.direction is SignalDirection.FLAT:
