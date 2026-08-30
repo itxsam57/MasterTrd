@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from mastertrd.contracts import MarketBar, StrategyState
 from mastertrd.memory_duckdb import DuckDbResearchMemory
+from mastertrd.research.generator import generate_candidate
 from mastertrd.research_brain import ResearchBrainConfig, ResearchDataset, run_research_brain
 
 
@@ -60,7 +61,11 @@ def test_research_brain_runs_all_stages_stores_every_outcome_and_resumes(tmp_pat
         trade_size="0.01000",
         starting_balances=("10 ETH", "10 BTC", "100000 USDT"),
     )
-    timeframe = "4h"
+    timeframe = generate_candidate(
+        family="trend",
+        instruments=(eth.id.value,),
+        seed=42,
+    ).timeframe
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     dataset = ResearchDataset(
         dataset_hash="brain-source-v1",
