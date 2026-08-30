@@ -74,6 +74,37 @@ def test_run_node_stays_alive_until_stop_requested_after_preflight():
     assert heartbeats == [NodeReadiness.PAPER_READY, NodeReadiness.PAPER_READY]
 
 
+def test_run_node_delegates_to_execution_runtime_and_heartbeat_is_observability_only():
+    class StubExecutionRuntime:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.stop_observed = True
+
+        def run(self, *, stop_requested):
+            self.calls += 1
+            self.stop_observed = stop_requested()
+
+    execution = StubExecutionRuntime()
+    sleeps: list[float] = []
+    heartbeats: list[NodeReadiness] = []
+
+    readiness = run_node(
+        runtime(RuntimeMode.PAPER),
+        {},
+        stop_requested=lambda: False,
+        sleep=lambda seconds: sleeps.append(seconds),
+        heartbeat=lambda state: heartbeats.append(state),
+        interval_seconds=5.0,
+        execution_runtime=execution,
+    )
+
+    assert readiness is NodeReadiness.PAPER_READY
+    assert execution.calls == 1
+    assert execution.stop_observed is False
+    assert heartbeats == [NodeReadiness.PAPER_READY]
+    assert sleeps == []
+
+
 def test_run_service_builds_runtime_and_stops_cleanly_on_sigterm():
     handlers: dict[int, object] = {}
     heartbeats: list[NodeReadiness] = []
