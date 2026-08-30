@@ -99,13 +99,19 @@ class RiskManagedEMACross(NautilusRiskMixin, EMACross):
         self,
         *,
         config,
-        genome: StrategyGenome,
+        genome: StrategyGenome | None = None,
         risk_runtime: RiskRuntime | None = None,
     ) -> None:
         super().__init__(config=config)
         self.genome = genome
         self._risk_last_price = 0.0
-        self._configure_risk_runtime(genome.strategy_id, risk_runtime)
+        configured_id = getattr(config, "strategy_id", None)
+        strategy_id = (
+            genome.strategy_id
+            if genome is not None
+            else str(configured_id or f"nautilus:{config.instrument_id.value}")
+        )
+        self._configure_risk_runtime(strategy_id, risk_runtime)
 
     def on_bar(self, bar) -> None:
         self._risk_last_price = float(bar.close.as_double())
