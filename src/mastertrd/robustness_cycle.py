@@ -8,6 +8,7 @@ from .advanced_validation import (
     monte_carlo_evidence,
     purged_cpcv_evidence,
 )
+from .asset_transfer import AssetTransferPolicy, asset_transfer_evidence
 from .contracts import EvaluationResult, StrategyState
 from .genome import StrategyGenome
 from .governor import PromotionDecision, evaluate_validated_promotion
@@ -29,6 +30,7 @@ class GeneratedRobustnessCycle:
     neighbor_results: tuple[EvaluationResult, ...]
     cpcv_results: tuple[EvaluationResult, ...]
     monte_carlo_results: tuple[EvaluationResult, ...]
+    transfer_results: tuple[EvaluationResult, ...]
     evidence: tuple[ValidationEvidence, ...]
     promotion: PromotionDecision
 
@@ -116,6 +118,10 @@ def run_generated_robustness_cycle(
     stressed_fees: float,
     stressed_slippage: float,
     starting_balances: Sequence[str] = ("100000 USDT",),
+    asset_transfer_datasets: Sequence[
+        tuple[StrategyGenome, object, str, Iterable[object]]
+    ] = (),
+    asset_transfer_policy: AssetTransferPolicy | None = None,
 ) -> GeneratedRobustnessCycle:
     base_events = tuple(data)
     if not base_events:
@@ -126,6 +132,8 @@ def run_generated_robustness_cycle(
         raise ValueError("purged/CPCV datasets are required")
     if not monte_carlo_datasets:
         raise ValueError("Monte Carlo datasets are required")
+    if bool(asset_transfer_datasets) != (asset_transfer_policy is not None):
+        raise ValueError("asset transfer datasets and policy must be supplied together")
     if stressed_fees <= 0.0 and stressed_slippage <= 0.0:
         raise ValueError("cost stress must increase fees or slippage")
 
@@ -170,13 +178,39 @@ def run_generated_robustness_cycle(
         common=common,
     )
 
-    evidence = (
+    transfer_cases: tuple[tuple[StrategyGenome, EvaluationResult], ...] = ()
+    if asset_transfer_datasets:
+        transfer_common: dict[str, object] = dict(
+            code_hash=code_hash,
+            trade_size_override=trade_size,
+            starting_balances=starting_balances,
+        )
+        transfer_cases = tuple(
+            (
+                transfer_genome,
+                run_binance_spot_evaluation(
+                    genome=transfer_genome,
+                    instrument=transfer_instrument,
+                    data=tuple(transfer_events),
+                    dataset_hash=transfer_dataset_hash,
+                    **transfer_common,
+                ),
+            )
+            for transfer_genome, transfer_instrument, transfer_dataset_hash, transfer_events
+            in asset_transfer_datasets
+        )
+
+    evidence_items: list[ValidationEvidence] = [
         walk_forward_evidence(candidate, fold_results, policy),
         cost_stress_evidence(candidate, base_result, stressed_result, policy),
         parameter_stability_evidence(candidate, base_result, neighbor_results, policy),
         purged_cpcv_evidence(candidate, cpcv_results, advanced_policy),
         monte_carlo_evidence(candidate, monte_carlo_results, advanced_policy),
-    )
+    ]
+    if transfer_cases and asset_transfer_policy is not None:
+        evidence_items.append(asset_transfer_evidence(candidate, transfer_cases, asset_transfer_policy))
+    evidence = tuple(evidence_items)
+
     promotion = evaluate_validated_promotion(
         StrategyState.BACKTESTED,
         StrategyState.ROBUST,
@@ -190,6 +224,7 @@ def run_generated_robustness_cycle(
         neighbor_results=neighbor_results,
         cpcv_results=cpcv_results,
         monte_carlo_results=monte_carlo_results,
+        transfer_results=tuple(result for _, result in transfer_cases),
         evidence=evidence,
         promotion=promotion,
     )
