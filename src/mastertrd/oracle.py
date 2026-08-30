@@ -30,6 +30,7 @@ def render_env_template() -> str:
 MASTERTRD_MODE=PAPER
 LIVE_TRADING_ENABLED=false
 ORACLE_ENABLED=false
+BINANCE_PRODUCT=SPOT
 BINANCE_DEMO_API_KEY=
 BINANCE_DEMO_API_SECRET=
 BINANCE_DEMO_ACCOUNT_ID=
@@ -62,7 +63,9 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths={spec.app_dir}
+ReadWritePaths={spec.app_dir} /var/lib/mastertrd /var/log/mastertrd
+StateDirectory=mastertrd
+LogsDirectory=mastertrd
 
 [Install]
 WantedBy=multi-user.target
@@ -91,13 +94,19 @@ if [[ "${{EUID}}" -ne 0 ]]; then
   exit 4
 fi
 
+: "${{MASTERTRD_REF:?MASTERTRD_REF is required}}"
+if [[ ! "${{MASTERTRD_REF}}" =~ ^[0-9a-fA-F]{{40}}$ ]]; then
+  echo "MASTERTRD_REF must be an exact 40-character git commit SHA" >&2
+  exit 5
+fi
+
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y python3 python3-venv git curl logrotate
+apt-get install -y ca-certificates curl git logrotate
 
 id -u {spec.service_user} >/dev/null 2>&1 || useradd --system --home {spec.app_dir} --shell /usr/sbin/nologin {spec.service_user}
-mkdir -p {spec.app_dir} /etc/mastertrd /var/log/mastertrd
-chown -R {spec.service_user}:{spec.service_user} {spec.app_dir} /var/log/mastertrd
+mkdir -p {spec.app_dir} /etc/mastertrd /var/lib/mastertrd /var/log/mastertrd
+chown -R {spec.service_user}:{spec.service_user} {spec.app_dir} /var/lib/mastertrd /var/log/mastertrd
 
 if [[ ! -f {spec.env_file} ]]; then
 cat > {spec.env_file} <<'MASTERTRD_ENV'
@@ -129,9 +138,12 @@ cat > /etc/logrotate.d/mastertrd <<'MASTERTRD_LOGROTATE'
 }}
 MASTERTRD_LOGROTATE
 
+# The committed deployment bootstrap checks out the requested exact ref with:
+# git checkout --detach "$MASTERTRD_REF"
+# and installs the lock with: uv sync --locked
 systemctl daemon-reload
 systemctl enable mastertrd.service
 
 echo "Oracle adapter installed with ORACLE_ENABLED=false and LIVE_TRADING_ENABLED=false."
-echo "Populate host secrets, verify PAPER/DEMO operation, then start explicitly with: systemctl start mastertrd.service"
+echo "Populate host secrets, verify PAPER/DEMO operation, then start explicitly."
 '''

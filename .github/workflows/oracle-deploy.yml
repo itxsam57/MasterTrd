@@ -1,0 +1,90 @@
+name: Oracle Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Exact 40-character MasterTrd commit SHA to deploy
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: oracle-production
+    steps:
+      - name: Validate requested ref
+        env:
+          MASTERTRD_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          [[ "${MASTERTRD_REF}" =~ ^[0-9a-fA-F]{40}$ ]] || {
+            echo "ref must be an exact 40-character commit SHA" >&2
+            exit 2
+          }
+
+      - name: Check required deployment secrets
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_USER: ${{ secrets.ORACLE_USER }}
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${ORACLE_HOST}"
+          test -n "${ORACLE_USER}"
+          test -n "${ORACLE_SSH_KEY}"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 1
+
+      - name: Prepare SSH
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "${ORACLE_SSH_KEY}" > ~/.ssh/mastertrd
+          chmod 0600 ~/.ssh/mastertrd
+          ssh-keyscan -H "${ORACLE_HOST}" >> ~/.ssh/known_hosts
+
+      - name: Upload bootstrap
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_USER: ${{ secrets.ORACLE_USER }}
+        run: |
+          set -euo pipefail
+          scp -i ~/.ssh/mastertrd deploy/oracle/bootstrap.sh "${ORACLE_USER}@${ORACLE_HOST}:/tmp/mastertrd-bootstrap.sh"
+
+      - name: Install exact ref without starting service
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_USER: ${{ secrets.ORACLE_USER }}
+          MASTERTRD_REF: ${{ inputs.ref }}
+          MASTERTRD_REPO_URL: https://github.com/${{ github.repository }}.git
+        run: |
+          set -euo pipefail
+          printf -v remote_cmd \
+            "sudo env MASTERTRD_REPO_URL=%q MASTERTRD_REF=%q bash /tmp/mastertrd-bootstrap.sh" \
+            "${MASTERTRD_REPO_URL}" "${MASTERTRD_REF}"
+          ssh -i ~/.ssh/mastertrd "${ORACLE_USER}@${ORACLE_HOST}" "${remote_cmd}"
+
+      - name: Verify installed service remains stopped
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_USER: ${{ secrets.ORACLE_USER }}
+          MASTERTRD_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/mastertrd "${ORACLE_USER}@${ORACLE_HOST}" \
+            "test \"\$(git -C /opt/mastertrd rev-parse HEAD)\" = '${MASTERTRD_REF}' && ! systemctl is-active --quiet mastertrd.service"

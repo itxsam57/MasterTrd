@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+systemctl is-active --quiet mastertrd.service
+RESTARTS="$(systemctl show mastertrd.service --property=NRestarts --value)"
+ACTIVE_SINCE="$(systemctl show mastertrd.service --property=ActiveEnterTimestamp --value)"
+printf 'mastertrd.service active; NRestarts=%s; active_since=%s\n' "${RESTARTS}" "${ACTIVE_SINCE}"
