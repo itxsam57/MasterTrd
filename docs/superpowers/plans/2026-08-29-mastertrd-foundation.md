@@ -1,5 +1,7 @@
 # MasterTrd Foundation Implementation Plan
 
+> **Status:** FOUNDATION-ONLY / SUPERSEDED FOR COMPLETION TRACKING. This document records the original foundation scope and must not be used to estimate total MasterTrd completion. The current end-to-end completion plan is `docs/superpowers/plans/2026-08-30-mastertrd-full-completion.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Establish a safe, deterministic core that every research/execution engine can plug into without bypassing validation or live-trading safety.
