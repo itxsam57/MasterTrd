@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import argparse
+from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
-from typing import Iterable
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,3 +42,18 @@ def write_acceptance_json(
         encoding="utf-8",
     )
     return path
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Run MasterTrd completion acceptance checks")
+    parser.add_argument("repo_root", nargs="?", default=".")
+    parser.add_argument("--write", default="artifacts/acceptance.json")
+    args = parser.parse_args(argv)
+
+    checks = run_static_acceptance(Path(args.repo_root))
+    write_acceptance_json(Path(args.write), checks)
+    return 0 if all(check.passed for check in checks) else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
