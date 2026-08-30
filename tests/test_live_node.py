@@ -3,7 +3,13 @@ import signal
 import pytest
 
 from mastertrd.contracts import RuntimeMode
-from mastertrd.live_node import NodeReadiness, preflight_node, run_node, run_service
+from mastertrd.live_node import (
+    NodeReadiness,
+    load_execution_runtime_factory,
+    preflight_node,
+    run_node,
+    run_service,
+)
 from mastertrd.runtime import RuntimeConfig
 
 
@@ -103,6 +109,52 @@ def test_run_node_delegates_to_execution_runtime_and_heartbeat_is_observability_
     assert execution.stop_observed is False
     assert heartbeats == [NodeReadiness.PAPER_READY]
     assert sleeps == []
+
+
+def test_run_service_can_build_concrete_execution_runtime_from_factory():
+    handlers: dict[int, object] = {}
+    heartbeats: list[NodeReadiness] = []
+    built: list[tuple[RuntimeConfig, dict[str, str]]] = []
+
+    class StubExecutionRuntime:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run(self, *, stop_requested):
+            self.calls += 1
+            assert stop_requested() is False
+
+    execution = StubExecutionRuntime()
+
+    def factory(runtime_config: RuntimeConfig, environ: dict[str, str]):
+        built.append((runtime_config, dict(environ)))
+        return execution
+
+    readiness = run_service(
+        {
+            "MASTERTRD_MODE": "PAPER",
+            "LIVE_TRADING_ENABLED": "false",
+            "ORACLE_ENABLED": "false",
+        },
+        register_signal=lambda sig, handler: handlers.__setitem__(sig, handler),
+        sleep=lambda _seconds: pytest.fail("runtime-backed service must not heartbeat-sleep"),
+        heartbeat=lambda state: heartbeats.append(state),
+        execution_runtime_factory=factory,
+    )
+
+    assert readiness is NodeReadiness.PAPER_READY
+    assert len(built) == 1
+    assert built[0][0].mode is RuntimeMode.PAPER
+    assert execution.calls == 1
+    assert heartbeats == [NodeReadiness.PAPER_READY]
+    assert signal.SIGINT in handlers and signal.SIGTERM in handlers
+
+
+def test_production_factory_loader_fails_closed_when_unconfigured_or_invalid():
+    with pytest.raises(RuntimeError, match="MASTERTRD_EXECUTION_FACTORY"):
+        load_execution_runtime_factory({})
+    with pytest.raises(ValueError, match="module:function"):
+        load_execution_runtime_factory({"MASTERTRD_EXECUTION_FACTORY": "bad-format"})
 
 
 def test_run_service_builds_runtime_and_stops_cleanly_on_sigterm():
