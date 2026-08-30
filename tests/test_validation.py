@@ -11,16 +11,17 @@ def make(family):
     )
 
 
-def test_scalping_requires_specialist_hft_evidence():
+def test_scalping_requires_promotion_grade_historical_l2_evidence():
     profile = validation_profile(make("scalping"))
     assert profile.minimum_data_level is DataLevel.TICK
-    assert "hft_queue_model" in profile.required_evidence
-    assert "hft_order_latency_stress" in profile.required_evidence
+    assert "hft_real_l2" in profile.required_evidence
+    assert "hft_queue_model" not in profile.required_evidence
+    assert "hft_order_latency_stress" not in profile.required_evidence
 
 
 def test_swing_does_not_require_hft_evidence():
     profile = validation_profile(make("swing"))
-    assert "hft_queue_model" not in profile.required_evidence
+    assert "hft_real_l2" not in profile.required_evidence
 
 
 def test_options_add_specialist_options_evidence():
