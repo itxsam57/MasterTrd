@@ -19,6 +19,7 @@ def test_locked_nautilus_binance_trading_node_builds_without_connecting():
     )
     try:
         assert isinstance(node, TradingNode)
-        assert not node.is_running
+        assert node.is_built() is True
+        assert node.is_running() is False
     finally:
         node.dispose()
