@@ -54,8 +54,10 @@ def _bar_type(instrument_id: str, timeframe: str):
 def _compile_ema_baseline(genome: StrategyGenome, *, instrument, trade_size: Decimal):
     entry_kind = genome.entry.get("kind", genome.entry.get("type"))
     exit_kind = genome.exit.get("kind", genome.exit.get("type"))
-    if entry_kind != "ema_cross" or exit_kind != "cross_reverse":
-        raise ValueError("trend baseline requires ema_cross + cross_reverse")
+    if entry_kind != "ema_cross":
+        raise ValueError("trend entry requires ema_cross")
+    if exit_kind != "cross_reverse":
+        raise ValueError("trend exit requires cross_reverse")
     try:
         fast_period = int(genome.entry.get("fast_period", genome.entry.get("fast")))
         slow_period = int(genome.entry.get("slow_period", genome.entry.get("slow")))
