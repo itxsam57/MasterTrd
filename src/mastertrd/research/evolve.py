@@ -57,7 +57,6 @@ def _numeric_coordinates(seeds: Sequence[StrategyGenome]):
                 continue
             low, high = min(observed), max(observed)
             if low == high:
-                # Keep constant schema values out of the search surface.
                 continue
             coords.append((section, key, isinstance(first_value, Integral), low, high))
     return coords
@@ -70,9 +69,6 @@ def _materialize(base: StrategyGenome, coords, vector) -> StrategyGenome:
         updates[section][key] = int(round(value)) if integer else float(value)
 
     entry = updates["entry"]
-    # Preserve the most important structural ordering invariant used by several
-    # bar families. This is a fail-closed repair within the observed seed bounds,
-    # never a mutation of the execution/data contract.
     fast_key = "fast" if "fast" in entry else "fast_period" if "fast_period" in entry else None
     slow_key = "slow" if "slow" in entry else "slow_period" if "slow_period" in entry else None
     if fast_key and slow_key and float(entry[fast_key]) >= float(entry[slow_key]):
@@ -129,7 +125,6 @@ def evolve_genomes(
             scores = _score_vector(objective(genome))
             if len(scores) != dimensions:
                 raise ValueError("evolution objective dimensionality changed")
-            # pymoo minimizes; MasterTrd research objectives use higher-is-better.
             out["F"] = [-score for score in scores] if dimensions > 1 else -scores[0]
 
     algorithm = GA(pop_size=population) if dimensions == 1 else NSGA2(pop_size=population)
@@ -146,7 +141,10 @@ def evolve_genomes(
 
     vectors = np.atleast_2d(result.X)
     candidates = [_materialize(base, coords, vector) for vector in vectors]
-    candidates.extend(seeds)
+    # Only the canonical base seed may be added directly. Other raw seeds can
+    # carry different timeframe/style choices and are parameter evidence, not
+    # eligible output genomes for this evolution run.
+    candidates.append(base)
 
     unique: dict[str, StrategyGenome] = {}
     for genome in candidates:
