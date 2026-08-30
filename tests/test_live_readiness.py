@@ -11,6 +11,7 @@ from mastertrd.live_readiness import (
     risk_review_evidence,
 )
 from mastertrd.risk import RiskAction, RiskLimits, RiskSnapshot, evaluate_risk
+from mastertrd.validation import ValidationEvidence
 
 
 def genome() -> StrategyGenome:
@@ -33,6 +34,21 @@ def limits() -> RiskLimits:
         max_daily_loss=50.0,
         max_drawdown=0.20,
         max_orders_per_minute=10,
+    )
+
+
+def live_record(kind: str, *, code_hash: str = "code-live", dataset_hash: str = "dataset-live") -> ValidationEvidence:
+    candidate = genome()
+    return ValidationEvidence(
+        strategy_id=candidate.strategy_id,
+        genome_hash=candidate.genome_hash,
+        evidence_type=kind,
+        dataset_hash=dataset_hash,
+        code_hash=code_hash,
+        engine="mastertrd-live-probe",
+        engine_version="1",
+        passed=True,
+        metrics={"completed": 1.0},
     )
 
 
@@ -164,50 +180,44 @@ def test_kill_switch_receipt_requires_manual_and_automatic_kills():
     assert kill_switch_test_evidence(candidate, incomplete).passed is False
 
 
-def test_all_three_safety_receipts_are_required_for_live_eligibility():
+def test_live_eligibility_requires_testnet_smoke_in_addition_to_three_safety_probes():
     candidate = genome()
-    risk = risk_review_evidence(candidate, limits())
-    reconciliation = reconciliation_test_evidence(
-        candidate,
-        ReconciliationTestReceipt(
-            strategy_id=candidate.strategy_id,
-            genome_hash=candidate.genome_hash,
-            account_snapshot_id="snapshot-live",
-            balances_match=True,
-            positions_match=True,
-            open_orders_match=True,
-            fills_match=True,
-            no_unexpected_orders=True,
-            completed=True,
-        ),
-    )
-    kill = kill_switch_test_evidence(
-        candidate,
-        KillSwitchTestReceipt(
-            strategy_id=candidate.strategy_id,
-            genome_hash=candidate.genome_hash,
-            test_id="kill-live",
-            manual_stop_verified=True,
-            stale_data_kill_verified=True,
-            reconciliation_failure_kill_verified=True,
-            daily_loss_kill_verified=True,
-            drawdown_kill_verified=True,
-            completed=True,
-        ),
-    )
-
+    three = [
+        live_record("risk_review"),
+        live_record("reconciliation_test"),
+        live_record("kill_switch_test"),
+    ]
     missing = evaluate_validated_promotion(
         StrategyState.CHAMPION,
         StrategyState.LIVE_ELIGIBLE,
         candidate,
-        [risk, reconciliation],
+        three,
     )
     assert missing.allowed is False
+    assert missing.missing_evidence == {"testnet_smoke"}
 
     complete = evaluate_validated_promotion(
         StrategyState.CHAMPION,
         StrategyState.LIVE_ELIGIBLE,
         candidate,
-        [risk, reconciliation, kill],
+        three + [live_record("testnet_smoke")],
     )
     assert complete.allowed is True
+
+
+def test_live_eligibility_rejects_mixed_code_or_dataset_identity():
+    candidate = genome()
+    records = [
+        live_record("risk_review"),
+        live_record("reconciliation_test"),
+        live_record("kill_switch_test"),
+        live_record("testnet_smoke", code_hash="different-code"),
+    ]
+    decision = evaluate_validated_promotion(
+        StrategyState.CHAMPION,
+        StrategyState.LIVE_ELIGIBLE,
+        candidate,
+        records,
+    )
+    assert decision.allowed is False
+    assert "identity" in decision.reason
