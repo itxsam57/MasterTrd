@@ -16,18 +16,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-          cache: pip
-      - name: Install
+      - name: Install locked stack
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev,storage,research]"
-      - name: Test core
+          python -m pip install --disable-pip-version-check uv
+          uv lock --check
+          uv sync --locked --all-extras
+          uv pip check
+      - name: Test cumulative core coverage
         run: |
-          # Integration-owned execution/HFT/orchestration modules are exercised by
-          # their focused workflows and the full-stack cumulative gate. Keep this
-          # job's 90% threshold scoped to modules covered by the unit-test surface.
-          coverage run \
+          # Integration-owned execution/HFT/orchestration modules have focused
+          # gates, but integration tests still contribute coverage to shared core.
+          # The 90% threshold is not lowered as the platform grows.
+          uv run coverage run \
             --source=mastertrd \
             --omit='src/mastertrd/research/*,src/mastertrd/nautilus_binance.py,src/mastertrd/nautilus_backtest.py,src/mastertrd/nautilus_strategy.py,src/mastertrd/nautilus_evaluation.py,src/mastertrd/nautilus_paper.py,src/mastertrd/nautilus_data.py,src/mastertrd/memory_duckdb.py,src/mastertrd/research_cycle.py,src/mastertrd/robustness_cycle.py,src/mastertrd/hidden_cycle.py,src/mastertrd/paper_cycle.py,src/mastertrd/paper_events.py,src/mastertrd/execution_runtime.py,src/mastertrd/execution_signals.py,src/mastertrd/hft_engine.py,src/mastertrd/nautilus_bar_strategy.py,src/mastertrd/nautilus_multileg_strategy.py,src/mastertrd/nautilus_options_strategy.py,src/mastertrd/nautilus_risk_hook.py,src/mastertrd/research_brain.py,src/mastertrd/reconciliation.py,src/mastertrd/streaming.py' \
-            -m pytest -q tests --ignore=tests/integration
-          coverage report --show-missing --fail-under=90
+            -m pytest -q
+          uv run coverage report --show-missing --fail-under=90
