@@ -1,0 +1,106 @@
+name: Final Acceptance
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        run: python -m pip install --disable-pip-version-check uv
+
+      - name: Verify lock and install every admitted subsystem
+        run: |
+          set -euo pipefail
+          uv lock --check
+          uv sync --locked --all-extras
+          uv pip check
+
+      - name: Run cumulative test suite
+        run: uv run pytest -q
+
+      - name: Prove PAPER preflight is credential-free and fail-closed
+        env:
+          MASTERTRD_MODE: PAPER
+          LIVE_TRADING_ENABLED: 'false'
+          ORACLE_ENABLED: 'false'
+        run: |
+          set -euo pipefail
+          unset BINANCE_DEMO_API_KEY BINANCE_DEMO_API_SECRET BINANCE_DEMO_ACCOUNT_ID || true
+          unset BINANCE_TESTNET_API_KEY BINANCE_TESTNET_API_SECRET BINANCE_TESTNET_ACCOUNT_ID || true
+          unset BINANCE_LIVE_API_KEY BINANCE_LIVE_API_SECRET BINANCE_LIVE_ACCOUNT_ID || true
+          uv run python - <<'PY'
+          import os
+          from mastertrd.live_node import NodeReadiness, build_exchange_node, preflight_node
+          from mastertrd.runtime import RuntimeConfig
+          from mastertrd.venue import BinanceProduct
+
+          runtime = RuntimeConfig.from_env(dict(os.environ))
+          assert preflight_node(runtime, os.environ) is NodeReadiness.PAPER_READY
+          try:
+              build_exchange_node(runtime, os.environ, product=BinanceProduct.SPOT)
+          except RuntimeError as exc:
+              assert 'PAPER mode cannot construct an exchange execution node' in str(exc)
+          else:
+              raise AssertionError('PAPER unexpectedly constructed an exchange node')
+          print('PAPER purpose smoke: OK')
+          PY
+
+      - name: Guard tracked repository against forbidden secret material
+        run: |
+          set -euo pipefail
+          uv run python - <<'PY'
+          from pathlib import Path
+          import re
+          import subprocess
+
+          tracked = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          tracked = [p for p in tracked if p]
+          forbidden_names = re.compile(r'(^|/)(\.env|id_rsa|id_ed25519|.*\.pem|.*\.p12|.*\.pfx)$', re.I)
+          allowed_env_examples = {'.env.example', 'deploy/oracle/mastertrd.env.example'}
+          forbidden_markers = (
+              '-----BEGIN OPENSSH PRIVATE KEY-----',
+              '-----BEGIN RSA PRIVATE KEY-----',
+              '-----BEGIN EC PRIVATE KEY-----',
+              '-----BEGIN PRIVATE KEY-----',
+          )
+          assignment = re.compile(
+              r'(?im)^\s*(?:PASSWORD|PASSPHRASE|SEED_PHRASE|MNEMONIC|PRIVATE_KEY|ACCESS_TOKEN|AUTH_TOKEN)\s*=\s*([^\s#][^\r\n]*)$'
+          )
+          failures = []
+          for name in tracked:
+              normalized = name.replace('\\', '/')
+              if forbidden_names.search(normalized) and normalized not in allowed_env_examples:
+                  failures.append(f'forbidden tracked secret filename: {name}')
+                  continue
+              path = Path(name)
+              try:
+                  text = path.read_text(encoding='utf-8')
+              except (UnicodeDecodeError, OSError):
+                  continue
+              if any(marker in text for marker in forbidden_markers):
+                  failures.append(f'private-key material in tracked file: {name}')
+              for match in assignment.finditer(text):
+                  value = match.group(1).strip().strip('"\'')
+                  if value and not value.startswith('${{') and value.lower() not in {'false', 'none', 'null'}:
+                      failures.append(f'populated sensitive assignment in tracked file: {name}')
+                      break
+          if failures:
+              raise SystemExit('\n'.join(failures))
+          print(f'tracked secret guard: OK ({len(tracked)} files)')
+          PY
