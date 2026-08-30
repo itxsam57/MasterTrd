@@ -23,6 +23,14 @@ class DurableResearchRecord:
     created_at: str
 
 
+@dataclass(frozen=True, slots=True)
+class ResearchStageReceipt:
+    run_id: str
+    stage: str
+    artifact: Mapping[str, Any]
+    created_at: str
+
+
 class DuckDbResearchMemory:
     def __init__(self, path: str | Path) -> None:
         import duckdb
@@ -45,6 +53,17 @@ class DuckDbResearchMemory:
             )
             """
         )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS research_stage_receipts (
+                run_id VARCHAR NOT NULL,
+                stage VARCHAR NOT NULL,
+                artifact_json VARCHAR NOT NULL,
+                created_at VARCHAR NOT NULL,
+                PRIMARY KEY (run_id, stage)
+            )
+            """
+        )
 
     @staticmethod
     def _row_to_record(row: tuple[Any, ...]) -> DurableResearchRecord:
@@ -58,6 +77,15 @@ class DuckDbResearchMemory:
             reason=str(row[6]),
             metadata=json.loads(str(row[7])),
             created_at=str(row[8]),
+        )
+
+    @staticmethod
+    def _row_to_stage(row: tuple[Any, ...]) -> ResearchStageReceipt:
+        return ResearchStageReceipt(
+            run_id=str(row[0]),
+            stage=str(row[1]),
+            artifact=json.loads(str(row[2])),
+            created_at=str(row[3]),
         )
 
     def append(
@@ -126,6 +154,65 @@ class DuckDbResearchMemory:
         if record is None:
             raise RuntimeError("research record insert could not be read back")
         return record
+
+    def record_stage(
+        self,
+        *,
+        run_id: str,
+        stage: str,
+        artifact: Mapping[str, Any],
+    ) -> ResearchStageReceipt:
+        if not run_id:
+            raise ValueError("run_id is required")
+        if not stage:
+            raise ValueError("stage is required")
+        artifact_value = dict(artifact)
+        artifact_json = json.dumps(
+            artifact_value,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        existing = self.get_stage(run_id, stage)
+        if existing is not None:
+            if dict(existing.artifact) != artifact_value:
+                raise ValueError("stage receipt already exists with different artifact")
+            return existing
+
+        created_at = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            """
+            INSERT INTO research_stage_receipts (run_id, stage, artifact_json, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            [run_id, stage, artifact_json, created_at],
+        )
+        receipt = self.get_stage(run_id, stage)
+        if receipt is None:
+            raise RuntimeError("stage receipt insert could not be read back")
+        return receipt
+
+    def get_stage(self, run_id: str, stage: str) -> ResearchStageReceipt | None:
+        row = self._conn.execute(
+            """
+            SELECT run_id, stage, artifact_json, created_at
+            FROM research_stage_receipts
+            WHERE run_id = ? AND stage = ?
+            """,
+            [run_id, stage],
+        ).fetchone()
+        return None if row is None else self._row_to_stage(row)
+
+    def stage_receipts(self, run_id: str) -> list[ResearchStageReceipt]:
+        rows = self._conn.execute(
+            """
+            SELECT run_id, stage, artifact_json, created_at
+            FROM research_stage_receipts
+            WHERE run_id = ?
+            ORDER BY created_at, stage
+            """,
+            [run_id],
+        ).fetchall()
+        return [self._row_to_stage(row) for row in rows]
 
     def get(self, experiment_id: str) -> DurableResearchRecord | None:
         row = self._conn.execute(
