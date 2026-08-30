@@ -60,6 +60,38 @@ class MarketBar:
 
 
 @dataclass(frozen=True, slots=True)
+class MarketTick:
+    timestamp: datetime
+    venue: str
+    instrument: str
+    bid: float
+    ask: float
+    bid_size: float
+    ask_size: float
+    last: float | None = None
+    last_size: float = 0.0
+    extras: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.timestamp.tzinfo is None:
+            raise ValueError("timestamp must be timezone-aware")
+        if not self.venue or not self.instrument:
+            raise ValueError("venue and instrument are required")
+        numeric = (self.bid, self.ask, self.bid_size, self.ask_size, self.last_size)
+        if not all(isfinite(float(value)) for value in numeric):
+            raise ValueError("tick values must be finite")
+        if self.bid <= 0 or self.ask <= 0:
+            raise ValueError("bid and ask must be positive")
+        if self.bid_size < 0 or self.ask_size < 0 or self.last_size < 0:
+            raise ValueError("tick sizes cannot be negative")
+        if self.ask < self.bid:
+            raise ValueError("crossed tick book is invalid")
+        if self.last is not None:
+            if not isfinite(float(self.last)) or self.last <= 0:
+                raise ValueError("last price must be positive and finite")
+
+
+@dataclass(frozen=True, slots=True)
 class EvaluationResult:
     strategy_id: str
     genome_hash: str
