@@ -78,7 +78,9 @@ def run_node(
         try:
             execution_runtime.run(stop_requested=stop_requested)
         finally:
-            execution_runtime.close()
+            close = getattr(execution_runtime, "close", None)
+            if callable(close):
+                close()
         return readiness
 
     # Backward-compatible observability-only loop for injected/test callers.
