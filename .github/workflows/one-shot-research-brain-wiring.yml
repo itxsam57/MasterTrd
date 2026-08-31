@@ -1,0 +1,73 @@
+name: one-shot research brain wiring
+
+on:
+  push:
+    branches:
+      - v2/plan-closure-20260831
+    paths:
+      - .github/workflows/one-shot-research-brain-wiring.yml
+
+permissions:
+  contents: write
+
+jobs:
+  wire:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v2/plan-closure-20260831
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Apply guarded ResearchBrain wiring
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/mastertrd/research_brain.py')
+          text = path.read_text()
+
+          old_import = 'from .research.generator import generate_candidate\n'
+          new_import = '''from .research_candidate_generation import (\n    ResearchCandidateBatch,\n    ResearchGenerationBlocker,\n    generate_research_candidates,\n)\n'''
+          if text.count(old_import) != 1:
+              raise SystemExit('guard failed: expected exactly one legacy generator import')
+          text = text.replace(old_import, new_import, 1)
+
+          old_dataset = '''class ResearchDataset:\n    dataset_hash: str\n    bars_by_instrument: Mapping[str, Sequence[MarketBar]]\n    nautilus_instruments: Mapping[str, Any]\n\n    def __post_init__(self) -> None:\n        if not self.dataset_hash:\n            raise ValueError("dataset_hash is required")\n        if not self.bars_by_instrument:\n            raise ValueError("bars_by_instrument is required")\n        if not self.nautilus_instruments:\n            raise ValueError("nautilus_instruments is required")\n'''
+          new_dataset = '''class ResearchDataset:\n    dataset_hash: str\n    bars_by_instrument: Mapping[str, Sequence[MarketBar]]\n    nautilus_instruments: Mapping[str, Any]\n    available_data_levels: Mapping[str, frozenset[str]] = field(default_factory=dict)\n\n    def __post_init__(self) -> None:\n        if not self.dataset_hash:\n            raise ValueError("dataset_hash is required")\n        if not self.bars_by_instrument:\n            raise ValueError("bars_by_instrument is required")\n        if not self.nautilus_instruments:\n            raise ValueError("nautilus_instruments is required")\n        if not self.available_data_levels:\n            object.__setattr__(\n                self,\n                "available_data_levels",\n                {key: frozenset({"BAR"}) for key in self.nautilus_instruments},\n            )\n        else:\n            unknown_level_keys = sorted(set(self.available_data_levels) - set(self.nautilus_instruments))\n            if unknown_level_keys:\n                raise ValueError(\n                    "data-level metadata references unknown instruments: "\n                    + ", ".join(unknown_level_keys),\n                )\n'''
+          if text.count(old_dataset) != 1:
+              raise SystemExit('guard failed: expected exactly one legacy ResearchDataset header')
+          text = text.replace(old_dataset, new_dataset, 1)
+
+          old_generation = '''    def generate_stage() -> Mapping[str, Any]:\n        genomes = [\n            generate_candidate(family=family, instruments=(instrument,), seed=seed)\n            for family in config.families\n            for instrument in config.instruments\n            for seed in range(config.seed_start, config.seed_stop)\n        ]\n        return {"genomes": [_genome_payload(genome) for genome in genomes]}\n'''
+          new_generation = '''    def generate_stage() -> Mapping[str, Any]:\n        batch = generate_research_candidates(config, dataset)\n        return {\n            "genomes": [_genome_payload(genome) for genome in batch.candidates],\n            "blockers": [asdict(blocker) for blocker in batch.blockers],\n        }\n'''
+          if text.count(old_generation) != 1:
+              raise SystemExit('guard failed: expected exactly one legacy generation stage')
+          text = text.replace(old_generation, new_generation, 1)
+
+          path.write_text(text)
+          PY
+
+      - name: Verify focused RED turns GREEN
+        shell: bash
+        run: |
+          python -m pip install --disable-pip-version-check uv
+          uv lock --check
+          uv sync --locked --all-extras
+          uv run pytest -q tests/integration/test_research_all_families.py
+
+      - name: Commit guarded production change and remove one-shot workflow
+        shell: bash
+        run: |
+          rm .github/workflows/one-shot-research-brain-wiring.yml
+          git config user.name 'mastertrd-autofix'
+          git config user.email 'actions@users.noreply.github.com'
+          git add src/mastertrd/research_brain.py .github/workflows/one-shot-research-brain-wiring.yml
+          git diff --cached --check
+          git commit -m 'feat: wire family-aware ResearchBrain generation'
+          git push origin HEAD:v2/plan-closure-20260831
