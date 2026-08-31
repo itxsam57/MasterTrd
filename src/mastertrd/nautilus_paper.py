@@ -8,7 +8,10 @@ from pathlib import Path
 
 from .genome import StrategyGenome
 from .paper_evidence import PaperStartReceipt
+from .paper_events import NautilusPaperEventSink
 from .paper_session import JsonPaperSessionStore, PaperSessionJournal
+from .risk_runtime import RiskRuntime
+from .streaming import MarketStreamEvent
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,3 +117,149 @@ def open_persistent_paper_session(
     journal = PaperSessionJournal(receipt, code_hash=code_hash, started_ns=int(started_ns))
     store.save(journal)
     return PersistentPaperSession(journal=journal, store=store, resumed=False)
+
+
+def fixture_binance_spot_instrument(instrument_id: str):
+    """Return pinned Nautilus metadata for deterministic recorded-feed fixtures.
+
+    This helper is deliberately limited to the checked-in fixture universe. Real
+    public-network PAPER must load exchange metadata through the Binance adapter
+    rather than guessing tick/size precision.
+    """
+
+    from nautilus_trader.test_kit.providers import TestInstrumentProvider
+
+    providers = {
+        "ETHUSDT.BINANCE": TestInstrumentProvider.ethusdt_binance,
+        "BTCUSDT.BINANCE": TestInstrumentProvider.btcusdt_binance,
+    }
+    try:
+        provider = providers[instrument_id]
+    except KeyError as exc:
+        raise RuntimeError(
+            f"no deterministic Binance instrument fixture is registered for {instrument_id}"
+        ) from exc
+    return provider()
+
+
+class NautilusStreamingPaperExecution:
+    """Route one normalized market event at a time through Nautilus execution.
+
+    The low-level Nautilus BacktestEngine streaming mode is used here as the
+    deterministic sandbox execution kernel. It preserves strategy/execution
+    state between batches while allowing MasterTrd to reconcile and persist its
+    journal after every source event. Order matching and PositionClosed events
+    remain Nautilus-owned.
+    """
+
+    def __init__(
+        self,
+        *,
+        candidate: StrategyGenome,
+        risk_runtime: RiskRuntime,
+        journal: PaperSessionJournal,
+        instrument,
+    ) -> None:
+        if len(candidate.instruments) != 1:
+            raise RuntimeError("streaming PAPER bridge currently requires one instrument")
+        if instrument.id.value != candidate.instruments[0]:
+            raise ValueError("paper instrument does not match candidate identity")
+
+        from .nautilus_backtest import _build_binance_spot_engine
+        from .nautilus_strategy import compile_genome_to_nautilus
+
+        base_code = str(instrument.base_currency)
+        quote_code = str(instrument.quote_currency)
+        self._engine = _build_binance_spot_engine(
+            instrument=instrument,
+            starting_balances=(f"10 {base_code}", f"100000 {quote_code}"),
+        )
+        self._instrument = instrument
+        self._sink = NautilusPaperEventSink(journal)
+        self._ended = False
+
+        compiled = compile_genome_to_nautilus(
+            candidate,
+            instrument=instrument,
+            risk_runtime=risk_runtime,
+        )
+        strategy_type = type(compiled)
+        sink = self._sink
+
+        class RecordingStrategy(strategy_type):
+            def on_position_closed(self, event):
+                sink.on_position_closed(event)
+                parent = getattr(super(), "on_position_closed", None)
+                if parent is not None:
+                    parent(event)
+
+        self._strategy = RecordingStrategy(
+            config=compiled.config,
+            genome=candidate,
+            risk_runtime=risk_runtime,
+        )
+        self._engine.add_strategy(self._strategy)
+
+    @property
+    def closed_positions(self) -> int:
+        return self._sink.closed_positions
+
+    def _bar(self, event: MarketStreamEvent):
+        from nautilus_trader.model.data import Bar
+        from nautilus_trader.model.objects import Price, Quantity
+
+        bar = event.bar
+        price_precision = int(self._instrument.price_precision)
+        size_precision = int(self._instrument.size_precision)
+
+        def price(value: float) -> Price:
+            return Price.from_str(f"{float(value):.{price_precision}f}")
+
+        def quantity(value: float) -> Quantity:
+            return Quantity.from_str(f"{float(value):.{size_precision}f}")
+
+        return Bar(
+            bar_type=self._strategy.config.bar_type,
+            open=price(bar.open),
+            high=price(bar.high),
+            low=price(bar.low),
+            close=price(bar.close),
+            volume=quantity(bar.volume),
+            ts_event=event.timestamp_ns,
+            ts_init=event.timestamp_ns,
+        )
+
+    def _quote(self, event: MarketStreamEvent):
+        from nautilus_trader.model.data import QuoteTick
+        from nautilus_trader.model.objects import Price, Quantity
+
+        tick = event.tick
+        price_precision = int(self._instrument.price_precision)
+        size_precision = int(self._instrument.size_precision)
+
+        return QuoteTick(
+            instrument_id=self._instrument.id,
+            bid_price=Price.from_str(f"{float(tick.bid):.{price_precision}f}"),
+            ask_price=Price.from_str(f"{float(tick.ask):.{price_precision}f}"),
+            bid_size=Quantity.from_str(f"{float(tick.bid_size):.{size_precision}f}"),
+            ask_size=Quantity.from_str(f"{float(tick.ask_size):.{size_precision}f}"),
+            ts_event=event.timestamp_ns,
+            ts_init=event.timestamp_ns,
+        )
+
+    def dispatch(self, event: MarketStreamEvent) -> None:
+        if self._ended:
+            raise RuntimeError("Nautilus PAPER execution bridge is already finalized")
+        data = self._bar(event) if event.kind == "bar" else self._quote(event)
+        self._engine.add_data([data])
+        self._engine.run(streaming=True)
+        self._engine.clear_data()
+
+    def close(self) -> None:
+        if self._ended:
+            return
+        try:
+            self._engine.end()
+        finally:
+            self._engine.dispose()
+            self._ended = True
