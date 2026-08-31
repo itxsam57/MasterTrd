@@ -52,7 +52,16 @@ def _rules(family: str, rng: random.Random) -> tuple[dict, dict, dict]:
         "delta_neutral": ({"type": "hedged_basis", "hedge_ratio": round(rng.uniform(0.9, 1.1), 3)}, {"type": "rebalance", "drift_bps": rng.randint(10, 100)}, {"delta_target": 0.0}),
         "options": ({"type": "volatility_signal", "iv_rv_ratio": round(rng.uniform(0.7, 1.5), 2)}, {"type": "greeks_or_time_exit", "max_days": rng.randint(1, 30)}, {"defined_risk_only": True}),
         "portfolio": ({"type": "strategy_rotation", "lookback": rng.randint(20, 120)}, {"type": "rebalance", "periods": rng.randint(1, 20)}, {"volatility_target": round(rng.uniform(0.08, 0.25), 3)}),
-        "scalping": ({"type": "micro_momentum", "ticks": rng.randint(5, 80)}, {"type": "ticks_or_timeout", "stop_ticks": rng.randint(2, 15), "target_ticks": rng.randint(2, 25)}, {"spread_max_ticks": rng.randint(1, 5)}),
+        "scalping": (
+            {"type": "micro_momentum", "ticks": rng.randint(5, 80)},
+            {
+                "type": "ticks_or_timeout",
+                "stop_ticks": rng.randint(2, 15),
+                "target_ticks": rng.randint(2, 25),
+                "max_ticks": rng.randint(20, 200),
+            },
+            {"spread_max_ticks": rng.randint(1, 5)},
+        ),
         "grid": ({"type": "dynamic_grid", "levels": rng.randint(3, 20), "spacing_bps": rng.randint(2, 50)}, {"type": "inventory_exit", "max_inventory": round(rng.uniform(0.1, 1.0), 2)}, {"volatility_adjusted": True}),
         "market_making": ({"type": "inventory_skew_mm", "half_spread_bps": rng.randint(1, 30)}, {"type": "inventory_flatten", "max_inventory": round(rng.uniform(0.1, 1.0), 2)}, {"queue_aware": True}),
         "order_book": ({"type": "order_book_imbalance", "levels": rng.randint(1, 20), "threshold": round(rng.uniform(0.05, 0.6), 3)}, {"type": "imbalance_reversal_or_ticks", "ticks": rng.randint(2, 20)}, {"queue_aware": True}),
