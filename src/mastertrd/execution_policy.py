@@ -181,6 +181,25 @@ def _cross_reverse(
     return ExecutionDecision(signal.direction, "cross_reverse", True, signal.legs)
 
 
+def _greeks_or_time_exit(
+    genome: StrategyGenome,
+    bars: Sequence[MarketBar],
+    position: PositionState,
+) -> ExecutionDecision:
+    max_days = float(genome.exit["max_days"])
+    if not isfinite(max_days) or max_days < 0.0:
+        raise ValueError("greeks_or_time_exit max_days must be finite and non-negative")
+    days_to_expiry = bars[-1].extras.get("days_to_expiry")
+    if days_to_expiry is None:
+        raise ValueError("greeks_or_time_exit requires days_to_expiry option state")
+    observed_days = float(days_to_expiry)
+    if not isfinite(observed_days) or observed_days < 0.0:
+        raise ValueError("days_to_expiry must be finite and non-negative")
+    if observed_days <= max_days:
+        return _flat("option_time_exit")
+    return _hold(position, "hold_greeks_or_time_exit")
+
+
 def evaluate_execution_policy(
     genome: StrategyGenome,
     bars: Sequence[MarketBar],
@@ -202,6 +221,8 @@ def evaluate_execution_policy(
         return _mean_or_atr_stop(genome, bars, position)
     if kind == "trailing_atr":
         return _trailing_atr(genome, bars, position)
+    if kind == "greeks_or_time_exit":
+        return _greeks_or_time_exit(genome, bars, position)
     raise ValueError(f"unsupported exit policy: {kind}")
 
 
