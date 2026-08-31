@@ -70,6 +70,15 @@ def test_testnet_smoke_is_environment_gated_and_never_live():
     assert "UV SYNC --LOCKED" in upper or "UV SYNC --FROZEN" in upper
 
 
+def test_testnet_smoke_invokes_real_runner_and_uploads_evidence():
+    text, _ = _load("testnet-smoke.yml")
+    lower = text.lower()
+
+    assert "python -m mastertrd.testnet_smoke" in lower
+    assert "actions/upload-artifact" in lower
+    assert "testnet_smoke.json" in lower
+
+
 def test_existing_stack_workflows_keep_read_only_permissions_and_locked_installs():
     for name in ("research-stack.yml", "execution-stack.yml"):
         text, workflow = _load(name)
