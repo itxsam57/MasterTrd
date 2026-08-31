@@ -1,0 +1,177 @@
+name: Apply Task9 Candidate Runner
+
+on:
+  push:
+    branches:
+      - v2/plan-closure-20260831
+    paths:
+      - .github/workflows/apply-task9-candidate-runner.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v2/plan-closure-20260831
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Apply guarded candidate runner binding
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/mastertrd/testnet_smoke.py')
+          text = path.read_text(encoding='utf-8')
+
+          old_import = 'from .runtime import RuntimeConfig\nfrom .venue import BinanceProduct\n'
+          new_import = 'from .runtime import RuntimeConfig\nfrom .testnet_candidate import TestnetCandidateManifest\nfrom .venue import BinanceProduct\n'
+          if old_import not in text:
+              raise SystemExit('guard failed: expected import anchor missing or already changed')
+          text = text.replace(old_import, new_import, 1)
+
+          old_run = '''def run(environ: dict[str, str] | None = None) -> dict[str, Any]:
+              env = dict(os.environ if environ is None else environ)
+              _require_testnet_runtime(env)
+              symbol = env.get("MASTERTRD_TESTNET_SYMBOL", "BTCUSDT").strip().upper()
+              rules = fetch_spot_testnet_rules(symbol)
+              code_hash = env.get("GITHUB_SHA", "").strip() or env.get("MASTERTRD_CODE_HASH", "").strip()
+              if not code_hash:
+                  raise RuntimeError("TESTNET smoke requires GITHUB_SHA or MASTERTRD_CODE_HASH")
+
+              evidence = run_testnet_smoke(
+                  _candidate(symbol),
+                  environ=env,
+                  dataset_hash=rules.dataset_hash,
+                  code_hash=code_hash,
+                  runtime_mode=RuntimeMode.TESTNET,
+                  venue_minimum_notional=float(rules.min_notional),
+                  submit_test_order=lambda minimum: _submit_nautilus_spot_testnet_order(
+                      environ=env,
+                      symbol=symbol,
+                      rules=rules,
+                      minimum_notional=minimum,
+                  ),
+              )
+              payload = asdict(evidence)
+              payload["symbol"] = symbol
+              payload["runtime_mode"] = RuntimeMode.TESTNET.value
+              payload["live_enabled"] = False
+              return payload
+          '''
+
+          new_run = '''def _load_candidate_manifest(environ: dict[str, str]) -> TestnetCandidateManifest | None:
+              manifest_path = (
+                  environ.get("MASTERTRD_TESTNET_CANDIDATE_MANIFEST", "").strip()
+                  or environ.get("MASTERTRD_TESTNET_CANDIDATE_PATH", "").strip()
+              )
+              if not manifest_path:
+                  return None
+              path = Path(manifest_path)
+              try:
+                  payload = json.loads(path.read_text(encoding="utf-8"))
+              except (OSError, json.JSONDecodeError) as exc:
+                  raise RuntimeError(f"TESTNET candidate manifest could not be loaded: {exc}") from exc
+              if not isinstance(payload, dict):
+                  raise RuntimeError("TESTNET candidate manifest must contain a JSON object")
+              try:
+                  return TestnetCandidateManifest.from_public_payload(payload)
+              except ValueError as exc:
+                  raise RuntimeError(f"invalid TESTNET candidate manifest: {exc}") from exc
+
+
+          def _manifest_spot_symbol(manifest: TestnetCandidateManifest) -> str:
+              if manifest.product is not BinanceProduct.SPOT:
+                  raise RuntimeError("TESTNET candidate product is not supported by the spot smoke adapter")
+              suffix = ".BINANCE"
+              if not manifest.probe_instrument.endswith(suffix):
+                  raise RuntimeError("TESTNET candidate probe_instrument must target BINANCE")
+              symbol = manifest.probe_instrument[: -len(suffix)].strip().upper()
+              if not _SYMBOL.fullmatch(symbol):
+                  raise RuntimeError("TESTNET candidate probe_instrument contains an invalid symbol")
+              return symbol
+
+
+          def run(environ: dict[str, str] | None = None) -> dict[str, Any]:
+              env = dict(os.environ if environ is None else environ)
+              _require_testnet_runtime(env)
+              code_hash = env.get("GITHUB_SHA", "").strip() or env.get("MASTERTRD_CODE_HASH", "").strip()
+              if not code_hash:
+                  raise RuntimeError("TESTNET smoke requires GITHUB_SHA or MASTERTRD_CODE_HASH")
+
+              manifest = _load_candidate_manifest(env)
+              if manifest is None:
+                  symbol = env.get("MASTERTRD_TESTNET_SYMBOL", "BTCUSDT").strip().upper()
+                  candidate = _candidate(symbol)
+                  dataset_hash = None
+              else:
+                  if manifest.code_hash != code_hash:
+                      raise RuntimeError("TESTNET candidate manifest code_hash does not match checkout code_hash")
+                  symbol = _manifest_spot_symbol(manifest)
+                  candidate = manifest.candidate
+                  dataset_hash = manifest.dataset_hash
+
+              rules = fetch_spot_testnet_rules(symbol)
+              if manifest is not None and rules.min_notional > manifest.order_notional_cap:
+                  raise RuntimeError("venue minimum notional exceeds candidate order_notional_cap")
+
+              evidence = run_testnet_smoke(
+                  candidate,
+                  environ=env,
+                  dataset_hash=dataset_hash or rules.dataset_hash,
+                  code_hash=manifest.code_hash if manifest is not None else code_hash,
+                  runtime_mode=RuntimeMode.TESTNET,
+                  venue_minimum_notional=float(rules.min_notional),
+                  submit_test_order=lambda minimum: _submit_nautilus_spot_testnet_order(
+                      environ=env,
+                      symbol=symbol,
+                      rules=rules,
+                      minimum_notional=minimum,
+                  ),
+              )
+              payload = asdict(evidence)
+              payload["symbol"] = symbol
+              payload["runtime_mode"] = RuntimeMode.TESTNET.value
+              payload["live_enabled"] = False
+              if manifest is not None:
+                  payload["product"] = manifest.product.value
+                  payload["probe_instrument"] = manifest.probe_instrument
+                  payload["order_notional_cap"] = str(manifest.order_notional_cap)
+              return payload
+          '''
+
+          # Dedent literal indentation introduced by the workflow Python block.
+          import textwrap
+          old_run = textwrap.dedent(old_run)
+          new_run = textwrap.dedent(new_run)
+          if old_run not in text:
+              raise SystemExit('guard failed: exact legacy run block missing or already changed')
+          text = text.replace(old_run, new_run, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+      - name: Install locked stack
+        run: |
+          python -m pip install --disable-pip-version-check 'uv==0.12.7'
+          uv lock --check
+          uv sync --locked --all-extras
+          uv pip check
+      - name: Verify focused GREEN
+        run: |
+          uv run pytest -q \
+            tests/integration/test_candidate_testnet_bundle.py \
+            tests/integration/test_candidate_testnet_runner.py \
+            tests/test_testnet_smoke_runner.py
+      - name: Commit real code and remove one-shot workflow
+        run: |
+          rm .github/workflows/apply-task9-candidate-runner.yml
+          git config user.name 'mastertrd-autopilot'
+          git config user.email 'mastertrd-autopilot@users.noreply.github.com'
+          git add src/mastertrd/testnet_smoke.py .github/workflows/apply-task9-candidate-runner.yml
+          git commit -m 'feat(testnet): bind smoke to champion manifest'
+          git push origin HEAD:v2/plan-closure-20260831
