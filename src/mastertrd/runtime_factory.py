@@ -202,6 +202,7 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
         venue_state=lambda: execution_state,
         dispatch=execution.dispatch,
         stream=stream,
+        finalizer=execution.close,
     )
 
 
