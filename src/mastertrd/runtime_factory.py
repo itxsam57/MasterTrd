@@ -7,8 +7,16 @@ import time
 
 from .binance_stream import BinancePublicMarketSource
 from .contracts import RuntimeMode
+from .credentials import load_binance_credentials
+from .execution import build_binance_execution_profile
 from .execution_runtime import ExecutionRuntime
 from .genome import StrategyGenome
+from .nautilus_binance import (
+    NautilusLiveExecutionRuntime,
+    build_nautilus_binance_configs,
+    build_nautilus_binance_node_config,
+    build_nautilus_binance_trading_node,
+)
 from .nautilus_paper import (
     NautilusStreamingPaperExecution,
     fixture_binance_spot_instrument,
@@ -21,6 +29,7 @@ from .risk_runtime import RiskRuntime
 from .risk_state import RiskStateProvider
 from .runtime import RuntimeConfig
 from .streaming import MarketStream, RawMarketPayload
+from .venue import BinanceProduct
 
 
 def _required(environ: Mapping[str, str], name: str) -> str:
@@ -199,21 +208,84 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
     )
 
 
+def _exchange_runtime(
+    runtime: RuntimeConfig,
+    environ: Mapping[str, str],
+) -> NautilusLiveExecutionRuntime:
+    """Build the real Nautilus Binance transport/reconciliation boundary.
+
+    Exchange modes own their market-data and execution clients inside one
+    ``TradingNode``. Candidate strategy promotion/identity binding remains a
+    separate gate; this factory never silently selects or invents a strategy,
+    but it does constrain the live node to the candidate's exact instrument
+    universe so startup reconciliation cannot drift onto unrelated products.
+    """
+    if runtime.mode not in (RuntimeMode.DEMO, RuntimeMode.TESTNET, RuntimeMode.LIVE):
+        raise RuntimeError(f"{runtime.mode} mode is not an exchange execution mode")
+    if runtime.mode is RuntimeMode.LIVE and not runtime.live_trading_enabled:
+        raise RuntimeError("LIVE mode requires live_trading_enabled=true")
+
+    candidate = _load_candidate(_required(environ, "MASTERTRD_CANDIDATE_MANIFEST"))
+    product_raw = _required(environ, "MASTERTRD_BINANCE_PRODUCT").upper()
+    try:
+        product = BinanceProduct(product_raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            "MASTERTRD_BINANCE_PRODUCT must be SPOT, USD_M, or COIN_M"
+        ) from exc
+
+    credentials = load_binance_credentials(runtime.mode, environ)
+    if credentials is None:
+        raise RuntimeError(f"{runtime.mode} credentials are unavailable")
+
+    from nautilus_trader.model.identifiers import InstrumentId
+
+    try:
+        instrument_ids = tuple(InstrumentId.from_str(value) for value in candidate.instruments)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("candidate contains an invalid Nautilus instrument identity") from exc
+    if len(set(instrument_ids)) != len(instrument_ids):
+        raise RuntimeError("candidate instrument identities must be unique")
+    if any(str(instrument_id.venue) != "BINANCE" for instrument_id in instrument_ids):
+        raise RuntimeError("exchange runtime currently supports BINANCE candidate instruments only")
+
+    profile = build_binance_execution_profile(
+        runtime=runtime,
+        product=product,
+        api_key=credentials.api_key,
+        api_secret=credentials.api_secret,
+    )
+    configs = build_nautilus_binance_configs(
+        profile=profile,
+        account_id=credentials.account_id,
+        instrument_ids=frozenset(instrument_ids),
+    )
+    node_config = build_nautilus_binance_node_config(
+        configs=configs,
+        trader_id=f"MASTERTRD-{runtime.mode.value}-001",
+        reconciliation_instrument_ids=instrument_ids,
+        reconciliation_lookback_mins=1440,
+    )
+    node = build_nautilus_binance_trading_node(config=node_config)
+    return NautilusLiveExecutionRuntime(node)
+
+
 def build_execution_runtime(
     runtime: RuntimeConfig,
     environ: Mapping[str, str],
-) -> ExecutionRuntime:
+) -> ExecutionRuntime | NautilusLiveExecutionRuntime:
     """Build the canonical repository-owned persistent execution runtime.
 
-    PAPER is process-backed today and uses Binance public market data plus
-    Nautilus sandbox execution, with an explicit recorded-feed override for
-    deterministic verification. DEMO/TESTNET/LIVE remain fail-closed until
-    their mode-specific Nautilus adapters are constructed; no mode can fall
-    back to another execution mode.
+    PAPER uses Binance public market data plus Nautilus sandbox execution.
+    DEMO/TESTNET/LIVE use one repository-owned Nautilus ``TradingNode`` with
+    mode-specific Binance credentials and mandatory startup reconciliation.
+    No execution mode may silently fall back to another mode.
     """
 
     if runtime.mode is RuntimeMode.PAPER:
         return _paper_runtime(runtime, environ)
+    if runtime.mode in (RuntimeMode.DEMO, RuntimeMode.TESTNET, RuntimeMode.LIVE):
+        return _exchange_runtime(runtime, environ)
     if runtime.mode in (RuntimeMode.RESEARCH, RuntimeMode.BACKTEST):
         raise RuntimeError(f"{runtime.mode} is not a persistent execution mode")
-    raise RuntimeError(f"canonical {runtime.mode} execution adapter is not configured")
+    raise RuntimeError(f"unsupported persistent execution mode: {runtime.mode}")
