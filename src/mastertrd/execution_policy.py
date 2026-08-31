@@ -118,174 +118,223 @@ def _atr_bracket(
             return _flat("atr_stop")
         if float(current.high) >= target_price:
             return _flat("atr_target")
-    else:
+        return _hold(position, "hold_atr_bracket")
+
+    if position.direction is SignalDirection.SHORT:
         stop_price = position.entry_price + stop_multiple * volatility
         target_price = position.entry_price - target_multiple * volatility
         if float(current.high) >= stop_price:
             return _flat("atr_stop")
         if float(current.low) <= target_price:
             return _flat("atr_target")
-    return _hold(position, "hold_atr_bracket")
+        return _hold(position, "hold_atr_bracket")
+
+    return ExecutionDecision(SignalDirection.FLAT, "flat", False)
 
 
-def evaluate_bar_execution_policy(
+def _trailing_atr(
+    genome: StrategyGenome,
+    bars: Sequence[MarketBar],
+    position: PositionState,
+) -> ExecutionDecision:
+    multiple = float(genome.exit["atr"])
+    period = int(genome.exit.get("atr_period", 14))
+    if multiple <= 0.0:
+        raise ValueError("trailing ATR multiple must be positive")
+    volatility = _previous_atr(bars, period)
+    if volatility is None:
+        return _hold(position, "trailing_atr_warmup")
+
+    current = bars[-1]
+    if position.direction is SignalDirection.LONG:
+        trailing_stop = position.peak_price - multiple * volatility
+        if float(current.low) <= trailing_stop:
+            return _flat("trailing_atr")
+        return _hold(position, "hold_trailing_atr")
+    if position.direction is SignalDirection.SHORT:
+        trailing_stop = position.trough_price + multiple * volatility
+        if float(current.high) >= trailing_stop:
+            return _flat("trailing_atr")
+        return _hold(position, "hold_trailing_atr")
+    return ExecutionDecision(SignalDirection.FLAT, "flat", False)
+
+
+def _mean_or_atr_stop(
+    genome: StrategyGenome,
+    bars: Sequence[MarketBar],
+    position: PositionState,
+) -> ExecutionDecision:
+    window = int(genome.entry.get("window", 0))
+    stop_multiple = float(genome.exit["stop_atr"])
+    period = int(genome.exit.get("atr_period", 14))
+    if window < 2 or stop_multiple <= 0.0:
+        raise ValueError("mean/ATR exit requires a valid window and positive stop_atr")
+    if len(bars) <= window:
+        return _hold(position, "mean_exit_warmup")
+
+    current = bars[-1]
+    history = [float(bar.close) for bar in bars[-window - 1 : -1]]
+    mean_price = fmean(history)
+    volatility = _previous_atr(bars, period)
+
+    if position.direction is SignalDirection.LONG:
+        if float(current.close) >= mean_price:
+            return _flat("mean_reversion_exit")
+        if volatility is not None and float(current.low) <= position.entry_price - stop_multiple * volatility:
+            return _flat("atr_stop")
+        return _hold(position, "hold_mean_or_atr_stop")
+    if position.direction is SignalDirection.SHORT:
+        if float(current.close) <= mean_price:
+            return _flat("mean_reversion_exit")
+        if volatility is not None and float(current.high) >= position.entry_price + stop_multiple * volatility:
+            return _flat("atr_stop")
+        return _hold(position, "hold_mean_or_atr_stop")
+    return ExecutionDecision(SignalDirection.FLAT, "flat", False)
+
+
+def _cross_reverse(
+    genome: StrategyGenome,
+    bars: Sequence[MarketBar],
+    position: PositionState,
+) -> ExecutionDecision:
+    signal = evaluate_bar_signal(genome, bars)
+    if signal.direction is SignalDirection.FLAT or signal.direction is position.direction:
+        return _hold(position, "hold_cross_reverse")
+    if signal.direction is SignalDirection.SHORT and not genome.allow_short:
+        return _flat("cross_reverse")
+    return ExecutionDecision(signal.direction, "cross_reverse", True, signal.legs)
+
+
+_OPTION_GREEK_LIMITS = (
+    ("max_abs_delta", "delta"),
+    ("max_abs_gamma", "gamma"),
+    ("max_abs_vega", "vega"),
+    ("max_abs_theta", "theta"),
+)
+
+
+def _greeks_or_time_exit(
+    genome: StrategyGenome,
+    bars: Sequence[MarketBar],
+    position: PositionState,
+) -> ExecutionDecision:
+    max_days = float(genome.exit["max_days"])
+    if not isfinite(max_days) or max_days < 0.0:
+        raise ValueError("greeks_or_time_exit max_days must be finite and non-negative")
+
+    greek_limits: list[tuple[str, float]] = []
+    for limit_name, state_name in _OPTION_GREEK_LIMITS:
+        if limit_name not in genome.exit:
+            continue
+        limit = float(genome.exit[limit_name])
+        if not isfinite(limit) or limit < 0.0:
+            raise ValueError(f"{limit_name} must be finite and non-negative")
+        greek_limits.append((state_name, limit))
+
+    current = bars[-1]
+    days_to_expiry = current.extras.get("days_to_expiry")
+    if days_to_expiry is None:
+        raise ValueError("greeks_or_time_exit requires days_to_expiry option state")
+    observed_days = float(days_to_expiry)
+    if not isfinite(observed_days) or observed_days < 0.0:
+        raise ValueError("days_to_expiry must be finite and non-negative")
+    if observed_days <= max_days:
+        return _flat("option_time_exit")
+
+    for state_name, limit in greek_limits:
+        raw_observed = current.extras.get(state_name)
+        if raw_observed is None:
+            raise ValueError(f"greeks_or_time_exit requires {state_name} option state")
+        observed = float(raw_observed)
+        if not isfinite(observed):
+            raise ValueError(f"{state_name} must be finite")
+        if abs(observed) > limit:
+            return _flat(f"option_{state_name}_exit")
+
+    return _hold(position, "hold_greeks_or_time_exit")
+
+
+def evaluate_execution_policy(
     genome: StrategyGenome,
     bars: Sequence[MarketBar],
     position: PositionState,
 ) -> ExecutionDecision:
     if not bars:
-        raise ValueError("bar execution policy requires market bars")
+        raise ValueError("market bars are required")
+
     if position.direction is SignalDirection.FLAT:
         signal = evaluate_bar_signal(genome, bars)
-        return ExecutionDecision(signal.direction, signal.reason)
+        return ExecutionDecision(signal.direction, signal.reason, False, signal.legs)
 
     kind = _exit_kind(genome)
     if kind == "cross_reverse":
-        signal = evaluate_bar_signal(genome, bars)
-        if signal.direction is SignalDirection.FLAT:
-            return _hold(position, "hold_cross_reverse")
-        if signal.direction is not position.direction:
-            return _flat("cross_reverse")
-        return _hold(position, "hold_cross_reverse")
-
+        return _cross_reverse(genome, bars, position)
     if kind == "atr_bracket":
         return _atr_bracket(genome, bars, position)
+    if kind == "mean_or_atr_stop":
+        return _mean_or_atr_stop(genome, bars, position)
+    if kind == "trailing_atr":
+        return _trailing_atr(genome, bars, position)
+    if kind == "greeks_or_time_exit":
+        return _greeks_or_time_exit(genome, bars, position)
+    raise ValueError(f"unsupported exit policy: {kind}")
 
-    if kind == "mean_cross":
-        window = int(genome.exit["window"])
-        if window <= 0 or len(bars) < window:
-            return _hold(position, "mean_exit_warmup")
-        current = float(bars[-1].close)
-        average = fmean(float(item.close) for item in bars[-window:])
-        if position.direction is SignalDirection.LONG and current >= average:
-            return _flat("mean_cross")
-        if position.direction is SignalDirection.SHORT and current <= average:
-            return _flat("mean_cross")
-        return _hold(position, "hold_mean_cross")
 
-    if kind == "trailing_stop":
-        trail_pct = float(genome.exit["trail_pct"])
-        if trail_pct <= 0.0 or trail_pct >= 1.0:
-            raise ValueError("trail_pct must be between zero and one")
-        current = bars[-1]
-        if position.direction is SignalDirection.LONG:
-            stop_price = position.peak_price * (1.0 - trail_pct)
-            if float(current.low) <= stop_price:
-                return _flat("trailing_stop")
-        else:
-            stop_price = position.trough_price * (1.0 + trail_pct)
-            if float(current.high) >= stop_price:
-                return _flat("trailing_stop")
-        return _hold(position, "hold_trailing_stop")
+def _positive_hft_limit(genome: StrategyGenome, key: str) -> float:
+    value = float(genome.exit[key])
+    if not isfinite(value) or value <= 0.0:
+        raise ValueError(f"{key} must be positive and finite")
+    return value
 
-    if kind == "time_or_trend":
-        max_bars = int(genome.exit["max_bars"])
-        if max_bars <= 0:
-            raise ValueError("max_bars must be positive")
-        if position.bars_held >= max_bars:
-            return _flat("time_exit")
-        signal = evaluate_bar_signal(genome, bars)
-        if signal.direction is not SignalDirection.FLAT and signal.direction is not position.direction:
-            return _flat("trend_reversal")
-        return _hold(position, "hold_time_or_trend")
 
-    if kind == "time_or_atr":
-        max_bars = int(genome.exit["max_bars"])
-        if max_bars <= 0:
-            raise ValueError("max_bars must be positive")
-        if position.bars_held >= max_bars:
-            return _flat("time_exit")
-        atr_decision = _atr_bracket(genome, bars, position)
-        if atr_decision.close_position:
-            return atr_decision
-        return _hold(position, "hold_time_or_atr")
-
-    if kind == "time_or_volatility":
-        max_bars = int(genome.exit["max_bars"])
-        max_volatility = float(genome.exit["max_realized_volatility"])
-        if max_bars <= 0 or max_volatility <= 0.0:
-            raise ValueError("time_or_volatility requires positive bounds")
-        if position.bars_held >= max_bars:
-            return _flat("time_exit")
-        current = bars[-1]
-        observed = current.extras.get("realized_volatility", current.extras.get("rv"))
-        if observed is not None and float(observed) >= max_volatility:
-            return _flat("volatility_exit")
-        return _hold(position, "hold_time_or_volatility")
-
-    if kind == "greeks_or_time":
-        max_bars = int(genome.exit["max_bars"])
-        max_abs_delta = float(genome.exit["max_abs_delta"])
-        max_abs_gamma = float(genome.exit["max_abs_gamma"])
-        max_abs_vega = float(genome.exit["max_abs_vega"])
-        if max_bars <= 0:
-            raise ValueError("greeks_or_time max_bars must be positive")
-        if any(value <= 0.0 for value in (max_abs_delta, max_abs_gamma, max_abs_vega)):
-            raise ValueError("greeks_or_time Greek bounds must be positive")
-        if position.bars_held >= max_bars:
-            return _flat("time_exit")
-        extras = bars[-1].extras
-        greek_values = {
-            "delta": abs(float(extras.get("delta", 0.0))),
-            "gamma": abs(float(extras.get("gamma", 0.0))),
-            "vega": abs(float(extras.get("vega", 0.0))),
-        }
-        if greek_values["delta"] >= max_abs_delta:
-            return _flat("delta_exit")
-        if greek_values["gamma"] >= max_abs_gamma:
-            return _flat("gamma_exit")
-        if greek_values["vega"] >= max_abs_vega:
-            return _flat("vega_exit")
-        return _hold(position, "hold_greeks_or_time")
-
-    raise ValueError(f"unsupported bar exit policy: {kind}")
+def _hft_pnl_ticks(state: HftPositionState) -> float:
+    direction = Decimal("1") if state.direction is SignalDirection.LONG else Decimal("-1")
+    price_delta = Decimal(str(state.current_price)) - Decimal(str(state.entry_price))
+    tick_size = Decimal(str(state.tick_size))
+    return float(direction * price_delta / tick_size)
 
 
 def evaluate_hft_execution_policy(
     genome: StrategyGenome,
     state: HftPositionState,
 ) -> ExecutionDecision:
+    if state.direction is SignalDirection.FLAT:
+        return ExecutionDecision(SignalDirection.FLAT, "hft_flat", False)
+
     kind = _exit_kind(genome)
     if kind == "ticks_or_timeout":
-        take_profit_ticks = int(genome.exit["take_profit_ticks"])
-        stop_loss_ticks = int(genome.exit["stop_loss_ticks"])
+        stop_ticks = _positive_hft_limit(genome, "stop_ticks")
+        target_ticks = _positive_hft_limit(genome, "target_ticks")
         max_ticks = int(genome.exit["max_ticks"])
-        if min(take_profit_ticks, stop_loss_ticks, max_ticks) <= 0:
-            raise ValueError("ticks_or_timeout bounds must be positive")
-        signed_ticks = (state.current_price - state.entry_price) / state.tick_size
-        if state.direction is SignalDirection.SHORT:
-            signed_ticks = -signed_ticks
-        if signed_ticks >= take_profit_ticks:
-            return _flat("hft_take_profit")
-        if signed_ticks <= -stop_loss_ticks:
-            return _flat("hft_stop_loss")
+        if max_ticks <= 0:
+            raise ValueError("max_ticks must be positive")
+        pnl_ticks = _hft_pnl_ticks(state)
+        if pnl_ticks <= -stop_ticks:
+            return _flat("hft_stop_ticks")
+        if pnl_ticks >= target_ticks:
+            return _flat("hft_target_ticks")
         if state.ticks_held >= max_ticks:
             return _flat("hft_timeout")
-        return ExecutionDecision(state.direction, "hold_hft_ticks", False)
+        return ExecutionDecision(state.direction, "hold_hft_ticks_or_timeout", False)
 
-    if kind == "inventory_or_timeout":
-        max_inventory = float(genome.exit["max_inventory"])
-        max_ticks = int(genome.exit["max_ticks"])
-        if not isfinite(max_inventory) or max_inventory <= 0.0 or max_ticks <= 0:
-            raise ValueError("inventory_or_timeout bounds must be positive")
+    if kind in {"inventory_exit", "inventory_flatten"}:
+        max_inventory = _positive_hft_limit(genome, "max_inventory")
         if abs(state.inventory) >= max_inventory:
-            return _flat("hft_inventory_limit")
-        if state.ticks_held >= max_ticks:
-            return _flat("hft_timeout")
+            return _flat("hft_inventory_exit")
         return ExecutionDecision(state.direction, "hold_hft_inventory", False)
 
-    if kind == "imbalance_flip":
-        threshold = float(genome.exit["threshold"])
-        max_ticks = int(genome.exit["max_ticks"])
-        if not isfinite(threshold) or threshold <= 0.0 or max_ticks <= 0:
-            raise ValueError("imbalance_flip bounds must be positive")
-        if state.direction is SignalDirection.LONG and state.imbalance <= -threshold:
-            return _flat("hft_imbalance_flip")
-        if state.direction is SignalDirection.SHORT and state.imbalance >= threshold:
-            return _flat("hft_imbalance_flip")
-        if state.ticks_held >= max_ticks:
-            return _flat("hft_timeout")
-        return ExecutionDecision(state.direction, "hold_hft_imbalance", False)
+    if kind == "imbalance_reversal_or_ticks":
+        ticks = _positive_hft_limit(genome, "ticks")
+        reversed_imbalance = (
+            state.direction is SignalDirection.LONG and state.imbalance < 0.0
+        ) or (
+            state.direction is SignalDirection.SHORT and state.imbalance > 0.0
+        )
+        if reversed_imbalance:
+            return _flat("hft_imbalance_reversal")
+        if _hft_pnl_ticks(state) <= -ticks:
+            return _flat("hft_adverse_ticks")
+        return ExecutionDecision(state.direction, "hold_hft_order_book", False)
 
     if kind == "spread_convergence":
         exit_bps = float(genome.exit["exit_bps"])
@@ -320,17 +369,6 @@ def _zero_legs(genome: StrategyGenome) -> dict[str, float]:
     return {instrument: 0.0 for instrument in genome.instruments}
 
 
-def _target_legs(genome: StrategyGenome, legs: Mapping[str, float]) -> dict[str, float]:
-    normalized = _float_legs(legs)
-    if not normalized:
-        return _zero_legs(genome)
-    if set(normalized) != set(genome.instruments):
-        raise ValueError("signal legs must match the strategy instrument set exactly")
-    if any(not isfinite(weight) for weight in normalized.values()):
-        raise ValueError("signal leg weights must be finite")
-    return normalized
-
-
 def _direction_from_legs(genome: StrategyGenome, legs: Mapping[str, float]) -> SignalDirection:
     first = float(legs.get(genome.instruments[0], 0.0))
     if first > 0.0:
@@ -345,7 +383,7 @@ def _hold_multileg(
     current_legs: Mapping[str, float],
     reason: str,
 ) -> ExecutionDecision:
-    legs = _target_legs(genome, current_legs)
+    legs = _float_legs(current_legs)
     return ExecutionDecision(_direction_from_legs(genome, legs), reason, False, legs)
 
 
@@ -382,19 +420,20 @@ def evaluate_multileg_execution_policy(
         raise ValueError("bars_held cannot be negative")
     if set(current_legs) != set(genome.instruments):
         raise ValueError("current_legs must match the strategy instrument set exactly")
-    open_legs = _target_legs(genome, current_legs)
+    open_legs = _float_legs(current_legs)
+    if any(not isfinite(weight) for weight in open_legs.values()):
+        raise ValueError("current_legs weights must be finite")
 
     aligned = _aligned_multileg_bars(genome, bars_by_instrument)
     is_open = any(abs(weight) > 0.0 for weight in open_legs.values())
 
     if not is_open:
         signal = evaluate_multileg_signal(genome, aligned)
-        legs = _target_legs(genome, signal.legs)
         return ExecutionDecision(
-            _direction_from_legs(genome, legs),
+            signal.direction,
             signal.reason,
             False,
-            legs,
+            _float_legs(signal.legs),
         )
 
     kind = _exit_kind(genome)
@@ -444,12 +483,11 @@ def evaluate_multileg_execution_policy(
             raise ValueError("rebalance requires drift_bps or periods")
 
         signal = evaluate_multileg_signal(genome, aligned)
-        legs = _target_legs(genome, signal.legs)
         return ExecutionDecision(
-            _direction_from_legs(genome, legs),
+            signal.direction,
             "rebalance",
             False,
-            legs,
+            _float_legs(signal.legs),
             True,
         )
 
