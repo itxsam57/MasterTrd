@@ -1,5 +1,6 @@
 import pytest
 
+from mastertrd.nautilus_risk_hook import build_research_nautilus_risk_runtime
 from mastertrd.nautilus_strategy import compile_genome_to_nautilus
 from mastertrd.research.generator import generate_candidate
 
@@ -14,14 +15,17 @@ def test_generated_trend_candidate_compiles_with_explicit_research_trade_size():
         instruments=(instrument.id.value,),
         seed=42,
     )
+    risk_runtime = build_research_nautilus_risk_runtime()
 
     strategy = compile_genome_to_nautilus(
         candidate,
         instrument=instrument,
         trade_size_override="0.01000",
+        risk_runtime=risk_runtime,
     )
 
     assert isinstance(strategy, EMACross)
+    assert strategy.risk_runtime is risk_runtime
     assert strategy.config.instrument_id == instrument.id
     assert strategy.config.fast_ema_period < strategy.config.slow_ema_period
     assert str(strategy.config.trade_size) == "0.01000"
