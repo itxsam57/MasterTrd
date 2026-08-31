@@ -1,5 +1,6 @@
 from mastertrd.genome import StrategyGenome
 from mastertrd.nautilus_backtest import run_binance_spot_strategy_history
+from mastertrd.nautilus_risk_hook import build_research_nautilus_risk_runtime
 from mastertrd.nautilus_strategy import compile_genome_to_nautilus
 
 
@@ -24,7 +25,12 @@ def test_compiled_genome_generates_real_simulated_orders_and_fills():
         exit={"kind": "cross_reverse"},
         allow_short=True,
     )
-    strategy = compile_genome_to_nautilus(genome, instrument=instrument)
+    risk_runtime = build_research_nautilus_risk_runtime()
+    strategy = compile_genome_to_nautilus(
+        genome,
+        instrument=instrument,
+        risk_runtime=risk_runtime,
+    )
     bar_type = strategy.config.bar_type
 
     prices = (
@@ -61,6 +67,7 @@ def test_compiled_genome_generates_real_simulated_orders_and_fills():
         starting_balances=("10 ETH", "100000 USDT"),
     )
 
+    assert strategy.risk_runtime is risk_runtime
     assert summary.engine == "nautilus_trader"
     assert summary.event_count == len(bars)
     assert summary.order_count >= 1
