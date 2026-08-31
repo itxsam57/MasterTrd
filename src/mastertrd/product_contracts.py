@@ -15,7 +15,7 @@ def _instrument_id_value(instrument: object) -> str:
 
 
 def _is_option_instrument(instrument: object) -> bool:
-    from nautilus_trader.model import CryptoOption, OptionContract
+    from nautilus_trader.model.instruments import CryptoOption, OptionContract
 
     return isinstance(instrument, (OptionContract, CryptoOption))
 
