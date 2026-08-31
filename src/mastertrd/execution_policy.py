@@ -181,6 +181,14 @@ def _cross_reverse(
     return ExecutionDecision(signal.direction, "cross_reverse", True, signal.legs)
 
 
+_OPTION_GREEK_LIMITS = (
+    ("max_abs_delta", "delta"),
+    ("max_abs_gamma", "gamma"),
+    ("max_abs_vega", "vega"),
+    ("max_abs_theta", "theta"),
+)
+
+
 def _greeks_or_time_exit(
     genome: StrategyGenome,
     bars: Sequence[MarketBar],
@@ -189,7 +197,18 @@ def _greeks_or_time_exit(
     max_days = float(genome.exit["max_days"])
     if not isfinite(max_days) or max_days < 0.0:
         raise ValueError("greeks_or_time_exit max_days must be finite and non-negative")
-    days_to_expiry = bars[-1].extras.get("days_to_expiry")
+
+    greek_limits: list[tuple[str, float]] = []
+    for limit_name, state_name in _OPTION_GREEK_LIMITS:
+        if limit_name not in genome.exit:
+            continue
+        limit = float(genome.exit[limit_name])
+        if not isfinite(limit) or limit < 0.0:
+            raise ValueError(f"{limit_name} must be finite and non-negative")
+        greek_limits.append((state_name, limit))
+
+    current = bars[-1]
+    days_to_expiry = current.extras.get("days_to_expiry")
     if days_to_expiry is None:
         raise ValueError("greeks_or_time_exit requires days_to_expiry option state")
     observed_days = float(days_to_expiry)
@@ -197,6 +216,17 @@ def _greeks_or_time_exit(
         raise ValueError("days_to_expiry must be finite and non-negative")
     if observed_days <= max_days:
         return _flat("option_time_exit")
+
+    for state_name, limit in greek_limits:
+        raw_observed = current.extras.get(state_name)
+        if raw_observed is None:
+            raise ValueError(f"greeks_or_time_exit requires {state_name} option state")
+        observed = float(raw_observed)
+        if not isfinite(observed):
+            raise ValueError(f"{state_name} must be finite")
+        if abs(observed) > limit:
+            return _flat(f"option_{state_name}_exit")
+
     return _hold(position, "hold_greeks_or_time_exit")
 
 
