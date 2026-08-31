@@ -8,6 +8,10 @@ on:
       - 'src/mastertrd/nautilus_backtest.py'
       - 'src/mastertrd/nautilus_strategy.py'
       - 'src/mastertrd/hft_strategy.py'
+      - 'src/mastertrd/nautilus_risk_hook.py'
+      - 'src/mastertrd/risk_runtime.py'
+      - 'src/mastertrd/risk_state.py'
+      - 'src/mastertrd/execution_runtime.py'
       - 'src/mastertrd/nautilus_evaluation.py'
       - 'src/mastertrd/nautilus_paper.py'
       - 'src/mastertrd/nautilus_data.py'
@@ -16,6 +20,11 @@ on:
       - 'src/mastertrd/paper_events.py'
       - 'src/mastertrd/research/generator.py'
       - 'tests/test_hft_strategy.py'
+      - 'tests/test_hft_ci_ownership.py'
+      - 'tests/test_risk_state.py'
+      - 'tests/test_risk_runtime.py'
+      - 'tests/integration/test_risk_execution_hook.py'
+      - 'tests/integration/test_runtime_recovery.py'
       - 'tests/integration/test_hft_nautilus_execution.py'
       - 'tests/integration/test_nautilus_binance_adapter.py'
       - 'tests/integration/test_nautilus_backtest.py'
@@ -40,6 +49,10 @@ on:
       - 'src/mastertrd/nautilus_backtest.py'
       - 'src/mastertrd/nautilus_strategy.py'
       - 'src/mastertrd/hft_strategy.py'
+      - 'src/mastertrd/nautilus_risk_hook.py'
+      - 'src/mastertrd/risk_runtime.py'
+      - 'src/mastertrd/risk_state.py'
+      - 'src/mastertrd/execution_runtime.py'
       - 'src/mastertrd/nautilus_evaluation.py'
       - 'src/mastertrd/nautilus_paper.py'
       - 'src/mastertrd/nautilus_data.py'
@@ -48,6 +61,11 @@ on:
       - 'src/mastertrd/paper_events.py'
       - 'src/mastertrd/research/generator.py'
       - 'tests/test_hft_strategy.py'
+      - 'tests/test_hft_ci_ownership.py'
+      - 'tests/test_risk_state.py'
+      - 'tests/test_risk_runtime.py'
+      - 'tests/integration/test_risk_execution_hook.py'
+      - 'tests/integration/test_runtime_recovery.py'
       - 'tests/integration/test_hft_nautilus_execution.py'
       - 'tests/integration/test_nautilus_binance_adapter.py'
       - 'tests/integration/test_nautilus_backtest.py'
@@ -90,6 +108,11 @@ jobs:
           uv run pytest -q \
             tests/test_execution_profile.py \
             tests/test_hft_strategy.py \
+            tests/test_hft_ci_ownership.py \
+            tests/test_risk_state.py \
+            tests/test_risk_runtime.py \
+            tests/integration/test_risk_execution_hook.py \
+            tests/integration/test_runtime_recovery.py \
             tests/integration/test_hft_nautilus_execution.py \
             tests/integration/test_nautilus_binance_adapter.py \
             tests/integration/test_nautilus_backtest.py \
