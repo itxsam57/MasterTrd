@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from collections.abc import Callable, ContextManager, Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 import json
 from math import isfinite, log, sqrt
 import time
-from typing import Any, Protocol
+from typing import Any, ContextManager, Protocol
 
 from .streaming import RawMarketPayload
 
