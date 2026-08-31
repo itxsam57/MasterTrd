@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import json
 
 import pytest
 
 from mastertrd.genome import StrategyGenome
+from mastertrd import testnet_smoke
 from mastertrd.testnet_candidate import TestnetCandidateManifest
+from mastertrd.testnet_smoke import SpotTestnetRules
 from mastertrd.venue import BinanceProduct
 
 
@@ -22,19 +25,20 @@ def candidate() -> StrategyGenome:
     )
 
 
-def test_candidate_manifest_round_trips_exact_public_identity():
-    genome = candidate()
-    manifest = TestnetCandidateManifest.from_candidate(
-        genome,
+def manifest(*, cap: Decimal = Decimal("10")) -> TestnetCandidateManifest:
+    return TestnetCandidateManifest.from_candidate(
+        candidate(),
         code_hash="code-champion-001",
         dataset_hash="dataset-champion-001",
         product=BinanceProduct.SPOT,
         probe_instrument="BTCUSDT.BINANCE",
-        order_notional_cap=Decimal("10"),
+        order_notional_cap=cap,
     )
 
-    payload = manifest.to_public_payload()
-    loaded = TestnetCandidateManifest.from_public_payload(payload)
+
+def test_candidate_manifest_round_trips_exact_public_identity():
+    genome = candidate()
+    loaded = TestnetCandidateManifest.from_public_payload(manifest().to_public_payload())
 
     assert loaded.candidate == genome
     assert loaded.strategy_id == genome.strategy_id
@@ -44,6 +48,7 @@ def test_candidate_manifest_round_trips_exact_public_identity():
     assert loaded.product is BinanceProduct.SPOT
     assert loaded.probe_instrument == "BTCUSDT.BINANCE"
     assert loaded.order_notional_cap == Decimal("10")
+    payload = loaded.to_public_payload()
     assert "api_key" not in str(payload).lower()
     assert "api_secret" not in str(payload).lower()
 
@@ -58,15 +63,7 @@ def test_candidate_manifest_round_trips_exact_public_identity():
     ],
 )
 def test_candidate_manifest_rejects_tampered_or_unsafe_identity(field, value, message):
-    manifest = TestnetCandidateManifest.from_candidate(
-        candidate(),
-        code_hash="code-champion-001",
-        dataset_hash="dataset-champion-001",
-        product=BinanceProduct.SPOT,
-        probe_instrument="BTCUSDT.BINANCE",
-        order_notional_cap=Decimal("10"),
-    )
-    payload = manifest.to_public_payload()
+    payload = manifest().to_public_payload()
     payload[field] = value
 
     with pytest.raises(ValueError, match=message):
@@ -83,3 +80,90 @@ def test_candidate_manifest_rejects_empty_provenance_identity():
             probe_instrument="BTCUSDT.BINANCE",
             order_notional_cap=Decimal("10"),
         )
+
+
+def _write_manifest(tmp_path, item: TestnetCandidateManifest) -> str:
+    path = tmp_path / "champion-testnet.json"
+    path.write_text(json.dumps(item.to_public_payload()), encoding="utf-8")
+    return str(path)
+
+
+def _testnet_env(path: str, *, code_hash: str = "code-champion-001") -> dict[str, str]:
+    return {
+        "MASTERTRD_MODE": "TESTNET",
+        "MASTERTRD_TESTNET_CANDIDATE_MANIFEST": path,
+        "GITHUB_SHA": code_hash,
+        "BINANCE_TESTNET_API_KEY": "test-key",
+        "BINANCE_TESTNET_API_SECRET": "test-secret",
+        "BINANCE_TESTNET_ACCOUNT_ID": "test-account",
+    }
+
+
+def test_testnet_smoke_uses_candidate_manifest_identity_and_order_cap(monkeypatch, tmp_path):
+    path = _write_manifest(tmp_path, manifest())
+    rules = SpotTestnetRules(
+        symbol="BTCUSDT",
+        min_notional=Decimal("5"),
+        step_size=Decimal("0.00001"),
+        min_quantity=Decimal("0.00001"),
+    )
+    submitted = []
+    monkeypatch.setattr(testnet_smoke, "fetch_spot_testnet_rules", lambda symbol: rules)
+    monkeypatch.setattr(
+        testnet_smoke,
+        "_submit_nautilus_spot_testnet_order",
+        lambda **kwargs: submitted.append(kwargs) or True,
+    )
+
+    payload = testnet_smoke.run(_testnet_env(path))
+
+    assert payload["strategy_id"] == candidate().strategy_id
+    assert payload["genome_hash"] == candidate().genome_hash
+    assert payload["code_hash"] == "code-champion-001"
+    assert payload["dataset_hash"] == "dataset-champion-001"
+    assert payload["product"] == "SPOT"
+    assert payload["probe_instrument"] == "BTCUSDT.BINANCE"
+    assert payload["order_notional_cap"] == "10"
+    assert len(submitted) == 1
+    assert Decimal(str(submitted[0]["minimum_notional"])) <= Decimal("10")
+
+
+def test_testnet_smoke_rejects_checkout_code_drift(monkeypatch, tmp_path):
+    path = _write_manifest(tmp_path, manifest())
+    monkeypatch.setattr(
+        testnet_smoke,
+        "fetch_spot_testnet_rules",
+        lambda symbol: SpotTestnetRules(
+            symbol=symbol,
+            min_notional=Decimal("5"),
+            step_size=Decimal("0.00001"),
+            min_quantity=Decimal("0.00001"),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="code_hash"):
+        testnet_smoke.run(_testnet_env(path, code_hash="different-checkout"))
+
+
+def test_testnet_smoke_refuses_venue_minimum_above_candidate_cap(monkeypatch, tmp_path):
+    path = _write_manifest(tmp_path, manifest(cap=Decimal("4")))
+    submitted = []
+    monkeypatch.setattr(
+        testnet_smoke,
+        "fetch_spot_testnet_rules",
+        lambda symbol: SpotTestnetRules(
+            symbol=symbol,
+            min_notional=Decimal("5"),
+            step_size=Decimal("0.00001"),
+            min_quantity=Decimal("0.00001"),
+        ),
+    )
+    monkeypatch.setattr(
+        testnet_smoke,
+        "_submit_nautilus_spot_testnet_order",
+        lambda **kwargs: submitted.append(kwargs) or True,
+    )
+
+    with pytest.raises(RuntimeError, match="order_notional_cap"):
+        testnet_smoke.run(_testnet_env(path))
+    assert submitted == []
