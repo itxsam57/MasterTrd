@@ -71,7 +71,7 @@ jobs:
         run: |
           mkdir -p artifacts
           python -m pip install --disable-pip-version-check pip-audit detect-secrets
-          detect-secrets scan --all-files --exclude-files '(^|/)\.git/' > artifacts/detect-secrets.json
+          detect-secrets scan --all-files --exclude-files '(^|/)(\.git|\.venv)(/|$)' > artifacts/detect-secrets.json
           if git grep -nEi '(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|aws_secret_access_key[[:space:]]*=[[:space:]]*["'"'][^"'"']{8,}["'"']|api[_-]?secret[[:space:]]*=[[:space:]]*["'"'][^"'"']{16,}["'"']|seed phrase[[:space:]]*=[[:space:]]*["'"'][^"'"']+["'"'])' -- 'src/**' ':!*.example' ':!MASTER_PLAN.md'; then
             echo 'Potential committed credential material detected'
             exit 1
