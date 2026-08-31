@@ -2,6 +2,7 @@ import pytest
 
 from mastertrd.nautilus_strategy import compile_genome_to_nautilus
 from mastertrd.research.generator import generate_candidate
+from mastertrd.risk_profiles import build_research_backtest_risk_runtime
 
 
 def test_generated_trend_candidate_compiles_with_explicit_research_trade_size():
@@ -19,6 +20,7 @@ def test_generated_trend_candidate_compiles_with_explicit_research_trade_size():
         candidate,
         instrument=instrument,
         trade_size_override="0.01000",
+        risk_runtime=build_research_backtest_risk_runtime(),
     )
 
     assert isinstance(strategy, EMACross)
@@ -38,7 +40,11 @@ def test_generated_candidate_trade_size_must_be_explicit_until_equity_sizing_exi
     )
 
     with pytest.raises(ValueError, match="trade_size"):
-        compile_genome_to_nautilus(candidate, instrument=instrument)
+        compile_genome_to_nautilus(
+            candidate,
+            instrument=instrument,
+            risk_runtime=build_research_backtest_risk_runtime(),
+        )
 
 
 def test_trade_size_override_cannot_hide_an_unsupported_exit_semantic():
@@ -58,4 +64,5 @@ def test_trade_size_override_cannot_hide_an_unsupported_exit_semantic():
             unsafe,
             instrument=instrument,
             trade_size_override="0.01000",
+            risk_runtime=build_research_backtest_risk_runtime(),
         )
