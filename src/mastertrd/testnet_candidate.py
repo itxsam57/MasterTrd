@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
 from .genome import StrategyGenome
+from .live_readiness import live_evidence_bundle_identity_ok
+from .validation import ValidationEvidence
 from .venue import BinanceProduct
 
 
@@ -107,3 +110,19 @@ class TestnetCandidateManifest:
             probe_instrument=str(payload.get("probe_instrument", "")),
             order_notional_cap=notional,
         )
+
+
+def candidate_testnet_bundle_identity_ok(
+    manifest: TestnetCandidateManifest,
+    records: Sequence[ValidationEvidence],
+) -> bool:
+    """Require promotion-grade live evidence to match the exact public candidate manifest."""
+    manifest_bound = tuple(
+        record
+        for record in records
+        if record.strategy_id == manifest.strategy_id
+        and record.genome_hash == manifest.genome_hash
+        and record.code_hash == manifest.code_hash
+        and record.dataset_hash == manifest.dataset_hash
+    )
+    return live_evidence_bundle_identity_ok(manifest.candidate, manifest_bound)
