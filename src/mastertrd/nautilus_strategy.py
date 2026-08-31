@@ -57,7 +57,7 @@ def _compile_ema_baseline(
     *,
     instrument,
     trade_size: Decimal,
-    risk_runtime: RiskRuntime | None,
+    risk_runtime: RiskRuntime,
 ):
     entry_kind = genome.entry.get("kind", genome.entry.get("type"))
     exit_kind = genome.exit.get("kind", genome.exit.get("type"))
@@ -113,6 +113,8 @@ def compile_genome_to_nautilus(
     spec = family_spec(genome.family)
     if spec.requires_hft_validation:
         raise SpecialistPathRequired(f"{genome.family} requires the specialist HFT path")
+    if risk_runtime is None:
+        raise ValueError("risk_runtime is required for Nautilus strategy compilation")
 
     effective_trade_size = _trade_size(
         genome,
