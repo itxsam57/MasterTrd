@@ -44,77 +44,22 @@ def _materialize_data(
     return materialized
 
 
-def _canonical_primary_inputs(
-    candidate: StrategyGenome,
-    instruments: Mapping[str, object] | None,
-    hidden_data_by_instrument: Mapping[str, Iterable[object]] | None,
-    legacy_inputs: dict[str, object],
-) -> tuple[Mapping[str, object], dict[str, tuple[object, ...]]]:
-    if instruments is not None or hidden_data_by_instrument is not None:
-        if instruments is None or hidden_data_by_instrument is None:
-            raise ValueError("instruments and hidden_data_by_instrument must be supplied together")
-        if legacy_inputs:
-            raise TypeError("legacy single-instrument inputs cannot be mixed with generalized inputs")
-        return instruments, _materialize_data(
-            candidate,
-            hidden_data_by_instrument,
-            label="hidden dataset",
-        )
-
-    unknown = sorted(set(legacy_inputs) - {"instrument", "hidden_data"})
-    if unknown:
-        raise TypeError(f"unexpected hidden-cycle inputs: {', '.join(unknown)}")
-    if set(legacy_inputs) != {"instrument", "hidden_data"}:
-        raise ValueError("instruments and hidden_data_by_instrument are required")
-    if len(candidate.instruments) != 1:
-        raise ValueError("legacy single-instrument inputs cannot evaluate a multi-leg candidate")
-
-    instrument = legacy_inputs["instrument"]
-    instrument_id = candidate.instruments[0]
-    observed_id = getattr(getattr(instrument, "id", None), "value", None)
-    if observed_id != instrument_id:
-        raise ValueError("legacy instrument does not match the candidate instrument")
-    events = tuple(legacy_inputs["hidden_data"])
-    if not events:
-        raise ValueError("hidden dataset is required")
-    return {instrument_id: instrument}, {instrument_id: events}
-
-
-def _canonical_dataset(
-    candidate: StrategyGenome,
-    payload: Mapping[str, Iterable[object]] | Iterable[object],
-    *,
-    label: str,
-) -> dict[str, tuple[object, ...]]:
-    if isinstance(payload, Mapping):
-        return _materialize_data(candidate, payload, label=label)
-    if len(candidate.instruments) != 1:
-        raise ValueError(f"{label} must provide every multi-leg instrument")
-    instrument_id = candidate.instruments[0]
-    events = tuple(payload)
-    if not events:
-        raise ValueError(f"{label} is empty for {instrument_id}")
-    return {instrument_id: events}
-
-
 def run_generated_hidden_cycle(
     *,
     candidate: StrategyGenome,
-    instruments: Mapping[str, object] | None = None,
-    hidden_data_by_instrument: Mapping[str, Iterable[object]] | None = None,
+    instruments: Mapping[str, object],
+    hidden_data_by_instrument: Mapping[str, Iterable[object]],
     manifest: HoldoutManifest,
     regime_datasets: Sequence[tuple[str, Mapping[str, Iterable[object]]]],
     code_hash: str,
     trade_size: str,
     policy: HiddenGatePolicy,
     starting_balances: Sequence[str] = ("100000 USDT",),
-    **legacy_inputs: object,
 ) -> GeneratedHiddenCycle:
-    resolved_instruments, hidden_events = _canonical_primary_inputs(
+    hidden_events = _materialize_data(
         candidate,
-        instruments,
         hidden_data_by_instrument,
-        legacy_inputs,
+        label="hidden dataset",
     )
     for instrument_id, events in hidden_events.items():
         if len(events) != manifest.hidden_count:
@@ -126,7 +71,7 @@ def run_generated_hidden_cycle(
 
     common = dict(
         genome=candidate,
-        instruments=resolved_instruments,
+        instruments=instruments,
         code_hash=code_hash,
         trade_size_override=trade_size,
         starting_balances=starting_balances,
@@ -139,7 +84,7 @@ def run_generated_hidden_cycle(
 
     regime_results: list[EvaluationResult] = []
     for regime_hash, raw_regime_data in regime_datasets:
-        regime_data = _canonical_dataset(
+        regime_data = _materialize_data(
             candidate,
             raw_regime_data,
             label=f"regime dataset {regime_hash}",
