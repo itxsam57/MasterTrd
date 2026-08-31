@@ -7,6 +7,7 @@ on:
       - 'src/mastertrd/nautilus_binance.py'
       - 'src/mastertrd/nautilus_backtest.py'
       - 'src/mastertrd/nautilus_strategy.py'
+      - 'src/mastertrd/hft_strategy.py'
       - 'src/mastertrd/nautilus_evaluation.py'
       - 'src/mastertrd/nautilus_paper.py'
       - 'src/mastertrd/nautilus_data.py'
@@ -14,6 +15,7 @@ on:
       - 'src/mastertrd/paper_cycle.py'
       - 'src/mastertrd/paper_events.py'
       - 'src/mastertrd/research/generator.py'
+      - 'tests/test_hft_strategy.py'
       - 'tests/integration/test_nautilus_binance_adapter.py'
       - 'tests/integration/test_nautilus_backtest.py'
       - 'tests/integration/test_nautilus_strategy_compiler.py'
@@ -36,6 +38,7 @@ on:
       - 'src/mastertrd/nautilus_binance.py'
       - 'src/mastertrd/nautilus_backtest.py'
       - 'src/mastertrd/nautilus_strategy.py'
+      - 'src/mastertrd/hft_strategy.py'
       - 'src/mastertrd/nautilus_evaluation.py'
       - 'src/mastertrd/nautilus_paper.py'
       - 'src/mastertrd/nautilus_data.py'
@@ -43,6 +46,7 @@ on:
       - 'src/mastertrd/paper_cycle.py'
       - 'src/mastertrd/paper_events.py'
       - 'src/mastertrd/research/generator.py'
+      - 'tests/test_hft_strategy.py'
       - 'tests/integration/test_nautilus_binance_adapter.py'
       - 'tests/integration/test_nautilus_backtest.py'
       - 'tests/integration/test_nautilus_strategy_compiler.py'
@@ -83,6 +87,7 @@ jobs:
         run: |
           uv run pytest -q \
             tests/test_execution_profile.py \
+            tests/test_hft_strategy.py \
             tests/integration/test_nautilus_binance_adapter.py \
             tests/integration/test_nautilus_backtest.py \
             tests/integration/test_nautilus_strategy_compiler.py \
