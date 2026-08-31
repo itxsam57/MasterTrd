@@ -13,6 +13,7 @@ jobs:
     environment: testnet
     env:
       MASTERTRD_MODE: TESTNET
+      MASTERTRD_TESTNET_EVIDENCE_PATH: artifacts/testnet_smoke.json
       BINANCE_TESTNET_API_KEY: ${{ secrets.BINANCE_TESTNET_API_KEY }}
       BINANCE_TESTNET_API_SECRET: ${{ secrets.BINANCE_TESTNET_API_SECRET }}
       BINANCE_TESTNET_ACCOUNT_ID: ${{ secrets.BINANCE_TESTNET_ACCOUNT_ID }}
@@ -65,10 +66,23 @@ jobs:
               raise SystemExit(f'unexpected readiness: {readiness}')
           print('TESTNET credential/runtime preflight: OK')
           PY
-      - name: Run fail-closed live-evidence safety suite
+      - name: Run fail-closed TESTNET safety suite
         run: |
           uv run pytest -q \
             tests/test_live_evidence.py \
             tests/test_live_readiness.py \
+            tests/test_testnet_smoke_runner.py \
+            tests/test_workflow_policy.py \
+            tests/integration/test_nautilus_binance_adapter.py \
             tests/integration/test_kill_switch_evidence.py \
             tests/integration/test_reconciliation_evidence.py
+      - name: Submit bounded Nautilus TESTNET smoke order
+        run: uv run python -m mastertrd.testnet_smoke
+      - name: Upload exact-SHA TESTNET evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mastertrd-testnet-smoke-${{ github.sha }}
+          path: artifacts/testnet_smoke.json
+          if-no-files-found: warn
+          retention-days: 14
