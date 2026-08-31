@@ -1,5 +1,6 @@
 from mastertrd.genome import StrategyGenome
 from mastertrd.nautilus_evaluation import run_binance_spot_evaluation
+from mastertrd.nautilus_risk_hook import build_research_nautilus_risk_runtime
 
 
 def _fixture():
@@ -20,7 +21,11 @@ def _fixture():
     )
     from mastertrd.nautilus_strategy import compile_genome_to_nautilus
 
-    bar_type = compile_genome_to_nautilus(genome, instrument=instrument).config.bar_type
+    bar_type = compile_genome_to_nautilus(
+        genome,
+        instrument=instrument,
+        risk_runtime=build_research_nautilus_risk_runtime(),
+    ).config.bar_type
     prices = [2100 - i * 2 for i in range(15)] + [2070 + i * 5 for i in range(20)] + [2165 - i * 6 for i in range(20)]
     base_ns = 1_700_000_000_000_000_000
     bars = []
