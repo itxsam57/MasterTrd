@@ -189,12 +189,16 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
     )
     account_id = f"paper:{session.journal.session_id}"
 
-    # PAPER has one authoritative Nautilus simulated venue/account. Both views
-    # intentionally snapshot that live engine state rather than a fabricated
-    # static seed; a later reconciliation slice compares this engine state with
-    # journal-derived expected state for independent recovery verification.
+    # During an active PAPER process Nautilus is both the authoritative engine
+    # and simulated venue. A resumed session additionally carries the last
+    # integrity-covered engine checkpoint from the prior process; that snapshot
+    # is used only for startup recovery reconciliation before any new dispatch.
     engine_state = lambda: execution.execution_state(account_id=account_id)
     venue_state = lambda: execution.execution_state(account_id=account_id)
+    recovery_state = session.journal.execution_state_checkpoint if resume else None
+    startup_expected_state = (
+        None if recovery_state is None else lambda state=recovery_state: state
+    )
     return ExecutionRuntime(
         journal=session.journal,
         session_store=session.store,
@@ -205,6 +209,7 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
         dispatch=execution.dispatch,
         stream=stream,
         finalizer=execution.close,
+        startup_expected_state=startup_expected_state,
     )
 
 
