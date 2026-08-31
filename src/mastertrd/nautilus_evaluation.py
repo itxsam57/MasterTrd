@@ -70,7 +70,7 @@ def _normalize_evaluation_inputs(
     genome: StrategyGenome,
     instruments: Mapping[str, object],
     data_by_instrument: Mapping[str, Iterable[object]],
-) -> tuple[dict[str, object], dict[str, tuple[object, ...]]]:
+) -> tuple[dict[str, object], dict[str, list[object]]]:
     validate_product_compatibility(genome, instruments)
     if not isinstance(data_by_instrument, Mapping):
         raise ValueError("data_by_instrument mapping is required")
@@ -86,20 +86,17 @@ def _normalize_evaluation_inputs(
         raise ValueError(f"unexpected historical data for: {', '.join(extras)}")
 
     ordered_instruments = {instrument_id: instruments[instrument_id] for instrument_id in expected}
-    normalized_data: dict[str, tuple[object, ...]] = {}
+    normalized_data: dict[str, list[object]] = {}
     for instrument_id in expected:
-        events = tuple(data_by_instrument[instrument_id])
+        events = list(data_by_instrument[instrument_id])
         if not events:
             raise ValueError(f"historical data is required for {instrument_id}")
-        mismatched = [
-            _event_instrument_id(event)
-            for event in events
-            if _event_instrument_id(event) != instrument_id
-        ]
-        if mismatched:
-            raise ValueError(
-                f"historical data instrument mismatch for {instrument_id}: {mismatched[0]}",
-            )
+        for event in events:
+            observed = _event_instrument_id(event)
+            if observed != instrument_id:
+                raise ValueError(
+                    f"historical data instrument mismatch for {instrument_id}: {observed}",
+                )
         normalized_data[instrument_id] = events
     return ordered_instruments, normalized_data
 
@@ -183,7 +180,7 @@ def run_nautilus_evaluation(
     )
     try:
         # Stable Nautilus low-level backtesting treats each add_data call as an
-        # independently ordered stream and merges all streams chronologically.
+        # independently ordered list stream and merges all streams chronologically.
         for instrument_id in genome.instruments:
             engine.add_data(normalized_data[instrument_id])
         engine.add_strategy(strategy)
@@ -239,7 +236,7 @@ def run_binance_spot_evaluation(
     return run_nautilus_evaluation(
         genome=genome,
         instruments={instrument_id: instrument},
-        data_by_instrument={instrument_id: tuple(data)},
+        data_by_instrument={instrument_id: data},
         dataset_hash=dataset_hash,
         code_hash=code_hash,
         fees=fees,
