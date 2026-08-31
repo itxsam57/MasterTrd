@@ -156,7 +156,12 @@ class GeneratedMultiLegStrategy(NautilusRiskMixin, Strategy):
 
         decision = self._evaluate_policy()
         self.last_decision = decision
-        target_legs = {key: float(value) for key, value in decision.legs.items()}
+        if decision.legs:
+            target_legs = {key: float(value) for key, value in decision.legs.items()}
+        else:
+            if decision.direction is not SignalDirection.FLAT:
+                raise ValueError("non-flat multi-leg decision requires an explicit target for every leg")
+            target_legs = {key: 0.0 for key in self._last_legs}
         was_open = any(abs(value) > 0.0 for value in self._last_legs.values())
         target_open = any(abs(value) > 0.0 for value in target_legs.values())
 
