@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import time
 
+from .binance_stream import BinancePublicMarketSource
 from .contracts import RuntimeMode
 from .execution_runtime import ExecutionRuntime
 from .genome import StrategyGenome
@@ -129,22 +130,29 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
         resume=resume,
     )
 
-    fixture_path = environ.get("MASTERTRD_PUBLIC_FEED_FIXTURE", "").strip()
-    if not fixture_path:
-        raise RuntimeError(
-            "repository Binance public stream is not configured; "
-            "MASTERTRD_PUBLIC_FEED_FIXTURE is required until live public streaming is enabled"
-        )
     if len(candidate.instruments) != 1:
-        raise RuntimeError("deterministic PAPER fixture currently requires one instrument")
-    stream = MarketStream(_fixture_source(fixture_path))
+        raise RuntimeError("PAPER runtime currently requires one instrument")
 
-    # Recorded fixtures replay historical exchange timestamps. Tie freshness to
-    # the append-only journal clock so Task 4's production provider remains
-    # fail-closed without falsely treating valid replay batches as wall-clock stale.
-    state_provider = RiskStateProvider(
-        clock=lambda: session.journal.latest_timestamp_ns / 1_000_000_000.0,
-    )
+    fixture_path = environ.get("MASTERTRD_PUBLIC_FEED_FIXTURE", "").strip()
+    if fixture_path:
+        stream = MarketStream(_fixture_source(fixture_path))
+        # Recorded fixtures replay historical exchange timestamps. Tie freshness
+        # to the append-only journal clock so valid replay batches are not judged
+        # against wall-clock time.
+        state_provider = RiskStateProvider(
+            clock=lambda: session.journal.latest_timestamp_ns / 1_000_000_000.0,
+        )
+    else:
+        stream = MarketStream(
+            BinancePublicMarketSource(
+                candidate.instruments,
+                timeframe=candidate.timeframe,
+            )
+        )
+        # Real public PAPER uses wall-clock freshness. Missing or stale market
+        # observations therefore remain fail-closed in RiskStateProvider.
+        state_provider = RiskStateProvider()
+
     for symbol in candidate.instruments:
         state_provider.update_account_state(
             symbol=symbol,
@@ -173,9 +181,9 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
     )
 
     # Task 5 recovery tests separately verify mismatch kill-before-dispatch. For
-    # this deterministic single-process sandbox the Nautilus engine is the venue
-    # simulator, so both reconciliation views intentionally share the same
-    # process snapshot until the live Binance adapter state source is enabled.
+    # the single-process sandbox the Nautilus engine is the venue simulator, so
+    # both reconciliation views share the same process snapshot until the
+    # engine-backed reconciliation adapter is enabled in the next Task 5 slice.
     execution_state = _initial_paper_state(session.journal.session_id)
     return ExecutionRuntime(
         journal=session.journal,
@@ -195,10 +203,11 @@ def build_execution_runtime(
 ) -> ExecutionRuntime:
     """Build the canonical repository-owned persistent execution runtime.
 
-    PAPER is process-backed today and uses a Nautilus sandbox session plus
-    repository-owned market-stream/runtime state. DEMO/TESTNET/LIVE remain
-    fail-closed until their mode-specific Nautilus adapters are constructed in
-    the next Task 5 slices; no mode can fall back to another execution mode.
+    PAPER is process-backed today and uses Binance public market data plus
+    Nautilus sandbox execution, with an explicit recorded-feed override for
+    deterministic verification. DEMO/TESTNET/LIVE remain fail-closed until
+    their mode-specific Nautilus adapters are constructed; no mode can fall
+    back to another execution mode.
     """
 
     if runtime.mode is RuntimeMode.PAPER:
