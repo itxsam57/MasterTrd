@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Collection, Mapping, Sequence
+from itertools import combinations
 import random
 from hashlib import sha256
-from typing import Sequence
 
 from mastertrd.genome import StrategyGenome
 from mastertrd.strategy_families import DataLevel, family_spec
@@ -27,6 +28,138 @@ _TIMEFRAMES = {
     "order_book": ("tick",),
     "cross_venue_arb": ("tick",),
 }
+
+
+def _instrument_id(instrument: object) -> str:
+    instrument_id = getattr(instrument, "id", None)
+    value = getattr(instrument_id, "value", None)
+    if not isinstance(value, str) or not value:
+        raise ValueError("instrument metadata requires a concrete instrument id")
+    return value
+
+
+def _venue(instrument: object) -> str:
+    instrument_id = getattr(instrument, "id", None)
+    venue = getattr(instrument_id, "venue", None)
+    value = getattr(venue, "value", None)
+    if not isinstance(value, str) or not value:
+        raise ValueError("instrument metadata requires a concrete venue")
+    return value
+
+
+def _raw_symbol(instrument: object) -> str:
+    raw_symbol = getattr(instrument, "raw_symbol", None)
+    value = getattr(raw_symbol, "value", None)
+    if isinstance(value, str) and value:
+        return value
+    return _instrument_id(instrument).split(".", 1)[0]
+
+
+def _is_option(instrument: object) -> bool:
+    from nautilus_trader.model.instruments import CryptoOption, OptionContract
+
+    return isinstance(instrument, (OptionContract, CryptoOption))
+
+
+def _is_spot(instrument: object) -> bool:
+    from nautilus_trader.model.instruments import CurrencyPair
+
+    return isinstance(instrument, CurrencyPair)
+
+
+def _normalized_levels(values: Collection[object]) -> frozenset[str]:
+    return frozenset(str(getattr(value, "value", value)).upper() for value in values)
+
+
+def family_instrument_sets(
+    family: str,
+    instruments: Mapping[str, object],
+    *,
+    available_data_levels: Mapping[str, Collection[object]],
+) -> tuple[tuple[str, ...], ...]:
+    """Return deterministic product/data-compatible instrument universes for a family.
+
+    This is a construction boundary only. It never substitutes a cheaper data level
+    for the family minimum and it never treats an option as a non-option product.
+    Cross-venue arbitrage requires two different venues; basis/neutral pairs require
+    a same-venue spot/derivative pair for the same raw market symbol.
+    """
+
+    spec = family_spec(family)
+    ordered_ids = tuple(instruments)
+    for key in ordered_ids:
+        actual = _instrument_id(instruments[key])
+        if key != actual:
+            raise ValueError(f"instrument metadata key mismatch: expected {key}, got {actual}")
+
+    required_level = spec.min_data_level.value
+    eligible = tuple(
+        instrument_id
+        for instrument_id in ordered_ids
+        if required_level
+        in _normalized_levels(available_data_levels.get(instrument_id, ()))
+    )
+
+    if spec.requires_option_product:
+        return tuple(
+            (instrument_id,)
+            for instrument_id in eligible
+            if _is_option(instruments[instrument_id])
+        )
+
+    non_options = tuple(
+        instrument_id
+        for instrument_id in eligible
+        if not _is_option(instruments[instrument_id])
+    )
+
+    if spec.max_instruments == 1:
+        return tuple((instrument_id,) for instrument_id in non_options)
+
+    if family == "cross_venue_arb":
+        return tuple(
+            (left, right)
+            for left, right in combinations(non_options, 2)
+            if _venue(instruments[left]) != _venue(instruments[right])
+        )
+
+    if family in {"funding_basis", "delta_neutral"}:
+        pairs: list[tuple[str, str]] = []
+        for left, right in combinations(non_options, 2):
+            left_instrument = instruments[left]
+            right_instrument = instruments[right]
+            if _venue(left_instrument) != _venue(right_instrument):
+                continue
+            if _raw_symbol(left_instrument) != _raw_symbol(right_instrument):
+                continue
+            if _is_spot(left_instrument) == _is_spot(right_instrument):
+                continue
+            pairs.append((left, right) if _is_spot(left_instrument) else (right, left))
+        return tuple(pairs)
+
+    if family == "portfolio":
+        by_venue: dict[str, list[str]] = {}
+        for instrument_id in non_options:
+            by_venue.setdefault(_venue(instruments[instrument_id]), []).append(instrument_id)
+        return tuple(
+            tuple(group)
+            for group in by_venue.values()
+            if len(group) >= spec.min_instruments
+        )
+
+    if spec.min_instruments == 2 and spec.max_instruments == 2:
+        return tuple(
+            (left, right)
+            for left, right in combinations(non_options, 2)
+            if _venue(instruments[left]) == _venue(instruments[right])
+        )
+
+    return tuple(
+        items
+        for size in range(spec.min_instruments, len(non_options) + 1)
+        for items in combinations(non_options, size)
+        if spec.max_instruments is None or size <= spec.max_instruments
+    )
 
 
 def _rules(family: str, rng: random.Random) -> tuple[dict, dict, dict]:
