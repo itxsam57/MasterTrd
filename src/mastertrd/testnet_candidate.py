@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
+from .contracts import RuntimeMode
 from .genome import StrategyGenome
+from .live_evidence import (
+    LiveEvidenceStatus,
+    run_kill_switch_probe,
+    run_reconciliation_probe,
+    run_risk_review,
+)
 from .live_readiness import live_evidence_bundle_identity_ok
+from .reconciliation import ExecutionState
+from .risk import RiskLimits, RiskSnapshot
+from .risk_runtime import OrderIntent, RiskRuntime
 from .validation import ValidationEvidence
 from .venue import BinanceProduct
 
@@ -126,3 +136,147 @@ def candidate_testnet_bundle_identity_ok(
         and record.dataset_hash == manifest.dataset_hash
     )
     return live_evidence_bundle_identity_ok(manifest.candidate, manifest_bound)
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateTestnetEvidenceBundle:
+    manifest: TestnetCandidateManifest
+    records: tuple[ValidationEvidence, ...]
+    eligible: bool
+    blocker: str | None = None
+
+    def to_public_payload(self) -> dict[str, Any]:
+        return {
+            "manifest": self.manifest.to_public_payload(),
+            "eligible": self.eligible,
+            "blocker": self.blocker,
+            "records": [asdict(record) for record in self.records],
+        }
+
+
+def _bundle_risk_limits(manifest: TestnetCandidateManifest) -> RiskLimits:
+    cap = float(manifest.order_notional_cap)
+    return RiskLimits(
+        max_order_notional=cap,
+        max_symbol_exposure=cap * 2.0,
+        max_portfolio_exposure=cap * 5.0,
+        max_daily_loss=cap * 2.0,
+        max_drawdown=0.20,
+        max_orders_per_minute=10,
+    )
+
+
+def _validate_smoke_identity(
+    manifest: TestnetCandidateManifest,
+    smoke_evidence: ValidationEvidence,
+) -> None:
+    if smoke_evidence.evidence_type != "testnet_smoke":
+        raise ValueError("smoke evidence must have evidence_type testnet_smoke")
+    expected = (
+        manifest.strategy_id,
+        manifest.genome_hash,
+        manifest.code_hash,
+        manifest.dataset_hash,
+    )
+    actual = (
+        smoke_evidence.strategy_id,
+        smoke_evidence.genome_hash,
+        smoke_evidence.code_hash,
+        smoke_evidence.dataset_hash,
+    )
+    if actual != expected:
+        raise ValueError("smoke evidence identity does not match candidate manifest")
+
+
+def build_candidate_testnet_evidence_bundle(
+    manifest: TestnetCandidateManifest,
+    *,
+    smoke_evidence: ValidationEvidence,
+    runtime_mode: RuntimeMode,
+) -> CandidateTestnetEvidenceBundle:
+    """Build one promotion bundle without manufacturing the external smoke result.
+
+    The risk, reconciliation and kill-switch records are deterministic safety probes
+    executed against the exact candidate/provenance identity. ``smoke_evidence`` is
+    supplied by the real TESTNET runner and remains the external acceptance gate.
+    """
+    _validate_smoke_identity(manifest, smoke_evidence)
+    limits = _bundle_risk_limits(manifest)
+    candidate = manifest.candidate
+    common = {
+        "dataset_hash": manifest.dataset_hash,
+        "code_hash": manifest.code_hash,
+        "runtime_mode": runtime_mode,
+    }
+
+    risk_review = run_risk_review(candidate, limits=limits, **common)
+
+    reconciliation_state = ExecutionState(
+        account_id=f"testnet-probe:{manifest.genome_hash[:12]}",
+        positions={},
+        open_order_ids=frozenset(),
+        balances={"USDT": "100000"},
+    )
+    reconciliation = run_reconciliation_probe(
+        candidate,
+        engine_state=reconciliation_state,
+        venue_state=reconciliation_state,
+        fills_match=True,
+        no_unexpected_orders=True,
+        **common,
+    )
+
+    risk_runtime = RiskRuntime(limits)
+    intent = OrderIntent(
+        strategy_id=manifest.strategy_id,
+        symbol=manifest.probe_instrument,
+        venue="BINANCE",
+        side="BUY",
+        quantity=1.0,
+        order_type="MARKET",
+    )
+    cap = float(manifest.order_notional_cap)
+    snapshot = RiskSnapshot(
+        order_notional=cap / 2.0,
+        symbol_exposure=0.0,
+        portfolio_exposure=0.0,
+        daily_pnl=0.0,
+        drawdown=0.0,
+        orders_last_minute=0,
+        data_stale=False,
+        reconciliation_ok=True,
+        emergency_stop=False,
+        venue_healthy=True,
+    )
+    local_submissions: list[OrderIntent] = []
+    kill_switch = run_kill_switch_probe(
+        candidate,
+        risk_runtime=risk_runtime,
+        intent=intent,
+        snapshot=snapshot,
+        submit_order=local_submissions.append,
+        **common,
+    )
+
+    records: tuple[ValidationEvidence, ...] = (
+        risk_review,
+        reconciliation,
+        kill_switch,
+        smoke_evidence,
+    )
+    eligible = candidate_testnet_bundle_identity_ok(manifest, records)
+    smoke_status = getattr(smoke_evidence, "status", None)
+    blocker = None
+    if not eligible:
+        blocker = (
+            "BLOCKED_OWNER_INPUT"
+            if smoke_status is LiveEvidenceStatus.CREDENTIALS_UNAVAILABLE
+            else "TESTNET_EVIDENCE_INCOMPLETE"
+        )
+
+    return CandidateTestnetEvidenceBundle(
+        manifest=manifest,
+        records=records,
+        eligible=eligible,
+        blocker=blocker,
+    )
