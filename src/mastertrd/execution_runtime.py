@@ -31,6 +31,7 @@ class ExecutionRuntime:
         venue_state: Callable[[], ExecutionState],
         dispatch: Callable[[MarketStreamEvent], object],
         stream: MarketStream | None = None,
+        finalizer: Callable[[], object] | None = None,
     ) -> None:
         self._journal = journal
         self._session_store = session_store
@@ -40,6 +41,8 @@ class ExecutionRuntime:
         self._venue_state = venue_state
         self._dispatch = dispatch
         self._stream = stream
+        self._finalizer = finalizer
+        self._closed = False
         self._startup_reconciled = False
 
     @staticmethod
@@ -186,3 +189,11 @@ class ExecutionRuntime:
             reconciliation_errors=reconciliation_errors,
             system_killed=system_killed,
         )
+
+    def close(self) -> None:
+        """Finalize owned execution resources exactly once."""
+        if self._closed:
+            return
+        if self._finalizer is not None:
+            self._finalizer()
+        self._closed = True
