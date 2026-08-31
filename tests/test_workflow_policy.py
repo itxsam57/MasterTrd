@@ -118,6 +118,30 @@ def test_testnet_smoke_dispatch_requires_public_candidate_manifest():
     assert "artifacts/testnet_candidate.json" in lower
 
 
+def test_testnet_smoke_missing_credentials_reaches_owner_blocker_and_uploads_public_identity():
+    text, workflow = _load("testnet-smoke.yml")
+    job = next(iter(_jobs(workflow).values()))
+    steps = job.get("steps", [])
+    names = {str(step.get("name", "")).lower() for step in steps}
+    lower = text.lower()
+
+    assert "require testnet credentials" not in names
+    assert "missing required testnet credential" not in lower
+    assert "python -m mastertrd.testnet_smoke" in lower
+
+    upload_steps = [
+        step
+        for step in steps
+        if str(step.get("uses", "")).lower().startswith("actions/upload-artifact@")
+    ]
+    assert len(upload_steps) == 1
+    upload = upload_steps[0]
+    assert str(upload.get("if", "")).lower() == "always()"
+    upload_path = str(upload.get("with", {}).get("path", ""))
+    assert "artifacts/testnet_candidate.json" in upload_path
+    assert "artifacts/testnet_smoke.json" in upload_path
+
+
 def test_existing_stack_workflows_keep_read_only_permissions_and_locked_installs():
     for name in ("research-stack.yml", "execution-stack.yml"):
         text, workflow = _load(name)
