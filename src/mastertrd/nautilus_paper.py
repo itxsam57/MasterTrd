@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from decimal import Decimal
 import hashlib
 from importlib.metadata import version
 from pathlib import Path
@@ -236,10 +235,6 @@ class NautilusStreamingPaperExecution:
 
         base_code = str(instrument.base_currency)
         quote_code = str(instrument.quote_currency)
-        self._starting_balances = {
-            base_code: Decimal("10"),
-            quote_code: Decimal("100000"),
-        }
         self._engine = _build_binance_spot_engine(
             instrument=instrument,
             starting_balances=(f"10 {base_code}", f"100000 {quote_code}"),
@@ -247,7 +242,6 @@ class NautilusStreamingPaperExecution:
         self._instrument = instrument
         self._sink = NautilusPaperEventSink(journal)
         self._ended = False
-        self._started = False
 
         compiled = compile_genome_to_nautilus(
             candidate,
@@ -270,6 +264,13 @@ class NautilusStreamingPaperExecution:
             risk_runtime=risk_runtime,
         )
         self._engine.add_strategy(self._strategy)
+
+        # Nautilus v1.231 initializes simulated accounts and starts the kernel
+        # on the first streaming run. A zero-data streaming run processes no
+        # market event, but it materializes the authoritative sandbox account so
+        # startup reconciliation can inspect real engine state before accepting
+        # the first bar/tick that could create risk.
+        self._engine.run(streaming=True)
 
     @property
     def closed_positions(self) -> int:
@@ -294,14 +295,11 @@ class NautilusStreamingPaperExecution:
 
         account = self._engine.cache.account_for_venue(Venue("BINANCE"))
         if account is None:
-            if self._started:
-                raise RuntimeError("Nautilus PAPER account state is unavailable after engine start")
-            balances = dict(self._starting_balances)
-        else:
-            balances = {
-                str(currency): money.as_decimal()
-                for currency, money in account.balances_total().items()
-            }
+            raise RuntimeError("Nautilus PAPER account state is unavailable")
+        balances = {
+            str(currency): money.as_decimal()
+            for currency, money in account.balances_total().items()
+        }
         return ExecutionState(
             account_id=account_id,
             positions=positions,
@@ -358,7 +356,6 @@ class NautilusStreamingPaperExecution:
         data = self._bar(event) if event.kind == "bar" else self._quote(event)
         self._engine.add_data([data])
         self._engine.run(streaming=True)
-        self._started = True
         self._engine.clear_data()
 
     def close(self) -> None:
