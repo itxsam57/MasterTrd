@@ -9,7 +9,8 @@ from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.trading.strategy import Strategy
 
 from .contracts import MarketBar
-from .execution_signals import SignalDecision, SignalDirection, evaluate_multileg_signal
+from .execution_policy import ExecutionDecision, evaluate_multileg_execution_policy
+from .execution_signals import SignalDirection
 from .genome import StrategyGenome
 from .nautilus_risk_hook import NautilusRiskMixin
 from .risk_runtime import RiskRuntime
@@ -35,8 +36,9 @@ class GeneratedMultiLegStrategy(NautilusRiskMixin, Strategy):
         self.genome = genome
         self._bars: dict[str, list[MarketBar]] = {item.value: [] for item in config.instrument_ids}
         self._instruments: dict[str, object] = {}
-        self._last_legs: dict[str, int] = {}
-        self.last_decision = SignalDecision(SignalDirection.FLAT, "not_started")
+        self._last_legs: dict[str, float] = {item.value: 0.0 for item in config.instrument_ids}
+        self._bars_held = 0
+        self.last_decision = ExecutionDecision(SignalDirection.FLAT, "not_started")
         self._configure_risk_runtime(genome.strategy_id, risk_runtime)
 
     def on_start(self) -> None:
@@ -63,6 +65,14 @@ class GeneratedMultiLegStrategy(NautilusRiskMixin, Strategy):
             volume=bar.volume.as_double(),
         )
 
+    def _evaluate_policy(self) -> ExecutionDecision:
+        return evaluate_multileg_execution_policy(
+            self.genome,
+            self._bars,
+            current_legs=self._last_legs,
+            bars_held=self._bars_held,
+        )
+
     def on_bar(self, bar: Bar) -> None:
         instrument_id = bar.bar_type.instrument_id.value
         if instrument_id not in self._bars:
@@ -70,12 +80,23 @@ class GeneratedMultiLegStrategy(NautilusRiskMixin, Strategy):
         self._bars[instrument_id].append(self._to_market_bar(bar))
         if any(not values for values in self._bars.values()):
             return
-        decision = evaluate_multileg_signal(self.genome, self._bars)
+
+        decision = self._evaluate_policy()
         self.last_decision = decision
-        if dict(decision.legs) == self._last_legs:
-            return
-        self._apply_legs(decision)
-        self._last_legs = dict(decision.legs)
+        target_legs = {key: float(value) for key, value in decision.legs.items()}
+        was_open = any(abs(value) > 0.0 for value in self._last_legs.values())
+        target_open = any(abs(value) > 0.0 for value in target_legs.values())
+
+        if target_legs != self._last_legs or decision.rebalance_position:
+            self._apply_legs(decision)
+        self._last_legs = target_legs
+
+        if not target_open:
+            self._bars_held = 0
+        elif was_open:
+            self._bars_held += 1
+        else:
+            self._bars_held = 1
 
     def _risk_reference_price(self, instrument_id) -> float:
         values = self._bars.get(instrument_id.value, ())
@@ -83,7 +104,7 @@ class GeneratedMultiLegStrategy(NautilusRiskMixin, Strategy):
             return 0.0
         return float(values[-1].close)
 
-    def _apply_legs(self, decision: SignalDecision) -> None:
+    def _apply_legs(self, decision: ExecutionDecision) -> None:
         if not decision.legs:
             return
         ids = {item.value: item for item in self.config.instrument_ids}
