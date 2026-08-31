@@ -37,7 +37,7 @@ jobs:
                   raise SystemExit('evidence helper anchor ambiguous; refusing write')
               text = text.replace(helper_anchor, helper + helper_anchor, 1)
 
-          reconstruction = '''            specialist_evidence = tuple(\n                _validation_evidence_from_payload(record)\n                for record in item.get("evidence", ())\n            )\n'''
+          reconstruction = '''                specialist_evidence = tuple(\n                    _validation_evidence_from_payload(record)\n                    for record in item.get("evidence", ())\n                )\n'''
           reconstruction_anchor = '            try:\n                bars = _instrument_bars(dataset, key)\n'
           if 'specialist_evidence = tuple(' not in text:
               if text.count(reconstruction_anchor) != 1:
