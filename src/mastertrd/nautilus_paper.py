@@ -142,6 +142,70 @@ def fixture_binance_spot_instrument(instrument_id: str):
     return provider()
 
 
+def _build_public_binance_spot_provider():
+    """Build Nautilus's credential-free LIVE spot instrument provider.
+
+    Binance exchange-info is public. Explicit ``None`` credentials ensure this
+    path cannot accidentally authenticate or depend on account secrets while it
+    loads the venue's current price/size precision and trading filters.
+    """
+
+    from nautilus_trader.adapters.binance.common.enums import BinanceAccountType
+    from nautilus_trader.adapters.binance.common.enums import BinanceEnvironment
+    from nautilus_trader.adapters.binance.factories import get_cached_binance_http_client
+    from nautilus_trader.adapters.binance.spot.providers import BinanceSpotInstrumentProvider
+    from nautilus_trader.common.component import LiveClock
+
+    clock = LiveClock()
+    account_type = BinanceAccountType.SPOT
+    environment = BinanceEnvironment.LIVE
+    client = get_cached_binance_http_client(
+        clock=clock,
+        account_type=account_type,
+        api_key=None,
+        api_secret=None,
+        environment=environment,
+    )
+    return BinanceSpotInstrumentProvider(
+        client=client,
+        clock=clock,
+        account_type=account_type,
+        environment=environment,
+    )
+
+
+def load_public_binance_spot_instrument(instrument_id: str):
+    """Load exact current Binance spot metadata without credentials.
+
+    The loader intentionally fails closed if the candidate is not a Binance
+    instrument, the public exchange-info request fails, or Nautilus cannot
+    resolve the requested identity after loading it. There is no fallback to
+    deterministic test-kit metadata on the public PAPER path.
+    """
+
+    from nautilus_trader.model.identifiers import InstrumentId
+
+    try:
+        requested = InstrumentId.from_str(instrument_id)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("public Binance instrument identity is invalid") from exc
+    if str(requested.venue) != "BINANCE":
+        raise RuntimeError("public PAPER instrument must use the BINANCE venue")
+
+    provider = _build_public_binance_spot_provider()
+    try:
+        asyncio.run(provider.load_async(requested))
+    except Exception as exc:
+        raise RuntimeError("public Binance instrument metadata could not be loaded") from exc
+
+    instrument = provider.find(requested)
+    if instrument is None:
+        raise RuntimeError(f"public Binance instrument metadata not found for {instrument_id}")
+    if instrument.id != requested:
+        raise RuntimeError("public Binance instrument metadata identity mismatch")
+    return instrument
+
+
 class NautilusStreamingPaperExecution:
     """Route one normalized market event at a time through Nautilus execution.
 
