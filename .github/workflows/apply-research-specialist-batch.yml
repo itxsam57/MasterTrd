@@ -1,0 +1,52 @@
+name: Apply ResearchBrain specialist batch
+
+on:
+  push:
+    branches:
+      - v2/plan-closure-20260831
+    paths:
+      - .github/workflows/apply-research-specialist-batch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v2/plan-closure-20260831
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Apply guarded batch helper
+        run: |
+          git pull --ff-only origin v2/plan-closure-20260831
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/mastertrd/research_brain.py')
+          text = path.read_text()
+          if 'def run_research_specialist_stage(' in text:
+              raise SystemExit('batch helper already present; refusing duplicate write')
+          anchor = '\ndef _parameter_space(genome: StrategyGenome) -> dict[str, object]:\n'
+          if anchor not in text:
+              raise SystemExit('expected batch-helper insertion anchor not found')
+          helper = '''\n\ndef run_research_specialist_stage(\n    validated_outcomes: Sequence[Mapping[str, Any]],\n    *,\n    specialist_inputs_by_genome_hash: Mapping[str, SpecialistInputs],\n) -> dict[str, Any]:\n    \"\"\"Route validated candidates through their candidate-bound specialist inputs.\"\"\"\n    outcomes: list[dict[str, Any]] = []\n    for item in validated_outcomes:\n        if not bool(item[\"passed\"]):\n            outcomes.append(dict(item))\n            continue\n        candidate = _genome_from_payload(item[\"genome\"])\n        inputs = specialist_inputs_by_genome_hash.get(\n            candidate.genome_hash,\n            SpecialistInputs(),\n        )\n        outcomes.append(\n            evaluate_research_specialist_candidate(\n                candidate,\n                score=float(item[\"score\"]),\n                inputs=inputs,\n            )\n        )\n    return {\"outcomes\": outcomes}\n'''
+          path.write_text(text.replace(anchor, helper + anchor, 1))
+          PY
+      - name: Verify focused GREEN
+        run: |
+          python -m pip install --disable-pip-version-check uv
+          uv sync --locked --all-extras
+          uv run pytest -q tests/test_research_brain_specialist_stage.py tests/test_research_brain_specialist_batch.py
+      - name: Commit real code and remove one-shot workflow
+        run: |
+          rm .github/workflows/apply-research-specialist-batch.yml
+          git config user.name 'itxsam57'
+          git config user.email '143406136+itxsam57@users.noreply.github.com'
+          git add src/mastertrd/research_brain.py .github/workflows/apply-research-specialist-batch.yml
+          git commit -m 'feat(research): batch specialist stage by candidate identity'
+          git push origin HEAD:v2/plan-closure-20260831
