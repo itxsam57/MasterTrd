@@ -1,8 +1,10 @@
 import json
 
+import mastertrd.runtime_factory as runtime_factory_module
 from mastertrd.binance_stream import BinancePublicMarketSource
 from mastertrd.contracts import RuntimeMode
 from mastertrd.execution_runtime import ExecutionRuntime
+from mastertrd.nautilus_paper import fixture_binance_spot_instrument
 from mastertrd.runtime import RuntimeConfig
 from mastertrd.runtime_factory import build_execution_runtime
 
@@ -155,10 +157,21 @@ def test_paper_factory_routes_public_feed_through_real_nautilus_strategy_and_rec
     assert closed, "PAPER runtime must persist a real Nautilus PositionClosed event"
 
 
-def test_paper_factory_defaults_to_checked_in_binance_public_stream_without_fixture(tmp_path):
+def test_paper_factory_defaults_to_checked_in_binance_public_stream_without_fixture(tmp_path, monkeypatch):
     candidate_path = tmp_path / "candidate.json"
     session_path = tmp_path / "paper-session-public.json"
     candidate_path.write_text(json.dumps(_candidate_manifest()), encoding="utf-8")
+    loaded_instruments: list[str] = []
+
+    def fake_public_metadata_loader(instrument_id: str):
+        loaded_instruments.append(instrument_id)
+        return fixture_binance_spot_instrument(instrument_id)
+
+    monkeypatch.setattr(
+        runtime_factory_module,
+        "load_public_binance_spot_instrument",
+        fake_public_metadata_loader,
+    )
 
     runtime = RuntimeConfig(
         mode=RuntimeMode.PAPER,
@@ -171,3 +184,4 @@ def test_paper_factory_defaults_to_checked_in_binance_public_stream_without_fixt
     assert isinstance(built._stream._source, BinancePublicMarketSource)
     assert built._stream._source.symbols == ("ETHUSDT",)
     assert built._stream._source.timeframe == "1m"
+    assert loaded_instruments == ["ETHUSDT.BINANCE"]
