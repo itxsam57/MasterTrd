@@ -1,7 +1,11 @@
+import threading
+
 from mastertrd.execution import BinanceExecutionProfile
 from mastertrd.nautilus_binance import (
+    NautilusLiveExecutionRuntime,
     build_nautilus_binance_configs,
     build_nautilus_binance_node_config,
+    build_nautilus_binance_trading_node,
 )
 from mastertrd.venue import BinanceProduct
 
@@ -89,3 +93,88 @@ def test_shared_live_node_config_owns_binance_data_execution_and_reconciliation(
     assert node_config.timeout_portfolio == 10.0
     assert node_config.timeout_disconnection == 10.0
     assert node_config.timeout_post_stop == 2.0
+
+
+def test_shared_trading_node_registers_both_binance_factories_and_builds_once(monkeypatch):
+    from nautilus_trader.adapters.binance import BINANCE
+    from nautilus_trader.adapters.binance import BinanceLiveDataClientFactory
+    from nautilus_trader.adapters.binance import BinanceLiveExecClientFactory
+
+    calls: list[tuple[str, object]] = []
+    strategy = object()
+
+    class Trader:
+        def add_strategy(self, value):
+            calls.append(("strategy", value))
+
+    class FakeNode:
+        def __init__(self, *, config):
+            calls.append(("config", config))
+            self.trader = Trader()
+
+        def add_data_client_factory(self, name, factory):
+            calls.append((f"data:{name}", factory))
+
+        def add_exec_client_factory(self, name, factory):
+            calls.append((f"exec:{name}", factory))
+
+        def build(self):
+            calls.append(("build", None))
+
+    monkeypatch.setattr("nautilus_trader.live.node.TradingNode", FakeNode)
+    config = object()
+    node = build_nautilus_binance_trading_node(config=config, strategy=strategy)
+
+    assert isinstance(node, FakeNode)
+    assert calls == [
+        ("config", config),
+        ("strategy", strategy),
+        (f"data:{BINANCE}", BinanceLiveDataClientFactory),
+        (f"exec:{BINANCE}", BinanceLiveExecClientFactory),
+        ("build", None),
+    ]
+
+
+def test_live_execution_runtime_routes_stop_through_node_loop_and_disposes_once():
+    stopped = threading.Event()
+    calls: list[str] = []
+
+    class Loop:
+        def is_closed(self):
+            return False
+
+        def call_soon_threadsafe(self, callback):
+            calls.append("threadsafe-stop")
+            callback()
+
+    class FakeNode:
+        def __init__(self):
+            self.running = False
+            self.loop = Loop()
+
+        def run(self, *, raise_exception):
+            assert raise_exception is True
+            calls.append("run")
+            self.running = True
+            assert stopped.wait(timeout=2.0), "watcher did not stop live node"
+            self.running = False
+
+        def get_event_loop(self):
+            return self.loop
+
+        def stop(self):
+            calls.append("stop")
+            stopped.set()
+
+        def is_running(self):
+            return self.running
+
+        def dispose(self):
+            calls.append("dispose")
+
+    runtime = NautilusLiveExecutionRuntime(FakeNode(), stop_poll_seconds=0.001)
+    runtime.run(stop_requested=lambda: True)
+    runtime.close()
+    runtime.close()
+
+    assert calls == ["run", "threadsafe-stop", "stop", "dispose"]
