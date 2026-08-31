@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import asdict, dataclass, field, replace
 import hashlib
 import json
@@ -20,10 +21,14 @@ from .nautilus_data import market_bars_to_nautilus
 from .nautilus_evaluation import run_binance_spot_evaluation
 from .paper_cycle import start_generated_paper_cycle
 from .research.evolve import evolve_genomes
-from .research.generator import generate_candidate
 from .research.optimize import optimize_genome
 from .research.regimes import discover_regimes
 from .research.screen import screen_genome
+from .research_candidate_generation import (
+    ResearchCandidateBatch,
+    ResearchGenerationBlocker,
+    generate_research_candidates,
+)
 from .robustness import RobustnessPolicy
 from .robustness_cycle import run_generated_robustness_cycle
 from .validation import ValidationEvidence, extra_evidence_for_target, nautilus_backtest_evidence
@@ -145,6 +150,7 @@ class ResearchDataset:
     dataset_hash: str
     bars_by_instrument: Mapping[str, Sequence[MarketBar]]
     nautilus_instruments: Mapping[str, Any]
+    available_data_levels: Mapping[str, Collection[object]] | None = None
 
     def __post_init__(self) -> None:
         if not self.dataset_hash:
@@ -164,6 +170,22 @@ class ResearchDataset:
                 if previous is not None and bar.timestamp <= previous:
                     raise ValueError(f"market bars are not strictly ordered for {key}")
                 previous = bar.timestamp
+
+        if self.available_data_levels is None:
+            normalized_levels = {
+                key: frozenset({"BAR"})
+                for key in self.bars_by_instrument
+            }
+        else:
+            normalized_levels: dict[str, frozenset[str]] = {}
+            for key, values in self.available_data_levels.items():
+                if key not in self.nautilus_instruments:
+                    raise ValueError(f"missing Nautilus instrument for data levels {key}")
+                normalized_levels[key] = frozenset(
+                    str(getattr(value, "value", value)).upper()
+                    for value in values
+                )
+        object.__setattr__(self, "available_data_levels", normalized_levels)
 
 
 @dataclass(frozen=True, slots=True)
@@ -405,13 +427,11 @@ def run_research_brain(
     _stage(memory, run_id, "regime_discovery", regimes_stage)
 
     def generate_stage() -> Mapping[str, Any]:
-        genomes = [
-            generate_candidate(family=family, instruments=(instrument,), seed=seed)
-            for family in config.families
-            for instrument in config.instruments
-            for seed in range(config.seed_start, config.seed_stop)
-        ]
-        return {"genomes": [_genome_payload(genome) for genome in genomes]}
+        batch = generate_research_candidates(config, dataset)
+        return {
+            "genomes": [_genome_payload(genome) for genome in batch.candidates],
+            "blockers": [asdict(blocker) for blocker in batch.blockers],
+        }
 
     generated_artifact, _ = _stage(memory, run_id, "generation_mutation", generate_stage)
     generated = tuple(_genome_from_payload(item) for item in generated_artifact["genomes"])
