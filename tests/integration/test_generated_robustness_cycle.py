@@ -8,6 +8,7 @@ from mastertrd.nautilus_data import market_bars_to_nautilus
 from mastertrd.research.generator import generate_candidate
 from mastertrd.robustness import RobustnessPolicy
 from mastertrd.robustness_cycle import run_generated_robustness_cycle
+from mastertrd.validation import ValidationEvidence
 
 
 def _step(timeframe: str) -> timedelta:
@@ -109,6 +110,16 @@ def test_generated_candidate_runs_real_robustness_suite_and_can_reach_robust():
         min_total_return=-1.0,
         max_drawdown=0.90,
     )
+    specialist = ValidationEvidence(
+        strategy_id=candidate.strategy_id,
+        genome_hash=candidate.genome_hash,
+        evidence_type="specialist_probe",
+        dataset_hash="specialist-dataset-v1",
+        code_hash="specialist-code-v1",
+        engine="nautilus_trader",
+        engine_version="1.231.0",
+        passed=True,
+    )
 
     cycle = run_generated_robustness_cycle(
         candidate=candidate,
@@ -127,6 +138,7 @@ def test_generated_candidate_runs_real_robustness_suite_and_can_reach_robust():
         stressed_fees=0.001,
         stressed_slippage=0.001,
         starting_balances=("10 ETH", "100000 USDT"),
+        specialist_evidence=(specialist,),
     )
 
     assert cycle.base_result.trade_count >= 1
@@ -142,6 +154,7 @@ def test_generated_candidate_runs_real_robustness_suite_and_can_reach_robust():
         "purged_cpcv",
         "monte_carlo",
         "asset_transfer",
+        "specialist_probe",
     }
     assert all(record.passed for record in cycle.evidence)
     assert cycle.promotion.allowed is True
