@@ -1,5 +1,7 @@
 from mastertrd.risk import RiskAction, RiskLimits, RiskSnapshot
+from mastertrd.risk_profiles import build_research_backtest_risk_runtime
 from mastertrd.risk_runtime import KillScope, OrderIntent, RiskRuntime
+from mastertrd.risk_state import RiskStateProvider, SimulationRiskStateProvider
 
 
 def _limits():
@@ -143,3 +145,55 @@ def test_runtime_owns_order_rate_even_when_strategy_snapshot_reports_zero():
 
     after_window = runtime.check_order(_intent(side="BUY", quantity=0.13), _snapshot())
     assert after_window.action is RiskAction.ALLOW
+
+
+def test_runtime_owns_state_provider_and_missing_provider_fails_closed():
+    intent = _intent()
+    provider = RiskStateProvider(clock=lambda: 1_000.0, max_market_age_seconds=5.0)
+    provider.update_account_state(
+        symbol=intent.symbol,
+        portfolio_id=intent.portfolio_id,
+        symbol_exposure=2_500.0,
+        portfolio_exposure=8_000.0,
+        daily_pnl=-125.0,
+        drawdown=0.04,
+        leverage=1.7,
+        correlated_exposure=6_000.0,
+    )
+    provider.update_market_state(
+        symbol=intent.symbol,
+        spread_bps=12.5,
+        realized_volatility=0.05,
+        observed_at=998.0,
+    )
+    provider.update_reconciliation(ok=True, observed_at=997.0)
+    provider.update_venue_state(
+        venue=intent.venue,
+        healthy=True,
+        api_error_rate=0.02,
+        api_latency_ms=45.0,
+    )
+
+    runtime = RiskRuntime(_limits(), state_provider=provider)
+    owned = runtime.snapshot_for_order(intent, reference_price=2_100.0)
+    assert owned.symbol_exposure == 2_500.0
+    assert owned.portfolio_exposure == 8_000.0
+    assert runtime.check_order(intent, owned).action is RiskAction.ALLOW
+
+    missing_runtime = RiskRuntime(_limits())
+    missing = missing_runtime.snapshot_for_order(intent, reference_price=2_100.0)
+    assert missing.emergency_stop is True
+    assert missing.data_stale is True
+    assert missing.reconciliation_ok is False
+    assert missing.venue_healthy is False
+    assert missing_runtime.check_order(intent, missing).action is RiskAction.KILL_SYSTEM
+
+
+def test_research_backtest_profile_explicitly_owns_simulation_state() -> None:
+    runtime = build_research_backtest_risk_runtime()
+
+    assert isinstance(runtime.state_provider, SimulationRiskStateProvider)
+    snapshot = runtime.snapshot_for_order(_intent(), reference_price=2_100.0)
+    assert snapshot.emergency_stop is False
+    assert snapshot.reconciliation_ok is True
+    assert snapshot.venue_healthy is True
