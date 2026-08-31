@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 from math import isfinite
 
 from nautilus_trader.config import StrategyConfig
@@ -27,6 +27,14 @@ def _finite_decimal(value: object, name: str) -> Decimal:
     return result
 
 
+def _round_down_to_instrument_increment(instrument: object, value: Decimal) -> Decimal:
+    increment = instrument.size_increment.as_decimal()
+    if increment <= 0:
+        raise ValueError("instrument size increment must be positive")
+    units = (value / increment).to_integral_value(rounding=ROUND_FLOOR)
+    return units * increment
+
+
 def calculate_leg_order_delta(
     instrument: object,
     *,
@@ -36,9 +44,9 @@ def calculate_leg_order_delta(
 ) -> Decimal:
     """Return the signed order delta needed to reach a weighted leg target.
 
-    The target is normalized through the concrete Nautilus instrument so the
-    strategy never invents quantity precision independently of the venue model.
-    Positive deltas buy and negative deltas sell.
+    Target arithmetic stays in Decimal space and is rounded against the concrete
+    Nautilus instrument increment before comparing with the engine's signed
+    position quantity. Positive deltas buy and negative deltas sell.
     """
     base = _finite_decimal(base_trade_size, "base_trade_size")
     if base <= 0:
@@ -52,8 +60,7 @@ def calculate_leg_order_delta(
         target = Decimal("0")
     else:
         requested = base * abs(weight)
-        quantity = instrument.make_qty(requested, round_down=True)
-        target_magnitude = quantity.as_decimal()
+        target_magnitude = _round_down_to_instrument_increment(instrument, requested)
         if target_magnitude <= 0:
             raise ValueError("weighted leg target rounds to zero for instrument precision")
 
@@ -69,9 +76,10 @@ def calculate_leg_order_delta(
     if delta == 0:
         return delta
 
-    order_quantity = instrument.make_qty(abs(delta), round_down=True).as_decimal()
-    if order_quantity <= 0:
-        raise ValueError("leg order delta rounds to zero for instrument precision")
+    order_quantity = abs(delta)
+    increment = instrument.size_increment.as_decimal()
+    if order_quantity % increment != 0:
+        raise ValueError("leg order delta is not aligned to instrument size increment")
     minimum = getattr(instrument, "min_quantity", None)
     if minimum is not None and order_quantity < minimum.as_decimal():
         raise ValueError("leg order delta is below instrument minimum quantity")
@@ -214,7 +222,7 @@ class GeneratedMultiLegStrategy(NautilusRiskMixin, Strategy):
         order = self.order_factory.market(
             instrument_id=instrument_id,
             order_side=side,
-            quantity=instrument.make_qty(quantity, round_down=True),
+            quantity=instrument.make_qty(quantity),
         )
         self.submit_order(order)
 
