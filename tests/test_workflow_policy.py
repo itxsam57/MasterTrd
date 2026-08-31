@@ -99,6 +99,25 @@ def test_testnet_smoke_invokes_real_runner_and_uploads_evidence():
     assert "testnet_smoke.json" in lower
 
 
+def test_testnet_smoke_dispatch_requires_public_candidate_manifest():
+    text, workflow = _load("testnet-smoke.yml")
+    dispatch = _on(workflow).get("workflow_dispatch")
+    assert isinstance(dispatch, dict)
+    inputs = dispatch.get("inputs")
+    assert isinstance(inputs, dict)
+    candidate_input = inputs.get("candidate_manifest_json")
+    assert isinstance(candidate_input, dict)
+    assert candidate_input.get("required") is True
+
+    job = next(iter(_jobs(workflow).values()))
+    assert job.get("env", {}).get("MASTERTRD_TESTNET_CANDIDATE_MANIFEST") == "artifacts/testnet_candidate.json"
+
+    lower = text.lower()
+    assert "candidate_manifest_json" in lower
+    assert "testnetcandidatemanifest" in lower
+    assert "artifacts/testnet_candidate.json" in lower
+
+
 def test_existing_stack_workflows_keep_read_only_permissions_and_locked_installs():
     for name in ("research-stack.yml", "execution-stack.yml"):
         text, workflow = _load(name)
