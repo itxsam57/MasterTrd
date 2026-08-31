@@ -334,6 +334,7 @@ def run_research_job(
 
 def main() -> int:
     artifact_dir = Path(os.environ.get("MASTERTRD_RESEARCH_ARTIFACT_DIR", "artifacts/research"))
+    artifact_dir.mkdir(parents=True, exist_ok=True)
     code_hash = os.environ.get("GITHUB_SHA") or os.environ.get("MASTERTRD_CODE_HASH")
     if not code_hash:
         raise RuntimeError("GITHUB_SHA or MASTERTRD_CODE_HASH is required")

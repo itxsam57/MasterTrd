@@ -196,10 +196,19 @@ def test_dataset_for_timeframe_builds_bar_only_verified_dataset(monkeypatch, tmp
             file_sha256="b" * 64,
             dataset_hash=f"hash:{token}",
         )
-        return SimpleNamespace(bars=(token,), manifest=manifest)
+        timestamp = datetime(
+            int(kwargs["period"][:4]),
+            int(kwargs["period"][5:7]),
+            1,
+            tzinfo=timezone.utc,
+        )
+        return SimpleNamespace(
+            bars=(SimpleNamespace(timestamp=timestamp, token=token),),
+            manifest=manifest,
+        )
 
     monkeypatch.setattr(research_job, "_read_verified_public_archive", fake_archive)
-    monkeypatch.setattr(research_job, "dataset_hash_for_bars", lambda bars: "combined:" + "|".join(bars))
+    monkeypatch.setattr(research_job, "dataset_hash_for_bars", lambda bars: "combined:" + "|".join(bar.token for bar in bars))
 
     dataset, manifests = research_job._dataset_for_timeframe(
         instrument_ids=("BTCUSDT.BINANCE", "ETHUSDT.BINANCE"),
