@@ -7,8 +7,12 @@ import pytest
 
 from mastertrd.genome import StrategyGenome
 from mastertrd import testnet_smoke
-from mastertrd.testnet_candidate import TestnetCandidateManifest
+from mastertrd.testnet_candidate import (
+    TestnetCandidateManifest,
+    candidate_testnet_bundle_identity_ok,
+)
 from mastertrd.testnet_smoke import SpotTestnetRules
+from mastertrd.validation import ValidationEvidence
 from mastertrd.venue import BinanceProduct
 
 
@@ -33,6 +37,27 @@ def manifest(*, cap: Decimal = Decimal("10")) -> TestnetCandidateManifest:
         product=BinanceProduct.SPOT,
         probe_instrument="BTCUSDT.BINANCE",
         order_notional_cap=cap,
+    )
+
+
+def live_record(
+    kind: str,
+    *,
+    bound_candidate: StrategyGenome | None = None,
+    code_hash: str = "code-champion-001",
+    dataset_hash: str = "dataset-champion-001",
+) -> ValidationEvidence:
+    bound = bound_candidate or candidate()
+    return ValidationEvidence(
+        strategy_id=bound.strategy_id,
+        genome_hash=bound.genome_hash,
+        evidence_type=kind,
+        dataset_hash=dataset_hash,
+        code_hash=code_hash,
+        engine="mastertrd-live-probe",
+        engine_version="1",
+        passed=True,
+        metrics={"completed": 1.0},
     )
 
 
@@ -80,6 +105,48 @@ def test_candidate_manifest_rejects_empty_provenance_identity():
             probe_instrument="BTCUSDT.BINANCE",
             order_notional_cap=Decimal("10"),
         )
+
+
+def test_candidate_testnet_bundle_requires_manifest_candidate_and_provenance_identity():
+    records = tuple(
+        live_record(kind)
+        for kind in (
+            "risk_review",
+            "reconciliation_test",
+            "kill_switch_test",
+            "testnet_smoke",
+        )
+    )
+    assert candidate_testnet_bundle_identity_ok(manifest(), records) is True
+
+    wrong_code = records[:-1] + (live_record("testnet_smoke", code_hash="other-code"),)
+    assert candidate_testnet_bundle_identity_ok(manifest(), wrong_code) is False
+
+    wrong_dataset = records[:-1] + (live_record("testnet_smoke", dataset_hash="other-dataset"),)
+    assert candidate_testnet_bundle_identity_ok(manifest(), wrong_dataset) is False
+
+
+def test_generic_system_smoke_cannot_satisfy_champion_manifest():
+    generic = StrategyGenome(
+        strategy_id="MASTERTRD-TESTNET-SMOKE",
+        family="execution_probe",
+        style="testnet",
+        instruments=("BTCUSDT.BINANCE",),
+        timeframe="1m",
+        entry={"kind": "bounded_testnet_order"},
+        exit={"kind": "cancel_on_shutdown"},
+    )
+    records = tuple(
+        live_record(kind, bound_candidate=generic)
+        for kind in (
+            "risk_review",
+            "reconciliation_test",
+            "kill_switch_test",
+            "testnet_smoke",
+        )
+    )
+
+    assert candidate_testnet_bundle_identity_ok(manifest(), records) is False
 
 
 def _write_manifest(tmp_path, item: TestnetCandidateManifest) -> str:
