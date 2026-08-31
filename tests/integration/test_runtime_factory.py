@@ -1,5 +1,6 @@
 import json
 
+from mastertrd.binance_stream import BinancePublicBookTickerSource
 from mastertrd.contracts import RuntimeMode
 from mastertrd.execution_runtime import ExecutionRuntime
 from mastertrd.runtime import RuntimeConfig
@@ -87,6 +88,16 @@ def _factory_environment(candidate_path, feed_path, session_path) -> dict[str, s
     }
 
 
+def _public_stream_environment(candidate_path, session_path) -> dict[str, str]:
+    return {
+        "MASTERTRD_CANDIDATE_MANIFEST": str(candidate_path),
+        "MASTERTRD_SESSION_STATE": str(session_path),
+        "MASTERTRD_CODE_HASH": "code-v2",
+        "MASTERTRD_PAPER_START_NS": str(START_NS),
+        "MASTERTRD_SESSION_NONCE": "public-paper-1",
+    }
+
+
 def test_paper_factory_builds_persistent_runtime_from_candidate_and_public_feed_fixture(tmp_path):
     candidate_path = tmp_path / "candidate.json"
     feed_path = tmp_path / "public-feed.jsonl"
@@ -142,3 +153,20 @@ def test_paper_factory_routes_public_feed_through_real_nautilus_strategy_and_rec
     persisted = json.loads(session_path.read_text(encoding="utf-8"))["payload"]
     closed = [event for event in persisted["events"] if event["kind"] == "closed_trade"]
     assert closed, "PAPER runtime must persist a real Nautilus PositionClosed event"
+
+
+def test_paper_factory_defaults_to_checked_in_binance_public_stream_without_fixture(tmp_path):
+    candidate_path = tmp_path / "candidate.json"
+    session_path = tmp_path / "paper-session-public.json"
+    candidate_path.write_text(json.dumps(_candidate_manifest()), encoding="utf-8")
+
+    runtime = RuntimeConfig(
+        mode=RuntimeMode.PAPER,
+        live_trading_enabled=False,
+        oracle_enabled=False,
+    )
+    built = build_execution_runtime(runtime, _public_stream_environment(candidate_path, session_path))
+
+    assert isinstance(built, ExecutionRuntime)
+    assert isinstance(built._stream._source, BinancePublicBookTickerSource)
+    assert built._stream._source.symbols == ("ETHUSDT",)
