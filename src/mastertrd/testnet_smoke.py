@@ -360,6 +360,29 @@ def run(environ: dict[str, str] | None = None) -> dict[str, Any]:
         candidate = manifest.candidate
         dataset_hash = manifest.dataset_hash
 
+    if manifest is not None:
+        try:
+            load_binance_credentials(RuntimeMode.TESTNET, env)
+        except ValueError:
+            evidence = run_testnet_smoke(
+                candidate,
+                environ=env,
+                dataset_hash=manifest.dataset_hash,
+                code_hash=manifest.code_hash,
+                runtime_mode=RuntimeMode.TESTNET,
+                venue_minimum_notional=float(manifest.order_notional_cap),
+                submit_test_order=None,
+            )
+            payload = asdict(evidence)
+            payload["symbol"] = symbol
+            payload["runtime_mode"] = RuntimeMode.TESTNET.value
+            payload["live_enabled"] = False
+            payload["product"] = manifest.product.value
+            payload["probe_instrument"] = manifest.probe_instrument
+            payload["order_notional_cap"] = str(manifest.order_notional_cap)
+            payload["blocker"] = "BLOCKED_OWNER_INPUT"
+            return payload
+
     rules = fetch_spot_testnet_rules(symbol)
     if manifest is not None and rules.min_notional > manifest.order_notional_cap:
         raise RuntimeError("venue minimum notional exceeds candidate order_notional_cap")
