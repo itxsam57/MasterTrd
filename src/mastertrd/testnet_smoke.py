@@ -20,6 +20,7 @@ from .genome import StrategyGenome
 from .live_evidence import run_testnet_smoke
 from .nautilus_binance import build_nautilus_binance_configs
 from .runtime import RuntimeConfig
+from .testnet_candidate import TestnetCandidateManifest
 from .venue import BinanceProduct
 
 
@@ -308,20 +309,66 @@ def _submit_nautilus_spot_testnet_order(
     return result["accepted"]
 
 
+def _load_candidate_manifest(environ: dict[str, str]) -> TestnetCandidateManifest | None:
+    manifest_path = (
+        environ.get("MASTERTRD_TESTNET_CANDIDATE_MANIFEST", "").strip()
+        or environ.get("MASTERTRD_TESTNET_CANDIDATE_PATH", "").strip()
+    )
+    if not manifest_path:
+        return None
+    path = Path(manifest_path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"TESTNET candidate manifest could not be loaded: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("TESTNET candidate manifest must contain a JSON object")
+    try:
+        return TestnetCandidateManifest.from_public_payload(payload)
+    except ValueError as exc:
+        raise RuntimeError(f"invalid TESTNET candidate manifest: {exc}") from exc
+
+
+def _manifest_spot_symbol(manifest: TestnetCandidateManifest) -> str:
+    if manifest.product is not BinanceProduct.SPOT:
+        raise RuntimeError("TESTNET candidate product is not supported by the spot smoke adapter")
+    suffix = ".BINANCE"
+    if not manifest.probe_instrument.endswith(suffix):
+        raise RuntimeError("TESTNET candidate probe_instrument must target BINANCE")
+    symbol = manifest.probe_instrument[: -len(suffix)].strip().upper()
+    if not _SYMBOL.fullmatch(symbol):
+        raise RuntimeError("TESTNET candidate probe_instrument contains an invalid symbol")
+    return symbol
+
+
 def run(environ: dict[str, str] | None = None) -> dict[str, Any]:
     env = dict(os.environ if environ is None else environ)
     _require_testnet_runtime(env)
-    symbol = env.get("MASTERTRD_TESTNET_SYMBOL", "BTCUSDT").strip().upper()
-    rules = fetch_spot_testnet_rules(symbol)
     code_hash = env.get("GITHUB_SHA", "").strip() or env.get("MASTERTRD_CODE_HASH", "").strip()
     if not code_hash:
         raise RuntimeError("TESTNET smoke requires GITHUB_SHA or MASTERTRD_CODE_HASH")
 
+    manifest = _load_candidate_manifest(env)
+    if manifest is None:
+        symbol = env.get("MASTERTRD_TESTNET_SYMBOL", "BTCUSDT").strip().upper()
+        candidate = _candidate(symbol)
+        dataset_hash = None
+    else:
+        if manifest.code_hash != code_hash:
+            raise RuntimeError("TESTNET candidate manifest code_hash does not match checkout code_hash")
+        symbol = _manifest_spot_symbol(manifest)
+        candidate = manifest.candidate
+        dataset_hash = manifest.dataset_hash
+
+    rules = fetch_spot_testnet_rules(symbol)
+    if manifest is not None and rules.min_notional > manifest.order_notional_cap:
+        raise RuntimeError("venue minimum notional exceeds candidate order_notional_cap")
+
     evidence = run_testnet_smoke(
-        _candidate(symbol),
+        candidate,
         environ=env,
-        dataset_hash=rules.dataset_hash,
-        code_hash=code_hash,
+        dataset_hash=dataset_hash or rules.dataset_hash,
+        code_hash=manifest.code_hash if manifest is not None else code_hash,
         runtime_mode=RuntimeMode.TESTNET,
         venue_minimum_notional=float(rules.min_notional),
         submit_test_order=lambda minimum: _submit_nautilus_spot_testnet_order(
@@ -335,6 +382,10 @@ def run(environ: dict[str, str] | None = None) -> dict[str, Any]:
     payload["symbol"] = symbol
     payload["runtime_mode"] = RuntimeMode.TESTNET.value
     payload["live_enabled"] = False
+    if manifest is not None:
+        payload["product"] = manifest.product.value
+        payload["probe_instrument"] = manifest.probe_instrument
+        payload["order_notional_cap"] = str(manifest.order_notional_cap)
     return payload
 
 
