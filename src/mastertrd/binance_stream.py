@@ -56,6 +56,39 @@ def _positive_number(value: object, *, field: str) -> float:
     return numeric
 
 
+def _non_negative_number(value: object, *, field: str) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Binance kline {field} must be numeric") from exc
+    if not isfinite(numeric) or numeric < 0.0:
+        raise ValueError(f"Binance kline {field} must be non-negative and finite")
+    return numeric
+
+
+def _json_payload(message: str | bytes) -> dict[str, object]:
+    if isinstance(message, bytes):
+        try:
+            text = message.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("Binance stream message must be UTF-8") from exc
+    elif isinstance(message, str):
+        text = message
+    else:
+        raise ValueError("Binance stream message must be text or bytes")
+
+    try:
+        envelope: Any = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Binance stream message contains invalid JSON") from exc
+    if not isinstance(envelope, dict):
+        raise ValueError("Binance stream message must be a JSON object")
+    payload = envelope.get("data", envelope)
+    if not isinstance(payload, dict):
+        raise ValueError("Binance stream payload must be a JSON object")
+    return payload
+
+
 class BinancePublicBookTickerSource:
     """Synchronous public Binance best-bid/ask source with replay protection.
 
@@ -107,25 +140,7 @@ class BinancePublicBookTickerSource:
         return f"wss://data-stream.binance.com/stream?streams={streams}"
 
     def _decode(self, message: str | bytes) -> dict[str, object] | None:
-        if isinstance(message, bytes):
-            try:
-                text = message.decode("utf-8")
-            except UnicodeDecodeError as exc:
-                raise ValueError("Binance stream message must be UTF-8") from exc
-        elif isinstance(message, str):
-            text = message
-        else:
-            raise ValueError("Binance stream message must be text or bytes")
-
-        try:
-            envelope: Any = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise ValueError("Binance stream message contains invalid JSON") from exc
-        if not isinstance(envelope, dict):
-            raise ValueError("Binance stream message must be a JSON object")
-        payload = envelope.get("data", envelope)
-        if not isinstance(payload, dict):
-            raise ValueError("Binance book ticker payload must be a JSON object")
+        payload = _json_payload(message)
 
         try:
             symbol = _canonical_symbol(str(payload["s"]))
@@ -206,3 +221,154 @@ class BinancePublicBookTickerSource:
             # Keep the variable explicit so transport-vs-normal close behavior is
             # visible during debugging even though both reconnect by policy.
             del transport_failed
+
+
+class BinancePublicMarketSource(BinancePublicBookTickerSource):
+    """Combined Binance book-ticker and closed-kline source for forward PAPER.
+
+    Book updates provide actual spread and observed midpoint volatility for the
+    execution-risk state. Kline updates are emitted only after Binance marks the
+    candle closed, so bar strategies never trade an in-progress candle. Both
+    book update IDs and closed-candle identities survive reconnects to suppress
+    replayed market events.
+    """
+
+    _SUPPORTED_INTERVALS = frozenset(
+        {
+            "1s",
+            "1m",
+            "3m",
+            "5m",
+            "15m",
+            "30m",
+            "1h",
+            "2h",
+            "4h",
+            "6h",
+            "8h",
+            "12h",
+            "1d",
+            "3d",
+            "1w",
+            "1M",
+        }
+    )
+
+    def __init__(
+        self,
+        instruments: Sequence[str],
+        *,
+        timeframe: str,
+        connector: Connector = _default_connector,
+        clock: Callable[[], float] = time.time,
+        sleep: Callable[[float], None] = time.sleep,
+        reconnect_backoff_seconds: Sequence[float] = (1.0, 2.0, 5.0, 10.0, 30.0),
+        max_reconnect_attempts: int | None = None,
+        volatility_window: int = 30,
+    ) -> None:
+        interval = str(timeframe).strip()
+        if interval not in self._SUPPORTED_INTERVALS:
+            raise ValueError(f"unsupported Binance kline timeframe: {timeframe}")
+        super().__init__(
+            instruments,
+            connector=connector,
+            clock=clock,
+            sleep=sleep,
+            reconnect_backoff_seconds=reconnect_backoff_seconds,
+            max_reconnect_attempts=max_reconnect_attempts,
+            volatility_window=volatility_window,
+        )
+        self.timeframe = interval
+        self._last_closed_kline_start: dict[str, int] = {}
+        self._latest_spread_bps: dict[str, float] = {}
+        self._latest_realized_volatility: dict[str, float] = {}
+
+    @property
+    def uri(self) -> str:
+        streams: list[str] = []
+        for symbol in self.symbols:
+            lowered = symbol.lower()
+            streams.append(f"{lowered}@bookTicker")
+            streams.append(f"{lowered}@kline_{self.timeframe}")
+        return "wss://data-stream.binance.com/stream?streams=" + "/".join(streams)
+
+    def _decode_kline(self, payload: dict[str, object]) -> dict[str, object] | None:
+        raw_kline = payload.get("k")
+        if not isinstance(raw_kline, dict):
+            raise ValueError("Binance kline payload must contain a kline object")
+
+        try:
+            symbol = _canonical_symbol(str(raw_kline["s"]))
+            interval = str(raw_kline["i"])
+            start_ms = int(raw_kline["t"])
+            close_ms = int(raw_kline["T"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("Binance kline identity is invalid") from exc
+        if symbol not in self._symbol_set:
+            raise ValueError(f"unexpected Binance kline symbol: {symbol}")
+        if interval != self.timeframe:
+            raise ValueError(f"unexpected Binance kline interval: {interval}")
+        if start_ms < 0 or close_ms < start_ms:
+            raise ValueError("Binance kline timestamps are invalid")
+
+        closed = raw_kline.get("x")
+        if not isinstance(closed, bool):
+            raise ValueError("Binance kline closed flag must be boolean")
+        if not closed:
+            return None
+
+        previous_start = self._last_closed_kline_start.get(symbol)
+        if previous_start is not None and start_ms <= previous_start:
+            return None
+
+        open_price = _positive_number(raw_kline.get("o"), field="open")
+        high = _positive_number(raw_kline.get("h"), field="high")
+        low = _positive_number(raw_kline.get("l"), field="low")
+        close = _positive_number(raw_kline.get("c"), field="close")
+        volume = _non_negative_number(raw_kline.get("v"), field="volume")
+        if high < max(open_price, close) or low > min(open_price, close) or high < low:
+            raise ValueError("Binance kline OHLC values are inconsistent")
+
+        self._last_closed_kline_start[symbol] = start_ms
+        extras: dict[str, object] = {
+            "source_kline_start_ms": start_ms,
+            "source_kline_close_ms": close_ms,
+        }
+        spread_bps = self._latest_spread_bps.get(symbol)
+        if spread_bps is not None:
+            extras["spread_bps"] = spread_bps
+        realized_volatility = self._latest_realized_volatility.get(symbol)
+        if realized_volatility is not None:
+            extras["realized_volatility"] = realized_volatility
+
+        return {
+            "event_id": f"binance-kline:{symbol}:{interval}:{start_ms}",
+            "venue": "BINANCE",
+            "instrument": symbol,
+            "timeframe": interval,
+            "timestamp_ms": close_ms,
+            "open": open_price,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+            **extras,
+        }
+
+    def _decode(self, message: str | bytes) -> dict[str, object] | None:
+        payload = _json_payload(message)
+        if payload.get("e") == "kline" or "k" in payload:
+            return self._decode_kline(payload)
+
+        decoded = super()._decode(message)
+        if decoded is None:
+            return None
+        symbol = str(decoded["instrument"])
+        bid = float(decoded["bid"])
+        ask = float(decoded["ask"])
+        midpoint = (bid + ask) / 2.0
+        self._latest_spread_bps[symbol] = ((ask - bid) / midpoint) * 10_000.0
+        volatility = decoded.get("realized_volatility")
+        if volatility is not None:
+            self._latest_realized_volatility[symbol] = float(volatility)
+        return decoded
