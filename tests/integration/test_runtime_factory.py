@@ -192,3 +192,92 @@ def test_paper_factory_defaults_to_checked_in_binance_public_stream_without_fixt
     assert built._stream._source.symbols == ("ETHUSDT",)
     assert built._stream._source.timeframe == "1m"
     assert loaded_instruments == ["ETHUSDT.BINANCE"]
+
+
+def _exchange_environment(candidate_path, *, mode: str) -> dict[str, str]:
+    namespace = mode.upper()
+    return {
+        "MASTERTRD_CANDIDATE_MANIFEST": str(candidate_path),
+        "MASTERTRD_BINANCE_PRODUCT": "SPOT",
+        f"BINANCE_{namespace}_API_KEY": f"{namespace.lower()}-key",
+        f"BINANCE_{namespace}_API_SECRET": f"{namespace.lower()}-secret",
+        f"BINANCE_{namespace}_ACCOUNT_ID": f"{namespace.lower()}-account",
+    }
+
+
+def test_testnet_factory_routes_candidate_instruments_into_repository_owned_nautilus_node(tmp_path, monkeypatch):
+    from mastertrd.nautilus_binance import NautilusLiveExecutionRuntime
+
+    candidate_path = tmp_path / "candidate.json"
+    candidate_path.write_text(json.dumps(_candidate_manifest()), encoding="utf-8")
+    built_nodes: list[object] = []
+
+    class StubNode:
+        def is_running(self):
+            return False
+
+        def dispose(self):
+            return None
+
+    def fake_build_node(*, config, strategy=None):
+        built_nodes.append((config, strategy))
+        return StubNode()
+
+    monkeypatch.setattr(
+        runtime_factory_module,
+        "build_nautilus_binance_trading_node",
+        fake_build_node,
+    )
+
+    runtime = RuntimeConfig(
+        mode=RuntimeMode.TESTNET,
+        live_trading_enabled=False,
+        oracle_enabled=False,
+    )
+    built = build_execution_runtime(
+        runtime,
+        _exchange_environment(candidate_path, mode="TESTNET"),
+    )
+
+    assert isinstance(built, NautilusLiveExecutionRuntime)
+    assert len(built_nodes) == 1
+    node_config, strategy = built_nodes[0]
+    assert strategy is None
+    assert node_config.exec_engine.reconciliation is True
+    assert [item.value for item in node_config.exec_engine.reconciliation_instrument_ids] == [
+        "ETHUSDT.BINANCE"
+    ]
+    assert node_config.exec_clients["BINANCE"].environment.value == "TESTNET"
+    assert node_config.data_clients["BINANCE"].environment.value == "TESTNET"
+    assert [item.value for item in node_config.exec_clients["BINANCE"].instrument_provider.load_ids] == [
+        "ETHUSDT.BINANCE"
+    ]
+
+
+def test_exchange_factory_fails_closed_without_explicit_product_or_live_enable(tmp_path):
+    import pytest
+
+    candidate_path = tmp_path / "candidate.json"
+    candidate_path.write_text(json.dumps(_candidate_manifest()), encoding="utf-8")
+
+    testnet_env = _exchange_environment(candidate_path, mode="TESTNET")
+    testnet_env.pop("MASTERTRD_BINANCE_PRODUCT")
+    with pytest.raises(RuntimeError, match="MASTERTRD_BINANCE_PRODUCT"):
+        build_execution_runtime(
+            RuntimeConfig(
+                mode=RuntimeMode.TESTNET,
+                live_trading_enabled=False,
+                oracle_enabled=False,
+            ),
+            testnet_env,
+        )
+
+    with pytest.raises(RuntimeError, match="LIVE mode requires live_trading_enabled"):
+        build_execution_runtime(
+            RuntimeConfig(
+                mode=RuntimeMode.LIVE,
+                live_trading_enabled=False,
+                oracle_enabled=False,
+            ),
+            _exchange_environment(candidate_path, mode="LIVE"),
+        )
