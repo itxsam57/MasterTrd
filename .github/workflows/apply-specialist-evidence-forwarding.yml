@@ -1,0 +1,81 @@
+name: Apply specialist evidence forwarding
+
+on:
+  push:
+    branches:
+      - v2/plan-closure-20260831
+    paths:
+      - .github/workflows/apply-specialist-evidence-forwarding.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v2/plan-closure-20260831
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Apply guarded root fix
+        run: |
+          git pull --ff-only origin v2/plan-closure-20260831
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/mastertrd/research_brain.py')
+          text = path.read_text()
+
+          helper = '''\n\ndef _validation_evidence_from_payload(payload: Mapping[str, Any]) -> ValidationEvidence:\n    return ValidationEvidence(\n        strategy_id=str(payload["strategy_id"]),\n        genome_hash=str(payload["genome_hash"]),\n        evidence_type=str(payload["evidence_type"]),\n        dataset_hash=str(payload["dataset_hash"]),\n        code_hash=str(payload["code_hash"]),\n        engine=str(payload["engine"]),\n        engine_version=str(payload["engine_version"]),\n        passed=bool(payload["passed"]),\n        metrics={str(key): float(value) for key, value in dict(payload.get("metrics", {})).items()},\n        supporting_only=bool(payload.get("supporting_only", False)),\n    )\n'''
+          helper_anchor = '\n\ndef _run_id(\n'
+          if 'def _validation_evidence_from_payload(' not in text:
+              if text.count(helper_anchor) != 1:
+                  raise SystemExit('evidence helper anchor ambiguous; refusing write')
+              text = text.replace(helper_anchor, helper + helper_anchor, 1)
+
+          reconstruction = '''            specialist_evidence = tuple(\n                _validation_evidence_from_payload(record)\n                for record in item.get("evidence", ())\n            )\n'''
+          reconstruction_anchor = '            try:\n                bars = _instrument_bars(dataset, key)\n'
+          if 'specialist_evidence = tuple(' not in text:
+              if text.count(reconstruction_anchor) != 1:
+                  raise SystemExit('robustness reconstruction anchor ambiguous; refusing write')
+              text = text.replace(
+                  reconstruction_anchor,
+                  '            try:\n' + reconstruction + '                bars = _instrument_bars(dataset, key)\n',
+                  1,
+              )
+
+          forwarding = '                    specialist_evidence=specialist_evidence,\n'
+          call_anchor = '                    starting_balances=config.starting_balances,\n                )\n                if not robust.promotion.allowed:\n'
+          if forwarding not in text:
+              if text.count(call_anchor) != 1:
+                  raise SystemExit('robustness call anchor ambiguous; refusing write')
+              text = text.replace(
+                  call_anchor,
+                  '                    starting_balances=config.starting_balances,\n' + forwarding + '                )\n                if not robust.promotion.allowed:\n',
+                  1,
+              )
+
+          path.write_text(text)
+          PY
+      - name: Verify focused GREEN
+        run: |
+          python -m pip install --disable-pip-version-check 'uv==0.12.7'
+          uv sync --locked --all-extras
+          uv run pytest -q \
+            tests/test_research_brain_specialist_robustness.py \
+            tests/test_research_brain_specialist_wiring.py \
+            tests/test_research_brain_specialist_stage.py \
+            tests/test_research_brain_specialist_batch.py \
+            tests/test_robustness_cycle.py
+      - name: Commit production fix and remove one-shot workflow
+        run: |
+          rm .github/workflows/apply-specialist-evidence-forwarding.yml
+          git config user.name 'itxsam57'
+          git config user.email '143406136+itxsam57@users.noreply.github.com'
+          git add src/mastertrd/research_brain.py .github/workflows/apply-specialist-evidence-forwarding.yml
+          git commit -m 'fix(research): preserve specialist evidence into robustness'
+          git push origin HEAD:v2/plan-closure-20260831
