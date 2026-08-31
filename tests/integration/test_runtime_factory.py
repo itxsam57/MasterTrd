@@ -80,5 +80,7 @@ def test_paper_factory_builds_persistent_runtime_from_candidate_and_public_feed_
     assert session_path.exists()
 
     persisted = json.loads(session_path.read_text(encoding="utf-8"))
-    assert persisted["strategy_id"] == "paper-factory-trend-1"
-    assert "binance-fixture-1" in persisted["event_ids"]
+    payload = persisted["payload"]
+    assert payload["receipt"]["strategy_id"] == "paper-factory-trend-1"
+    event_ids = {event["event_id"] for event in payload["events"]}
+    assert "binance-fixture-1" in event_ids
