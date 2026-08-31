@@ -7,8 +7,10 @@ from typing import Mapping
 
 from nautilus_trader.config import StrategyConfig
 from nautilus_trader.model import InstrumentId
+from nautilus_trader.model.enums import BookType, OrderSide
 from nautilus_trader.trading.strategy import Strategy
 
+from .execution_policy import HftPositionState, evaluate_hft_execution_policy
 from .execution_signals import SignalDirection
 from .genome import StrategyGenome
 from .nautilus_risk_hook import NautilusRiskMixin
@@ -95,6 +97,14 @@ class HftOrderIntent:
             raise ValueError("post-only HFT intent requires a limit price")
         if not isfinite(float(self.quantity_weight)) or float(self.quantity_weight) <= 0.0:
             raise ValueError("quantity_weight must be positive and finite")
+
+
+@dataclass(slots=True)
+class _OpenHftPosition:
+    direction: SignalDirection
+    entry_price: float
+    signed_qty: float
+    ticks_held: int = 0
 
 
 def _exact_states(
@@ -194,9 +204,6 @@ def _market_making_intents(
     if str(genome.entry.get("type", genome.entry.get("kind"))) != "inventory_skew_mm":
         raise ValueError("market_making entry requires inventory_skew_mm")
     half_spread_bps = _positive_number(genome.entry, "half_spread_bps")
-    # Positive inventory shifts both quotes downward to favor inventory reduction;
-    # negative inventory shifts them upward. The bounded linear skew keeps the
-    # strategy deterministic while the separate risk runtime caps actual size.
     inventory_skew_bps = float(state.inventory) * half_spread_bps
     center = state.midpoint * (1.0 - inventory_skew_bps / 10_000.0)
     half_spread = half_spread_bps / 10_000.0
@@ -285,12 +292,7 @@ class GeneratedHftStrategyConfig(StrategyConfig):
 
 
 class GeneratedHftStrategy(NautilusRiskMixin, Strategy):
-    """Authoritative Nautilus shell for HFT-family execution.
-
-    Tick/L2 subscriptions, state transitions and order application are added
-    behind integration behavior tests. The pure market-state and intent policy
-    above is shared by backtest, PAPER and live Nautilus adapters.
-    """
+    """Authoritative Nautilus execution strategy for all admitted HFT families."""
 
     def __init__(
         self,
@@ -301,4 +303,248 @@ class GeneratedHftStrategy(NautilusRiskMixin, Strategy):
     ) -> None:
         super().__init__(config)
         self.genome = genome
+        self.instruments: dict[str, object] = {}
+        self._states: dict[str, HftBookState] = {}
+        self._mid_history: dict[str, list[float]] = {
+            instrument_id: [] for instrument_id in genome.instruments
+        }
+        self._positions: dict[str, _OpenHftPosition] = {}
+        self.last_intents: tuple[HftOrderIntent, ...] = ()
+        self.last_exit_reason: str | None = None
         self._configure_risk_runtime(genome.strategy_id, risk_runtime)
+
+    def on_start(self) -> None:
+        for instrument_id in self.config.instrument_ids:
+            instrument = self.cache.instrument(instrument_id)
+            if instrument is None:
+                self.log.error(f"Could not find instrument for {instrument_id}")
+                self.stop()
+                return
+            self.instruments[instrument_id.value] = instrument
+
+        data_level = str(self.config.data_level)
+        if data_level == "L2":
+            for instrument_id in self.config.instrument_ids:
+                self.subscribe_order_book_deltas(instrument_id, BookType.L2_MBP)
+            return
+        if data_level == "TICK":
+            for instrument_id in self.config.instrument_ids:
+                self.subscribe_quote_ticks(instrument_id)
+            return
+        raise RuntimeError(f"unsupported HFT Nautilus data level: {data_level}")
+
+    @staticmethod
+    def _event_direction(event) -> SignalDirection:
+        side = getattr(event, "side", None)
+        name = getattr(side, "name", str(side)).upper()
+        if name.endswith("LONG"):
+            return SignalDirection.LONG
+        if name.endswith("SHORT"):
+            return SignalDirection.SHORT
+        return SignalDirection.FLAT
+
+    def _record_position_event(self, event) -> None:
+        instrument_id = getattr(getattr(event, "instrument_id", None), "value", None)
+        if instrument_id not in self._mid_history:
+            return
+        direction = self._event_direction(event)
+        if direction is SignalDirection.FLAT:
+            self._positions.pop(instrument_id, None)
+            return
+        entry_price = float(event.avg_px_open)
+        signed_qty = float(event.signed_qty)
+        previous = self._positions.get(instrument_id)
+        ticks_held = previous.ticks_held if previous and previous.direction is direction else 0
+        self._positions[instrument_id] = _OpenHftPosition(
+            direction=direction,
+            entry_price=entry_price,
+            signed_qty=signed_qty,
+            ticks_held=ticks_held,
+        )
+
+    def on_position_opened(self, event) -> None:
+        self._record_position_event(event)
+
+    def on_position_changed(self, event) -> None:
+        self._record_position_event(event)
+
+    def on_position_closed(self, event) -> None:
+        instrument_id = getattr(getattr(event, "instrument_id", None), "value", None)
+        if instrument_id in self._mid_history:
+            self._positions.pop(instrument_id, None)
+
+    def _instrument_tick_size(self, instrument_id: str) -> float:
+        instrument = self.instruments[instrument_id]
+        increment = getattr(instrument, "price_increment", None)
+        if increment is None:
+            raise RuntimeError(f"instrument {instrument_id} has no price increment")
+        if hasattr(increment, "as_double"):
+            return float(increment.as_double())
+        return float(increment)
+
+    def _remember_state(
+        self,
+        instrument_id: str,
+        *,
+        bid_price: float,
+        ask_price: float,
+        bid_size: float,
+        ask_size: float,
+    ) -> HftBookState:
+        midpoint = (float(bid_price) + float(ask_price)) / 2.0
+        history = self._mid_history[instrument_id]
+        history.append(midpoint)
+        if len(history) > 4096:
+            del history[:-4096]
+        position = self._positions.get(instrument_id)
+        state = HftBookState(
+            instrument_id=instrument_id,
+            bid_price=float(bid_price),
+            ask_price=float(ask_price),
+            bid_size=float(bid_size),
+            ask_size=float(ask_size),
+            tick_size=self._instrument_tick_size(instrument_id),
+            mid_history=tuple(history),
+            inventory=0.0 if position is None else position.signed_qty,
+        )
+        self._states[instrument_id] = state
+        return state
+
+    @staticmethod
+    def _numeric(value) -> float:
+        if hasattr(value, "as_double"):
+            return float(value.as_double())
+        return float(value)
+
+    def on_quote_tick(self, tick) -> None:
+        instrument_id = tick.instrument_id.value
+        if instrument_id not in self.instruments:
+            return
+        self._remember_state(
+            instrument_id,
+            bid_price=self._numeric(tick.bid_price),
+            ask_price=self._numeric(tick.ask_price),
+            bid_size=self._numeric(tick.bid_size),
+            ask_size=self._numeric(tick.ask_size),
+        )
+        self._process_market_state()
+
+    def on_order_book_deltas(self, deltas) -> None:
+        instrument_id = deltas.instrument_id.value
+        if instrument_id not in self.instruments:
+            return
+        book = self.cache.order_book(deltas.instrument_id)
+        if book is None:
+            return
+        bid_price = book.best_bid_price()
+        ask_price = book.best_ask_price()
+        bid_size = book.best_bid_size()
+        ask_size = book.best_ask_size()
+        if bid_price is None or ask_price is None or bid_size is None or ask_size is None:
+            return
+        self._remember_state(
+            instrument_id,
+            bid_price=self._numeric(bid_price),
+            ask_price=self._numeric(ask_price),
+            bid_size=self._numeric(bid_size),
+            ask_size=self._numeric(ask_size),
+        )
+        self._process_market_state()
+
+    def _cross_venue_spread_bps(self) -> float:
+        if len(self.genome.instruments) != 2 or any(
+            instrument_id not in self._states for instrument_id in self.genome.instruments
+        ):
+            return float("inf")
+        left = self._states[self.genome.instruments[0]].midpoint
+        right = self._states[self.genome.instruments[1]].midpoint
+        cheap = min(left, right)
+        rich = max(left, right)
+        return (rich - cheap) / cheap * 10_000.0
+
+    def _evaluate_open_position_exit(self, instrument_id: str) -> bool:
+        position = self._positions.get(instrument_id)
+        state = self._states.get(instrument_id)
+        if position is None or state is None:
+            return False
+        position.ticks_held += 1
+        spread_bps = (
+            self._cross_venue_spread_bps()
+            if self.genome.family == "cross_venue_arb"
+            else state.spread_bps
+        )
+        decision = evaluate_hft_execution_policy(
+            self.genome,
+            HftPositionState(
+                direction=position.direction,
+                entry_price=position.entry_price,
+                current_price=state.midpoint,
+                tick_size=state.tick_size,
+                ticks_held=position.ticks_held,
+                inventory=position.signed_qty,
+                imbalance=state.imbalance(int(self.genome.entry.get("levels", 1))),
+                spread_bps=spread_bps,
+            ),
+        )
+        if not decision.close_position:
+            return False
+        self.last_exit_reason = decision.reason
+        self.cancel_all_orders(self.instruments[instrument_id].id)
+        self.close_all_positions(self.instruments[instrument_id].id)
+        return True
+
+    def _process_market_state(self) -> None:
+        if any(instrument_id not in self._states for instrument_id in self.genome.instruments):
+            return
+
+        exited = False
+        for instrument_id in self.genome.instruments:
+            exited = self._evaluate_open_position_exit(instrument_id) or exited
+        if exited:
+            return
+
+        has_open_position = any(
+            instrument_id in self._positions for instrument_id in self.genome.instruments
+        )
+        if has_open_position and self.genome.family not in {"grid", "market_making"}:
+            return
+
+        if self.genome.family in {"grid", "market_making"}:
+            for instrument_id in self.genome.instruments:
+                self.cancel_all_orders(self.instruments[instrument_id].id)
+
+        intents = evaluate_hft_entry_intents(self.genome, self._states)
+        self.last_intents = intents
+        for intent in intents:
+            self._submit_intent(intent)
+
+    def _submit_intent(self, intent: HftOrderIntent) -> None:
+        instrument = self.instruments[intent.instrument_id]
+        side = OrderSide.BUY if intent.direction is SignalDirection.LONG else OrderSide.SELL
+        quantity = instrument.make_qty(
+            self.config.trade_size * Decimal(str(intent.quantity_weight)),
+        )
+        if intent.price is None:
+            order = self.order_factory.market(
+                instrument_id=instrument.id,
+                order_side=side,
+                quantity=quantity,
+            )
+        else:
+            order = self.order_factory.limit(
+                instrument_id=instrument.id,
+                order_side=side,
+                quantity=quantity,
+                price=instrument.make_price(intent.price),
+                post_only=intent.post_only,
+            )
+        self.submit_order(order)
+
+    def _risk_reference_price(self, instrument_id) -> float:
+        state = self._states.get(instrument_id.value)
+        return 0.0 if state is None else state.midpoint
+
+    def on_stop(self) -> None:
+        for instrument_id in self.config.instrument_ids:
+            self.cancel_all_orders(instrument_id)
+            self.close_all_positions(instrument_id)
