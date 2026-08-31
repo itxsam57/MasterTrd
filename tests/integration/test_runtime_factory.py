@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal
 
 import mastertrd.runtime_factory as runtime_factory_module
 from mastertrd.binance_stream import BinancePublicMarketSource
@@ -115,6 +116,12 @@ def test_paper_factory_builds_persistent_runtime_from_candidate_and_public_feed_
     built = build_execution_runtime(runtime, _factory_environment(candidate_path, feed_path, session_path))
 
     assert isinstance(built, ExecutionRuntime)
+    engine_state = built._engine_state()
+    venue_state = built._venue_state()
+    assert engine_state == venue_state
+    assert engine_state.balances["ETH"] == Decimal("10")
+    assert engine_state.balances["USDT"] == Decimal("100000")
+
     report = built.run()
     assert report.processed_events == 1
     assert report.duplicate_events == 0
