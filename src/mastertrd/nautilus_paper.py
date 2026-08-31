@@ -10,6 +10,7 @@ from .genome import StrategyGenome
 from .paper_evidence import PaperStartReceipt
 from .paper_events import NautilusPaperEventSink
 from .paper_session import JsonPaperSessionStore, PaperSessionJournal
+from .reconciliation import ExecutionState
 from .risk_runtime import RiskRuntime
 from .streaming import MarketStreamEvent
 
@@ -267,6 +268,37 @@ class NautilusStreamingPaperExecution:
     @property
     def closed_positions(self) -> int:
         return self._sink.closed_positions
+
+    def execution_state(self, *, account_id: str) -> ExecutionState:
+        """Snapshot the current Nautilus sandbox account/cache for reconciliation."""
+        if not account_id:
+            raise ValueError("account_id is required")
+
+        from nautilus_trader.model.identifiers import Venue
+
+        positions: dict[str, object] = {}
+        for position in self._engine.cache.positions_open(strategy_id=self._strategy.id):
+            instrument_id = position.instrument_id.value
+            positions[instrument_id] = positions.get(instrument_id, 0) + position.signed_decimal_qty()
+
+        open_order_ids = frozenset(
+            order.client_order_id.value
+            for order in self._engine.cache.orders_open(strategy_id=self._strategy.id)
+        )
+
+        account = self._engine.cache.account_for_venue(Venue("BINANCE"))
+        if account is None:
+            raise RuntimeError("Nautilus PAPER account state is unavailable")
+        balances = {
+            str(currency): money.as_decimal()
+            for currency, money in account.balances_total().items()
+        }
+        return ExecutionState(
+            account_id=account_id,
+            positions=positions,
+            open_order_ids=open_order_ids,
+            balances=balances,
+        )
 
     def _bar(self, event: MarketStreamEvent):
         from nautilus_trader.model.data import Bar
