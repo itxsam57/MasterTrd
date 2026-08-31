@@ -4,18 +4,26 @@ on:
   push:
     paths:
       - 'src/mastertrd/research/**'
+      - 'src/mastertrd/research_job.py'
       - 'src/mastertrd/memory_duckdb.py'
       - 'tests/integration/**'
+      - 'tests/test_research_job.py'
+      - 'tests/test_workflow_policy.py'
       - 'pyproject.toml'
       - 'uv.lock'
+      - '.github/workflows/autonomous-research.yml'
       - '.github/workflows/research-stack.yml'
   pull_request:
     paths:
       - 'src/mastertrd/research/**'
+      - 'src/mastertrd/research_job.py'
       - 'src/mastertrd/memory_duckdb.py'
       - 'tests/integration/**'
+      - 'tests/test_research_job.py'
+      - 'tests/test_workflow_policy.py'
       - 'pyproject.toml'
       - 'uv.lock'
+      - '.github/workflows/autonomous-research.yml'
       - '.github/workflows/research-stack.yml'
   workflow_dispatch:
 
@@ -40,6 +48,8 @@ jobs:
       - name: Run research integration tests
         run: |
           uv run pytest -q \
+            tests/test_research_job.py \
+            tests/test_workflow_policy.py \
             tests/integration/test_research_stack.py \
             tests/integration/test_advanced_research.py \
             tests/integration/test_duckdb_memory.py \
