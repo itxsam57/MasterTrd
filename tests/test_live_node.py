@@ -171,11 +171,17 @@ def test_production_factory_loader_resolves_callable_and_rejects_non_callable():
         )
 
 
-def test_main_loads_factory_and_composes_service(monkeypatch):
+def test_main_uses_repository_factory_without_external_factory_configuration(monkeypatch):
     sentinel_factory = object()
     calls: list[tuple[object, object]] = []
 
-    monkeypatch.setattr(live_node, "load_execution_runtime_factory", lambda environ: sentinel_factory)
+    monkeypatch.delenv("MASTERTRD_EXECUTION_FACTORY", raising=False)
+    monkeypatch.setattr(live_node, "build_execution_runtime", sentinel_factory, raising=False)
+    monkeypatch.setattr(
+        live_node,
+        "load_execution_runtime_factory",
+        lambda _environ: pytest.fail("production main must not load arbitrary execution factory"),
+    )
 
     def fake_run_service(environ, **kwargs):
         calls.append((environ, kwargs["execution_runtime_factory"]))
