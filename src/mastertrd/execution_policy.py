@@ -40,6 +40,29 @@ class PositionState:
 
 
 @dataclass(frozen=True, slots=True)
+class HftPositionState:
+    direction: SignalDirection
+    entry_price: float
+    current_price: float
+    tick_size: float
+    ticks_held: int
+    inventory: float
+    imbalance: float
+    spread_bps: float
+
+    def __post_init__(self) -> None:
+        for name in ("entry_price", "current_price", "tick_size"):
+            value = float(getattr(self, name))
+            if not isfinite(value) or value <= 0.0:
+                raise ValueError(f"{name} must be positive and finite")
+        if self.ticks_held < 0:
+            raise ValueError("ticks_held cannot be negative")
+        for name in ("inventory", "imbalance", "spread_bps"):
+            if not isfinite(float(getattr(self, name))):
+                raise ValueError(f"{name} must be finite")
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionDecision:
     direction: SignalDirection
     reason: str
@@ -254,6 +277,71 @@ def evaluate_execution_policy(
     if kind == "greeks_or_time_exit":
         return _greeks_or_time_exit(genome, bars, position)
     raise ValueError(f"unsupported exit policy: {kind}")
+
+
+def _positive_hft_limit(genome: StrategyGenome, key: str) -> float:
+    value = float(genome.exit[key])
+    if not isfinite(value) or value <= 0.0:
+        raise ValueError(f"{key} must be positive and finite")
+    return value
+
+
+def _hft_pnl_ticks(state: HftPositionState) -> float:
+    direction = 1.0 if state.direction is SignalDirection.LONG else -1.0
+    return direction * (state.current_price - state.entry_price) / state.tick_size
+
+
+def evaluate_hft_execution_policy(
+    genome: StrategyGenome,
+    state: HftPositionState,
+) -> ExecutionDecision:
+    if state.direction is SignalDirection.FLAT:
+        return ExecutionDecision(SignalDirection.FLAT, "hft_flat", False)
+
+    kind = _exit_kind(genome)
+    if kind == "ticks_or_timeout":
+        stop_ticks = _positive_hft_limit(genome, "stop_ticks")
+        target_ticks = _positive_hft_limit(genome, "target_ticks")
+        max_ticks = int(genome.exit["max_ticks"])
+        if max_ticks <= 0:
+            raise ValueError("max_ticks must be positive")
+        pnl_ticks = _hft_pnl_ticks(state)
+        if pnl_ticks <= -stop_ticks:
+            return _flat("hft_stop_ticks")
+        if pnl_ticks >= target_ticks:
+            return _flat("hft_target_ticks")
+        if state.ticks_held >= max_ticks:
+            return _flat("hft_timeout")
+        return ExecutionDecision(state.direction, "hold_hft_ticks_or_timeout", False)
+
+    if kind in {"inventory_exit", "inventory_flatten"}:
+        max_inventory = _positive_hft_limit(genome, "max_inventory")
+        if abs(state.inventory) >= max_inventory:
+            return _flat("hft_inventory_exit")
+        return ExecutionDecision(state.direction, "hold_hft_inventory", False)
+
+    if kind == "imbalance_reversal_or_ticks":
+        ticks = _positive_hft_limit(genome, "ticks")
+        reversed_imbalance = (
+            state.direction is SignalDirection.LONG and state.imbalance < 0.0
+        ) or (
+            state.direction is SignalDirection.SHORT and state.imbalance > 0.0
+        )
+        if reversed_imbalance:
+            return _flat("hft_imbalance_reversal")
+        if _hft_pnl_ticks(state) <= -ticks:
+            return _flat("hft_adverse_ticks")
+        return ExecutionDecision(state.direction, "hold_hft_order_book", False)
+
+    if kind == "spread_convergence":
+        exit_bps = float(genome.exit["exit_bps"])
+        if not isfinite(exit_bps) or exit_bps < 0.0:
+            raise ValueError("exit_bps must be finite and non-negative")
+        if abs(state.spread_bps) <= exit_bps:
+            return _flat("hft_spread_convergence")
+        return ExecutionDecision(state.direction, "hold_hft_spread", False)
+
+    raise ValueError(f"unsupported HFT exit policy: {kind}")
 
 
 def _aligned_multileg_bars(
