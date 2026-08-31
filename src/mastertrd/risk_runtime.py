@@ -151,6 +151,28 @@ class RiskRuntime:
             reconciliation_age_seconds=float("inf"),
         )
 
+    def update_market_state(
+        self,
+        *,
+        symbol: str,
+        spread_bps: float,
+        realized_volatility: float,
+        observed_at: float,
+    ) -> None:
+        updater = getattr(self.state_provider, "update_market_state", None)
+        if updater is not None:
+            updater(
+                symbol=symbol,
+                spread_bps=spread_bps,
+                realized_volatility=realized_volatility,
+                observed_at=observed_at,
+            )
+
+    def update_reconciliation_state(self, *, ok: bool, observed_at: float) -> None:
+        updater = getattr(self.state_provider, "update_reconciliation", None)
+        if updater is not None:
+            updater(ok=ok, observed_at=observed_at)
+
     def kill(self, scope: KillScope, reason: str, *, key: str | None = None) -> None:
         if not reason:
             raise ValueError("kill reason is required")
@@ -173,11 +195,20 @@ class RiskRuntime:
     ) -> None:
         if not venue:
             raise ValueError("venue is required")
-        self._venue_health[venue] = VenueHealth(
+        health = VenueHealth(
             healthy=bool(healthy),
             error_rate=float(error_rate),
             latency_ms=float(latency_ms),
         )
+        self._venue_health[venue] = health
+        updater = getattr(self.state_provider, "update_venue_state", None)
+        if updater is not None:
+            updater(
+                venue=venue,
+                healthy=health.healthy,
+                api_error_rate=health.error_rate,
+                api_latency_ms=health.latency_ms,
+            )
 
     def update_correlated_exposure(self, *, portfolio_id: str, exposure: float) -> None:
         numeric = float(exposure)
