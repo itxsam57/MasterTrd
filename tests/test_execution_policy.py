@@ -94,7 +94,7 @@ def test_trailing_atr_uses_peak_since_entry_not_entry_price() -> None:
         exit={"type": "trailing_atr", "atr": 1.0, "atr_period": 3},
         allow_short=True,
     )
-    bars = _bars([100.0, 102.0, 105.0, 110.0, 106.0])
+    bars = _bars([100.0, 102.0, 105.0, 110.0, 102.0])
     position = PositionState(
         direction=SignalDirection.LONG,
         entry_price=100.0,
