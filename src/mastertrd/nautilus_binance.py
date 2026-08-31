@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterable
 
 from .execution import BinanceExecutionProfile
 from .venue import BinanceProduct
@@ -73,4 +73,51 @@ def build_nautilus_binance_configs(
         data=data,
         execution=execution,
         account_id=account_id,
+    )
+
+
+def build_nautilus_binance_node_config(
+    *,
+    configs: NautilusBinanceConfigs,
+    trader_id: str,
+    reconciliation_instrument_ids: Iterable[Any] | None = None,
+    reconciliation_lookback_mins: int | None = None,
+    logging: Any | None = None,
+):
+    """Build the single live-node config used by every Binance exchange mode.
+
+    The node, not an external MasterTrd market loop, owns both live market data
+    and execution clients. Startup execution reconciliation is mandatory so a
+    restart must recover venue-side order state before strategies can proceed.
+    """
+    if not trader_id.strip():
+        raise ValueError("trader_id is required")
+
+    from nautilus_trader.adapters.binance import BINANCE
+    from nautilus_trader.config import LiveExecEngineConfig
+    from nautilus_trader.config import LoggingConfig
+    from nautilus_trader.config import TradingNodeConfig
+    from nautilus_trader.model.identifiers import TraderId
+
+    instruments = (
+        None
+        if reconciliation_instrument_ids is None
+        else list(reconciliation_instrument_ids)
+    )
+    exec_engine = LiveExecEngineConfig(
+        reconciliation=True,
+        reconciliation_lookback_mins=reconciliation_lookback_mins,
+        reconciliation_instrument_ids=instruments,
+    )
+    return TradingNodeConfig(
+        trader_id=TraderId(trader_id),
+        logging=logging if logging is not None else LoggingConfig(log_level="INFO"),
+        exec_engine=exec_engine,
+        data_clients={BINANCE: configs.data},
+        exec_clients={BINANCE: configs.execution},
+        timeout_connection=30.0,
+        timeout_reconciliation=10.0,
+        timeout_portfolio=10.0,
+        timeout_disconnection=10.0,
+        timeout_post_stop=2.0,
     )
