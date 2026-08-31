@@ -2,6 +2,7 @@ from mastertrd.genome import StrategyGenome
 from mastertrd.nautilus_backtest import run_binance_spot_strategy_history
 from mastertrd.nautilus_strategy import compile_genome_to_nautilus
 from mastertrd.risk import RiskAction
+from mastertrd.risk_profiles import build_research_backtest_risk_runtime
 
 
 def test_compiled_strategy_records_risk_allow_before_every_simulated_order():
@@ -20,7 +21,12 @@ def test_compiled_strategy_records_risk_allow_before_every_simulated_order():
         exit={"kind": "cross_reverse"},
         allow_short=True,
     )
-    strategy = compile_genome_to_nautilus(genome, instrument=instrument, trade_size="0.10000")
+    strategy = compile_genome_to_nautilus(
+        genome,
+        instrument=instrument,
+        trade_size="0.10000",
+        risk_runtime=build_research_backtest_risk_runtime(),
+    )
     bar_type = strategy.config.bar_type
     prices = [2100 - i * 2 for i in range(15)] + [2070 + i * 5 for i in range(20)] + [2165 - i * 6 for i in range(20)]
     base_ns = 1_700_000_000_000_000_000
