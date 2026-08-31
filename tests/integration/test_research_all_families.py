@@ -1,4 +1,13 @@
+from datetime import datetime, timezone
+
+from mastertrd.contracts import MarketBar
+from mastertrd.product_contracts import validate_product_compatibility
 from mastertrd.research.generator import family_instrument_sets
+from mastertrd.research_brain import (
+    ResearchBrainConfig,
+    ResearchDataset,
+    generate_research_candidates,
+)
 
 
 def test_family_instrument_sets_are_structurally_compatible_with_registered_families():
@@ -129,4 +138,84 @@ def test_family_instrument_sets_fail_closed_when_required_data_or_products_are_m
             "trend",
             {"WRONG.BINANCE": btc},
             available_data_levels={"WRONG.BINANCE": frozenset({"BAR"})},
+        )
+
+
+def _bar(instrument) -> MarketBar:
+    return MarketBar(
+        venue=str(instrument.id.venue),
+        instrument=str(instrument.raw_symbol),
+        timeframe="1h",
+        timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        open=100.0,
+        high=101.0,
+        low=99.0,
+        close=100.5,
+        volume=1.0,
+    )
+
+
+def test_research_brain_candidate_generation_consumes_family_aware_universes():
+    from nautilus_trader.test_kit.providers import TestInstrumentProvider
+
+    btc_spot = TestInstrumentProvider.btcusdt_binance()
+    eth_spot = TestInstrumentProvider.ethusdt_binance()
+    btc_perp = TestInstrumentProvider.btcusdt_perp_binance()
+    option = TestInstrumentProvider.crypto_option()
+    bybit_perp = TestInstrumentProvider.xrpusdt_linear_bybit()
+    metadata = {
+        item.id.value: item
+        for item in (btc_spot, eth_spot, btc_perp, option, bybit_perp)
+    }
+    data_levels = {
+        btc_spot.id.value: frozenset({"BAR", "TICK", "L2"}),
+        eth_spot.id.value: frozenset({"BAR"}),
+        btc_perp.id.value: frozenset({"BAR", "TICK"}),
+        option.id.value: frozenset({"BAR"}),
+        bybit_perp.id.value: frozenset({"BAR", "TICK", "L2"}),
+    }
+    config = ResearchBrainConfig(
+        families=("stat_arb", "options", "order_book", "cross_venue_arb"),
+        instruments=tuple(metadata),
+        seed_start=7,
+        seed_stop=8,
+        screening_min_return=99.0,
+        optimization_trials=1,
+        evolution_generations=1,
+        evolution_population=2,
+        validation_budget=1,
+        paper_queue_cap=0,
+    )
+    dataset = ResearchDataset(
+        dataset_hash="family-aware-source-v1",
+        bars_by_instrument={key: (_bar(instrument),) for key, instrument in metadata.items()},
+        nautilus_instruments=metadata,
+        available_data_levels=data_levels,
+    )
+
+    batch = generate_research_candidates(config, dataset)
+
+    assert batch.blockers == ()
+    candidates_by_family = {
+        family: tuple(candidate for candidate in batch.candidates if candidate.family == family)
+        for family in config.families
+    }
+    assert all(candidates_by_family[family] for family in config.families)
+    assert all(len(candidate.instruments) == 2 for candidate in candidates_by_family["stat_arb"])
+    assert all(
+        candidate.instruments == (option.id.value,)
+        for candidate in candidates_by_family["options"]
+    )
+    assert all(
+        candidate.data_requirements == ("L2",)
+        for candidate in candidates_by_family["order_book"]
+    )
+    for candidate in candidates_by_family["cross_venue_arb"]:
+        left, right = candidate.instruments
+        assert metadata[left].id.venue != metadata[right].id.venue
+
+    for candidate in batch.candidates:
+        validate_product_compatibility(
+            candidate,
+            {instrument_id: metadata[instrument_id] for instrument_id in candidate.instruments},
         )
