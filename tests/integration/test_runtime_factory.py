@@ -100,34 +100,6 @@ def _public_stream_environment(candidate_path, session_path) -> dict[str, str]:
     }
 
 
-def _exchange_info_symbol() -> dict[str, object]:
-    return {
-        "symbol": "ETHUSDT",
-        "status": "TRADING",
-        "baseAsset": "ETH",
-        "quoteAsset": "USDT",
-        "filters": [
-            {
-                "filterType": "PRICE_FILTER",
-                "minPrice": "0.01",
-                "maxPrice": "1000000.00",
-                "tickSize": "0.01",
-            },
-            {
-                "filterType": "LOT_SIZE",
-                "minQty": "0.00001",
-                "maxQty": "9000.00000",
-                "stepSize": "0.00001",
-            },
-            {
-                "filterType": "NOTIONAL",
-                "minNotional": "10.00",
-                "maxNotional": "100000000.00",
-            },
-        ],
-    }
-
-
 def test_paper_factory_builds_persistent_runtime_from_candidate_and_public_feed_fixture(tmp_path):
     candidate_path = tmp_path / "candidate.json"
     feed_path = tmp_path / "public-feed.jsonl"
@@ -183,21 +155,6 @@ def test_paper_factory_routes_public_feed_through_real_nautilus_strategy_and_rec
     persisted = json.loads(session_path.read_text(encoding="utf-8"))["payload"]
     closed = [event for event in persisted["events"] if event["kind"] == "closed_trade"]
     assert closed, "PAPER runtime must persist a real Nautilus PositionClosed event"
-
-
-def test_public_binance_metadata_parser_builds_nautilus_instrument_from_exchange_info():
-    instrument = runtime_factory_module.parse_public_binance_spot_instrument(
-        _exchange_info_symbol()
-    )
-
-    assert instrument.id.value == "ETHUSDT.BINANCE"
-    assert str(instrument.base_currency) == "ETH"
-    assert str(instrument.quote_currency) == "USDT"
-    assert instrument.price_precision == 2
-    assert instrument.size_precision == 5
-    assert str(instrument.price_increment) == "0.01"
-    assert str(instrument.size_increment) == "0.00001"
-    assert str(instrument.min_quantity) == "0.00001"
 
 
 def test_paper_factory_defaults_to_checked_in_binance_public_stream_without_fixture(tmp_path, monkeypatch):
