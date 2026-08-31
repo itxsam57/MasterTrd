@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, replace
 from enum import StrEnum
 import hashlib
@@ -95,6 +96,7 @@ class RiskRuntime:
         self._clock = monotonic_clock
         self.decisions: list[RiskDecision] = []
         self._last_allowed: dict[str, float] = {}
+        self._allowed_order_times: deque[float] = deque()
         self._kills: dict[KillScope, dict[str, str]] = {
             KillScope.STRATEGY: {},
             KillScope.SYMBOL: {},
@@ -190,6 +192,12 @@ class RiskRuntime:
                 return action, reason
         return None
 
+    def _accepted_orders_last_minute(self, checked_at: float) -> int:
+        cutoff = checked_at - 60.0
+        while self._allowed_order_times and self._allowed_order_times[0] <= cutoff:
+            self._allowed_order_times.popleft()
+        return len(self._allowed_order_times)
+
     def check_order(self, intent: OrderIntent, snapshot: RiskSnapshot) -> RiskDecision:
         checked_at = float(self._clock())
         fingerprint = intent.fingerprint
@@ -219,9 +227,11 @@ class RiskRuntime:
             intent.portfolio_id,
             float(snapshot.correlated_exposure),
         )
+        owned_order_rate = self._accepted_orders_last_minute(checked_at)
         effective = replace(
             snapshot,
             duplicate_order=duplicate,
+            orders_last_minute=max(int(snapshot.orders_last_minute), owned_order_rate),
             correlated_exposure=max(float(snapshot.correlated_exposure), correlated),
             venue_healthy=(snapshot.venue_healthy and health.healthy) if health else snapshot.venue_healthy,
             api_error_rate=max(float(snapshot.api_error_rate), health.error_rate) if health else snapshot.api_error_rate,
@@ -237,4 +247,5 @@ class RiskRuntime:
         )
         if action is RiskAction.ALLOW:
             self._last_allowed[fingerprint] = checked_at
+            self._allowed_order_times.append(checked_at)
         return decision
