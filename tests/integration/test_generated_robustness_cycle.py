@@ -53,29 +53,37 @@ def test_generated_candidate_runs_real_robustness_suite_and_can_reach_robust():
     base = _bars(candidate, instrument, start=start)
     fold_span = _step(candidate.timeframe) * 400
     folds = [
-        ("fold-a", _bars(candidate, instrument, start=start + fold_span, offset=0.0)),
-        ("fold-b", _bars(candidate, instrument, start=start + fold_span * 2, offset=25.0)),
-        ("fold-c", _bars(candidate, instrument, start=start + fold_span * 3, offset=-25.0)),
+        ("fold-a", {candidate.instruments[0]: _bars(candidate, instrument, start=start + fold_span, offset=0.0)}),
+        ("fold-b", {candidate.instruments[0]: _bars(candidate, instrument, start=start + fold_span * 2, offset=25.0)}),
+        ("fold-c", {candidate.instruments[0]: _bars(candidate, instrument, start=start + fold_span * 3, offset=-25.0)}),
     ]
     cpcv = [
-        (f"cpcv-{index}", _bars(candidate, instrument, start=start + fold_span * (4 + index), offset=offset))
+        (
+            f"cpcv-{index}",
+            {candidate.instruments[0]: _bars(candidate, instrument, start=start + fold_span * (4 + index), offset=offset)},
+        )
         for index, offset in enumerate((10.0, -10.0, 20.0, -20.0))
     ]
     monte_carlo = [
-        (f"mc-{index}", _bars(candidate, instrument, start=start + fold_span * (8 + index), offset=offset))
+        (
+            f"mc-{index}",
+            {candidate.instruments[0]: _bars(candidate, instrument, start=start + fold_span * (8 + index), offset=offset)},
+        )
         for index, offset in enumerate((5.0, -5.0, 15.0, -15.0, 30.0))
     ]
     transfer = [
         (
             transfer_candidate,
-            transfer_instrument,
+            {transfer_candidate.instruments[0]: transfer_instrument},
             "transfer-btc-v1",
-            _bars(
-                transfer_candidate,
-                transfer_instrument,
-                start=start + fold_span * 14,
-                offset=50.0,
-            ),
+            {
+                transfer_candidate.instruments[0]: _bars(
+                    transfer_candidate,
+                    transfer_instrument,
+                    start=start + fold_span * 14,
+                    offset=50.0,
+                )
+            },
         )
     ]
     policy = RobustnessPolicy(
@@ -104,8 +112,8 @@ def test_generated_candidate_runs_real_robustness_suite_and_can_reach_robust():
 
     cycle = run_generated_robustness_cycle(
         candidate=candidate,
-        instrument=instrument,
-        data=base,
+        instruments={candidate.instruments[0]: instrument},
+        data_by_instrument={candidate.instruments[0]: base},
         dataset_hash="robustness-base-v1",
         fold_datasets=folds,
         cpcv_datasets=cpcv,
