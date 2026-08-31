@@ -97,6 +97,52 @@ def _compile_ema_baseline(
     )
 
 
+def compile_hft_genome_to_nautilus(
+    genome: StrategyGenome,
+    *,
+    instruments: Mapping[str, object],
+    trade_size_override: str | None = None,
+    trade_size: str | None = None,
+    risk_runtime: RiskRuntime | None = None,
+):
+    """Compile an HFT family onto its dedicated Nautilus execution boundary."""
+    if trade_size_override is not None and trade_size is not None:
+        raise ValueError("use only one of trade_size_override or trade_size")
+
+    spec = family_spec(genome.family)
+    if not spec.requires_hft_validation:
+        raise ValueError(f"{genome.family} is not an HFT specialist family")
+    if risk_runtime is None:
+        raise ValueError("risk_runtime is required for HFT Nautilus strategy compilation")
+    if spec.min_data_level not in {"TICK", "L2"}:
+        raise ValueError(f"unsupported HFT data level: {spec.min_data_level}")
+    if spec.min_data_level not in genome.data_requirements:
+        raise ValueError(
+            f"{genome.family} requires {spec.min_data_level} market data for execution",
+        )
+
+    validate_product_compatibility(genome, instruments)
+    effective_trade_size = _trade_size(
+        genome,
+        trade_size_override if trade_size_override is not None else trade_size,
+    )
+
+    from .hft_strategy import GeneratedHftStrategy, GeneratedHftStrategyConfig
+
+    config = GeneratedHftStrategyConfig(
+        instrument_ids=tuple(instruments[key].id for key in genome.instruments),
+        trade_size=effective_trade_size,
+        family=genome.family,
+        genome_hash=genome.genome_hash,
+        data_level=spec.min_data_level,
+    )
+    return GeneratedHftStrategy(
+        config=config,
+        genome=genome,
+        risk_runtime=risk_runtime,
+    )
+
+
 def compile_genome_to_nautilus(
     genome: StrategyGenome,
     *,
