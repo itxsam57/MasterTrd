@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+from math import isfinite
 
 from nautilus_trader.config import StrategyConfig
 from nautilus_trader.model import Bar, BarType, InstrumentId
@@ -14,6 +15,70 @@ from .execution_signals import SignalDirection
 from .genome import StrategyGenome
 from .nautilus_risk_hook import NautilusRiskMixin
 from .risk_runtime import RiskRuntime
+
+
+def _finite_decimal(value: object, name: str) -> Decimal:
+    try:
+        result = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite decimal value") from exc
+    if not result.is_finite():
+        raise ValueError(f"{name} must be finite")
+    return result
+
+
+def calculate_leg_order_delta(
+    instrument: object,
+    *,
+    base_trade_size: Decimal,
+    leg_weight: float,
+    current_signed_quantity: Decimal,
+) -> Decimal:
+    """Return the signed order delta needed to reach a weighted leg target.
+
+    The target is normalized through the concrete Nautilus instrument so the
+    strategy never invents quantity precision independently of the venue model.
+    Positive deltas buy and negative deltas sell.
+    """
+    base = _finite_decimal(base_trade_size, "base_trade_size")
+    if base <= 0:
+        raise ValueError("base_trade_size must be positive")
+    if not isfinite(float(leg_weight)):
+        raise ValueError("leg_weight must be finite")
+    weight = Decimal(str(leg_weight))
+    current = _finite_decimal(current_signed_quantity, "current_signed_quantity")
+
+    if weight == 0:
+        target = Decimal("0")
+    else:
+        requested = base * abs(weight)
+        quantity = instrument.make_qty(requested, round_down=True)
+        target_magnitude = quantity.as_decimal()
+        if target_magnitude <= 0:
+            raise ValueError("weighted leg target rounds to zero for instrument precision")
+
+        minimum = getattr(instrument, "min_quantity", None)
+        if minimum is not None and target_magnitude < minimum.as_decimal():
+            raise ValueError("weighted leg target is below instrument minimum quantity")
+        maximum = getattr(instrument, "max_quantity", None)
+        if maximum is not None and target_magnitude > maximum.as_decimal():
+            raise ValueError("weighted leg target exceeds instrument maximum quantity")
+        target = target_magnitude if weight > 0 else -target_magnitude
+
+    delta = target - current
+    if delta == 0:
+        return delta
+
+    order_quantity = instrument.make_qty(abs(delta), round_down=True).as_decimal()
+    if order_quantity <= 0:
+        raise ValueError("leg order delta rounds to zero for instrument precision")
+    minimum = getattr(instrument, "min_quantity", None)
+    if minimum is not None and order_quantity < minimum.as_decimal():
+        raise ValueError("leg order delta is below instrument minimum quantity")
+    maximum = getattr(instrument, "max_quantity", None)
+    if maximum is not None and order_quantity > maximum.as_decimal():
+        raise ValueError("leg order delta exceeds instrument maximum quantity")
+    return order_quantity if delta > 0 else -order_quantity
 
 
 class GeneratedMultiLegStrategyConfig(StrategyConfig):
@@ -104,39 +169,52 @@ class GeneratedMultiLegStrategy(NautilusRiskMixin, Strategy):
             return 0.0
         return float(values[-1].close)
 
+    def _current_signed_quantity(self, instrument_id: InstrumentId) -> Decimal:
+        positions = self.cache.positions_open(
+            instrument_id=instrument_id,
+            strategy_id=self.id,
+        )
+        return sum(
+            (position.signed_decimal_qty() for position in positions),
+            Decimal("0"),
+        )
+
     def _apply_legs(self, decision: ExecutionDecision) -> None:
         if not decision.legs:
             return
         ids = {item.value: item for item in self.config.instrument_ids}
-        for key, target in decision.legs.items():
-            instrument_id = ids[key]
-            if target == 0:
-                if not self.portfolio.is_flat(instrument_id):
-                    self.close_all_positions(instrument_id)
-                continue
-            if target > 0:
-                if self.portfolio.is_net_long(instrument_id):
-                    continue
-                if self.portfolio.is_net_short(instrument_id):
-                    self.close_all_positions(instrument_id)
-                self._submit_market(instrument_id, OrderSide.BUY)
-            else:
-                if not self.genome.allow_short:
-                    if not self.portfolio.is_flat(instrument_id):
-                        self.close_all_positions(instrument_id)
-                    continue
-                if self.portfolio.is_net_short(instrument_id):
-                    continue
-                if self.portfolio.is_net_long(instrument_id):
-                    self.close_all_positions(instrument_id)
-                self._submit_market(instrument_id, OrderSide.SELL)
+        if set(decision.legs) != set(ids):
+            raise ValueError("multi-leg decision must target every configured instrument exactly")
 
-    def _submit_market(self, instrument_id: InstrumentId, side: OrderSide) -> None:
+        for key, raw_target in decision.legs.items():
+            instrument_id = ids[key]
+            instrument = self._instruments[key]
+            target = float(raw_target)
+            if target < 0.0 and not self.genome.allow_short:
+                target = 0.0
+            current = self._current_signed_quantity(instrument_id)
+            delta = calculate_leg_order_delta(
+                instrument,
+                base_trade_size=self.config.trade_size,
+                leg_weight=target,
+                current_signed_quantity=current,
+            )
+            if delta == 0:
+                continue
+            side = OrderSide.BUY if delta > 0 else OrderSide.SELL
+            self._submit_market(instrument_id, side, abs(delta))
+
+    def _submit_market(
+        self,
+        instrument_id: InstrumentId,
+        side: OrderSide,
+        quantity: Decimal,
+    ) -> None:
         instrument = self._instruments[instrument_id.value]
         order = self.order_factory.market(
             instrument_id=instrument_id,
             order_side=side,
-            quantity=instrument.make_qty(self.config.trade_size),
+            quantity=instrument.make_qty(quantity, round_down=True),
         )
         self.submit_order(order)
 
