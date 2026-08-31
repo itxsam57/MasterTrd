@@ -1,6 +1,7 @@
 import pytest
 
 from mastertrd.genome import StrategyGenome
+from mastertrd.nautilus_risk_hook import build_research_nautilus_risk_runtime
 from mastertrd.nautilus_strategy import compile_genome_to_nautilus
 
 
@@ -27,9 +28,15 @@ def test_bar_genome_compiles_to_stable_nautilus_strategy():
     from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
     instrument = TestInstrumentProvider.ethusdt_binance()
-    strategy = compile_genome_to_nautilus(ema_genome(), instrument=instrument)
+    risk_runtime = build_research_nautilus_risk_runtime()
+    strategy = compile_genome_to_nautilus(
+        ema_genome(),
+        instrument=instrument,
+        risk_runtime=risk_runtime,
+    )
 
     assert isinstance(strategy, EMACross)
+    assert strategy.risk_runtime is risk_runtime
     assert strategy.config.instrument_id == instrument.id
     assert strategy.config.fast_ema_period == 3
     assert strategy.config.slow_ema_period == 8
