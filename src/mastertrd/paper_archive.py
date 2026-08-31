@@ -105,5 +105,13 @@ class JsonPaperReportArchive:
 
     def append(self, report: PaperForwardReport) -> None:
         reports = list(self.load())
+        for existing in reports:
+            if existing.session_id != report.session_id:
+                continue
+            if existing == report:
+                # A service restart may replay report finalization after the
+                # session state was persisted. Identical provenance is a no-op.
+                return
+            raise ValueError("conflicting paper report already exists for session_id")
         reports.append(report)
         self._write(reports)
