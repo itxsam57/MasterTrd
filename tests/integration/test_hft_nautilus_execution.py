@@ -119,8 +119,8 @@ def test_scalping_hft_runs_real_nautilus_tick_entry_and_target_exit_lifecycle() 
     data = [
         TestDataStubs.quote_tick(
             instrument=instrument,
-            bid_price=100.0,
-            ask_price=100.1,
+            bid_price=100.00,
+            ask_price=100.01,
             bid_size=10.0,
             ask_size=10.0,
             ts_event=base_ns,
@@ -128,8 +128,8 @@ def test_scalping_hft_runs_real_nautilus_tick_entry_and_target_exit_lifecycle() 
         ),
         TestDataStubs.quote_tick(
             instrument=instrument,
-            bid_price=100.1,
-            ask_price=100.2,
+            bid_price=100.01,
+            ask_price=100.02,
             bid_size=10.0,
             ask_size=10.0,
             ts_event=base_ns + 1_000_000,
@@ -137,8 +137,8 @@ def test_scalping_hft_runs_real_nautilus_tick_entry_and_target_exit_lifecycle() 
         ),
         TestDataStubs.quote_tick(
             instrument=instrument,
-            bid_price=100.6,
-            ask_price=100.7,
+            bid_price=100.06,
+            ask_price=100.07,
             bid_size=10.0,
             ask_size=10.0,
             ts_event=base_ns + 2_000_000,
