@@ -88,6 +88,9 @@ def test_testnet_runner_uses_exact_candidate_and_manifest_provenance(monkeypatch
     assert payload["genome_hash"] == manifest.genome_hash
     assert payload["dataset_hash"] == manifest.dataset_hash
     assert payload["code_hash"] == manifest.code_hash
+    assert payload["product"] == manifest.product.value
+    assert payload["probe_instrument"] == manifest.probe_instrument
+    assert payload["order_notional_cap"] == str(manifest.order_notional_cap)
     assert payload["symbol"] == "BTCUSDT"
     assert seen["symbol"] == "BTCUSDT"
     assert seen["submitted_symbol"] == "BTCUSDT"
