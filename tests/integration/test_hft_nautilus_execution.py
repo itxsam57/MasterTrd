@@ -79,6 +79,7 @@ def test_order_book_hft_runs_real_nautilus_l2_entry_and_exit_lifecycle() -> None
 
         assert len(orders_report.index) >= 2
         assert len(fills_report.index) >= 2
+        assert strategy.risk_runtime.allow_count >= len(orders_report.index)
         assert strategy.last_exit_reason == "hft_imbalance_reversal"
         assert engine.portfolio.is_flat(instrument.id)
     finally:
@@ -166,6 +167,7 @@ def test_scalping_hft_runs_real_nautilus_tick_entry_and_target_exit_lifecycle() 
 
         assert len(orders_report.index) >= 2
         assert len(fills_report.index) >= 2
+        assert strategy.risk_runtime.allow_count >= len(orders_report.index)
         assert strategy.last_exit_reason == "hft_target_ticks"
         assert engine.portfolio.is_flat(instrument.id)
     finally:
