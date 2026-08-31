@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -27,7 +28,7 @@ def report(session_id: str, *, code_hash: str = "code-v1") -> PaperForwardReport
     )
 
 
-def test_archive_persists_verified_reports_and_rejects_duplicate_sessions(tmp_path):
+def test_archive_persists_verified_reports_and_replays_identical_session_idempotently(tmp_path):
     path = tmp_path / "paper-reports.json"
     archive = JsonPaperReportArchive(path)
     first = report("session-1")
@@ -40,8 +41,11 @@ def test_archive_persists_verified_reports_and_rejects_duplicate_sessions(tmp_pa
     assert [item.session_id for item in restored] == ["session-1", "session-2"]
     assert all(item.provenance_verified for item in restored)
 
-    with pytest.raises(ValueError, match="unique"):
-        archive.append(first)
+    archive.append(first)
+    assert archive.load() == restored
+
+    with pytest.raises(ValueError, match="conflicting"):
+        archive.append(replace(first, total_return=0.99))
 
 
 def test_archive_rejects_unverified_reports_and_mixed_strategy_or_code_identity(tmp_path):
