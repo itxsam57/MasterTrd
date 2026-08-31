@@ -31,8 +31,8 @@ permissions:
   contents: read
 
 jobs:
-  # The scheduled public-data entrypoint is integration-owned here so core
-  # coverage can stay focused on shared library code without lowering 90%.
+  # Task 8 owns the scheduled public-data entrypoint in this integration gate;
+  # shared-core coverage stays focused without lowering the 90% threshold.
   integrated-research:
     runs-on: ubuntu-latest
     timeout-minutes: 25
