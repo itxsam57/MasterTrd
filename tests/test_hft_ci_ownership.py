@@ -32,3 +32,21 @@ def test_risk_state_is_owned_by_focused_execution_gate() -> None:
         "tests/integration/test_runtime_recovery.py",
     ):
         assert execution.count(path) >= 3
+
+
+def test_task5_runtime_is_owned_by_focused_execution_gate() -> None:
+    core = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    execution = (ROOT / ".github/workflows/execution-stack.yml").read_text(encoding="utf-8")
+
+    for path in (
+        "src/mastertrd/runtime_factory.py",
+        "src/mastertrd/binance_stream.py",
+    ):
+        assert path in core
+        assert execution.count(path) >= 2
+
+    for path in (
+        "tests/test_binance_stream.py",
+        "tests/integration/test_runtime_factory.py",
+    ):
+        assert execution.count(path) >= 3
