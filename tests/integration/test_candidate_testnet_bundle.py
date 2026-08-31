@@ -234,3 +234,30 @@ def test_testnet_smoke_refuses_venue_minimum_above_candidate_cap(monkeypatch, tm
     with pytest.raises(RuntimeError, match="order_notional_cap"):
         testnet_smoke.run(_testnet_env(path))
     assert submitted == []
+
+
+def test_testnet_smoke_without_owner_credentials_is_candidate_bound_and_never_touches_network(monkeypatch, tmp_path):
+    path = _write_manifest(tmp_path, manifest())
+    network_calls = []
+    monkeypatch.setattr(
+        testnet_smoke,
+        "fetch_spot_testnet_rules",
+        lambda symbol: network_calls.append(symbol) or pytest.fail("network must not be used without credentials"),
+    )
+
+    payload = testnet_smoke.run(
+        {
+            "MASTERTRD_MODE": "TESTNET",
+            "MASTERTRD_TESTNET_CANDIDATE_MANIFEST": path,
+            "GITHUB_SHA": "code-champion-001",
+        }
+    )
+
+    assert payload["strategy_id"] == candidate().strategy_id
+    assert payload["genome_hash"] == candidate().genome_hash
+    assert payload["code_hash"] == "code-champion-001"
+    assert payload["dataset_hash"] == "dataset-champion-001"
+    assert payload["status"] == "CREDENTIALS_UNAVAILABLE"
+    assert payload["passed"] is False
+    assert payload["blocker"] == "BLOCKED_OWNER_INPUT"
+    assert network_calls == []
