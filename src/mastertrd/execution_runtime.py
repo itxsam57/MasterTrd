@@ -32,6 +32,7 @@ class ExecutionRuntime:
         dispatch: Callable[[MarketStreamEvent], object],
         stream: MarketStream | None = None,
         finalizer: Callable[[], object] | None = None,
+        startup_expected_state: Callable[[], ExecutionState] | None = None,
     ) -> None:
         self._journal = journal
         self._session_store = session_store
@@ -42,6 +43,7 @@ class ExecutionRuntime:
         self._dispatch = dispatch
         self._stream = stream
         self._finalizer = finalizer
+        self._startup_expected_state = startup_expected_state
         self._closed = False
         self._startup_reconciled = False
 
@@ -88,10 +90,15 @@ class ExecutionRuntime:
             observed_at=event.timestamp_ns / 1_000_000_000.0,
         )
 
-    def _reconcile(self) -> ReconciliationResult:
+    def _reconcile(self, *, startup: bool = False) -> ReconciliationResult:
+        expected_state = (
+            self._startup_expected_state
+            if startup and self._startup_expected_state is not None
+            else self._venue_state
+        )
         return self._reconciler.reconcile(
             self._engine_state(),
-            self._venue_state(),
+            expected_state(),
         )
 
     def _record_reconciliation(
@@ -110,6 +117,11 @@ class ExecutionRuntime:
             ok=reconciliation.ok,
             timestamp_ns=timestamp_ns,
         )
+        if reconciliation.ok:
+            self._journal.record_execution_state(
+                self._engine_state(),
+                timestamp_ns=timestamp_ns,
+            )
         self._session_store.save(self._journal)
 
     def run(
@@ -137,7 +149,7 @@ class ExecutionRuntime:
                 continue
 
             if not self._startup_reconciled:
-                startup_reconciliation = self._reconcile()
+                startup_reconciliation = self._reconcile(startup=True)
                 reconciliation_checks += 1
                 if not startup_reconciliation.ok:
                     reconciliation_errors += 1
