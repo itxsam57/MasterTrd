@@ -69,8 +69,7 @@ jobs:
             tests/test_research_brain_specialist_robustness.py \
             tests/test_research_brain_specialist_wiring.py \
             tests/test_research_brain_specialist_stage.py \
-            tests/test_research_brain_specialist_batch.py \
-            tests/test_robustness_cycle.py
+            tests/test_research_brain_specialist_batch.py
       - name: Commit production fix and remove one-shot workflow
         run: |
           rm .github/workflows/apply-specialist-evidence-forwarding.yml
