@@ -1,0 +1,134 @@
+name: Oracle Deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-oracle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: oracle
+    env:
+      ORACLE_ENABLED: ${{ vars.ORACLE_ENABLED }}
+      ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+      ORACLE_SSH_USER: ${{ secrets.ORACLE_SSH_USER }}
+      ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+      ORACLE_KNOWN_HOSTS: ${{ secrets.ORACLE_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Fail closed unless Oracle deployment is explicitly enabled
+        shell: bash
+        run: |
+          if [[ "${ORACLE_ENABLED,,}" != "true" ]]; then
+            echo 'Oracle deployment is disabled. Set Environment variable ORACLE_ENABLED=true explicitly.' >&2
+            exit 1
+          fi
+          for name in ORACLE_HOST ORACLE_SSH_USER ORACLE_SSH_KEY ORACLE_KNOWN_HOSTS; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing required Oracle Environment secret: ${name}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Verify exact locked source before rendering deployment
+        run: |
+          python -m pip install --disable-pip-version-check 'uv==0.12.7'
+          uv lock --check
+          uv sync --locked --all-extras
+          uv pip check
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Render deployment bundle
+        run: |
+          mkdir -p artifacts/oracle
+          uv run python - <<'PY'
+          from pathlib import Path
+          from mastertrd.oracle import OracleDeploymentSpec, render_oracle_bundle
+
+          spec = OracleDeploymentSpec(
+              app_dir='/opt/mastertrd',
+              service_user='mastertrd',
+              python_bin='/opt/mastertrd/.venv/bin/python',
+              module='mastertrd.live_node',
+              env_file='/etc/mastertrd/mastertrd.env',
+          )
+          bundle = render_oracle_bundle(spec)
+          root = Path('artifacts/oracle')
+          (root / 'bootstrap.sh').write_text(bundle.bootstrap_script, encoding='utf-8')
+          (root / 'mastertrd.service').write_text(bundle.systemd_unit, encoding='utf-8')
+          (root / 'mastertrd.logrotate').write_text(bundle.logrotate_config, encoding='utf-8')
+          (root / 'mastertrd-health').write_text(bundle.health_script, encoding='utf-8')
+          PY
+          chmod 700 artifacts/oracle/bootstrap.sh
+
+      - name: Configure pinned SSH trust
+        shell: bash
+        run: |
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$ORACLE_SSH_KEY" > "$HOME/.ssh/oracle_key"
+          chmod 600 "$HOME/.ssh/oracle_key"
+          printf '%s\n' "$ORACLE_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Deploy exact SHA without copying exchange secrets
+        shell: bash
+        run: |
+          target="${ORACLE_SSH_USER}@${ORACLE_HOST}"
+          remote_bootstrap="/tmp/mastertrd-bootstrap-${GITHUB_SHA}.sh"
+          scp -i "$HOME/.ssh/oracle_key" -o BatchMode=yes artifacts/oracle/bootstrap.sh "${target}:${remote_bootstrap}"
+          ssh -i "$HOME/.ssh/oracle_key" -o BatchMode=yes "$target" \
+            "GITHUB_SHA='$GITHUB_SHA' REMOTE_BOOTSTRAP='$remote_bootstrap' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          sudo bash "$REMOTE_BOOTSTRAP"
+          rm -f "$REMOTE_BOOTSTRAP"
+
+          if [[ ! -d /opt/mastertrd/.git ]]; then
+            sudo -u mastertrd git clone https://github.com/itxsam57/MasterTrd.git /opt/mastertrd
+          fi
+
+          if ! sudo -u mastertrd git -C /opt/mastertrd diff --quiet --ignore-submodules --; then
+            echo 'Tracked changes exist on Oracle host; refusing destructive deployment.' >&2
+            exit 1
+          fi
+
+          sudo -u mastertrd git -C /opt/mastertrd fetch --depth=1 origin "$GITHUB_SHA"
+          sudo -u mastertrd git -C /opt/mastertrd checkout --detach "$GITHUB_SHA"
+
+          if [[ ! -x /opt/mastertrd/.uv-tool/bin/uv ]]; then
+            sudo -u mastertrd python3 -m venv /opt/mastertrd/.uv-tool
+            sudo -u mastertrd /opt/mastertrd/.uv-tool/bin/python -m pip install --disable-pip-version-check 'uv==0.12.7'
+          fi
+          sudo -u mastertrd bash -c 'cd /opt/mastertrd && .uv-tool/bin/uv lock --check && .uv-tool/bin/uv sync --locked --all-extras && .uv-tool/bin/uv pip check'
+
+          if ! sudo grep -Eq '^ORACLE_ENABLED=true$' /etc/mastertrd/mastertrd.env; then
+            echo 'Host /etc/mastertrd/mastertrd.env does not explicitly contain ORACLE_ENABLED=true.' >&2
+            exit 1
+          fi
+          if ! sudo grep -Eq '^MASTERTRD_EXECUTION_FACTORY=.+$' /etc/mastertrd/mastertrd.env; then
+            echo 'MASTERTRD_EXECUTION_FACTORY is not configured on the host; refusing to start a non-functional execution node.' >&2
+            exit 1
+          fi
+
+          mode="$(sudo awk -F= '$1=="MASTERTRD_MODE" {print $2}' /etc/mastertrd/mastertrd.env | tail -n1)"
+          if [[ "$mode" == "LIVE" ]]; then
+            echo 'Exact SHA deployed, but automated LIVE restart is forbidden. Perform the documented owner live-start review.' >&2
+            exit 1
+          fi
+
+          sudo systemctl restart mastertrd.service
+          sudo /usr/local/bin/mastertrd-health
+          REMOTE
+
+      - name: Remove local SSH key material
+        if: always()
+        shell: bash
+        run: rm -f "$HOME/.ssh/oracle_key" "$HOME/.ssh/known_hosts"

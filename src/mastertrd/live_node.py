@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from enum import StrEnum
+from importlib import import_module
 import os
 import signal
 import time
@@ -35,6 +36,31 @@ def preflight_node(runtime: RuntimeConfig, environ: Mapping[str, str]) -> NodeRe
     return NodeReadiness.EXCHANGE_READY
 
 
+def load_execution_runtime_factory(
+    environ: Mapping[str, str],
+) -> Callable[[RuntimeConfig, Mapping[str, str]], Any]:
+    target = environ.get("MASTERTRD_EXECUTION_FACTORY", "").strip()
+    if not target:
+        raise RuntimeError(
+            "MASTERTRD_EXECUTION_FACTORY must be configured for production execution"
+        )
+
+    module_name, separator, function_name = target.partition(":")
+    if (
+        separator != ":"
+        or not module_name.strip()
+        or not function_name.strip()
+        or ":" in function_name
+    ):
+        raise ValueError("MASTERTRD_EXECUTION_FACTORY must use module:function format")
+
+    module = import_module(module_name.strip())
+    factory = getattr(module, function_name.strip(), None)
+    if not callable(factory):
+        raise TypeError("MASTERTRD_EXECUTION_FACTORY must reference a callable factory")
+    return factory
+
+
 def run_node(
     runtime: RuntimeConfig,
     environ: Mapping[str, str],
@@ -43,8 +69,16 @@ def run_node(
     sleep: Callable[[float], None],
     heartbeat: Callable[[NodeReadiness], None],
     interval_seconds: float,
+    execution_runtime: Any | None = None,
 ) -> NodeReadiness:
     readiness = preflight_node(runtime, environ)
+    if execution_runtime is not None:
+        heartbeat(readiness)
+        execution_runtime.run(stop_requested=stop_requested)
+        return readiness
+
+    # Backward-compatible observability-only loop for injected/test callers.
+    # Production main() fails closed unless a concrete runtime factory is configured.
     while not stop_requested():
         heartbeat(readiness)
         sleep(interval_seconds)
@@ -58,6 +92,8 @@ def run_service(
     sleep: Callable[[float], None],
     heartbeat: Callable[[NodeReadiness], None],
     interval_seconds: float = 30.0,
+    execution_runtime: Any | None = None,
+    execution_runtime_factory: Callable[[RuntimeConfig, Mapping[str, str]], Any] | None = None,
 ) -> NodeReadiness:
     runtime = RuntimeConfig.from_env(dict(environ))
     stopped = Event()
@@ -67,6 +103,10 @@ def run_service(
 
     register_signal(signal.SIGINT, request_stop)
     register_signal(signal.SIGTERM, request_stop)
+
+    if execution_runtime is None and execution_runtime_factory is not None:
+        execution_runtime = execution_runtime_factory(runtime, dict(environ))
+
     return run_node(
         runtime,
         environ,
@@ -74,15 +114,18 @@ def run_service(
         sleep=sleep,
         heartbeat=heartbeat,
         interval_seconds=interval_seconds,
+        execution_runtime=execution_runtime,
     )
 
 
 def main() -> None:
+    execution_runtime_factory = load_execution_runtime_factory(os.environ)
     run_service(
         os.environ,
         register_signal=signal.signal,
         sleep=time.sleep,
         heartbeat=lambda state: print(f"MasterTrd heartbeat: {state}", flush=True),
+        execution_runtime_factory=execution_runtime_factory,
     )
 
 

@@ -4,6 +4,7 @@ from mastertrd.nautilus_paper import probe_nautilus_sandbox_session
 from mastertrd.nautilus_strategy import compile_genome_to_nautilus
 from mastertrd.paper_events import NautilusPaperEventSink
 from mastertrd.paper_session import PaperSessionJournal
+from mastertrd.risk_profiles import build_research_backtest_risk_runtime
 
 
 def test_real_nautilus_position_closed_events_are_recorded_into_paper_journal():
@@ -22,7 +23,11 @@ def test_real_nautilus_position_closed_events_are_recorded_into_paper_journal():
         exit={"kind": "cross_reverse"},
         allow_short=True,
     )
-    compiled = compile_genome_to_nautilus(genome, instrument=instrument)
+    compiled = compile_genome_to_nautilus(
+        genome,
+        instrument=instrument,
+        risk_runtime=build_research_backtest_risk_runtime(),
+    )
     base_ns = 1_700_000_000_000_000_000
     receipt = probe_nautilus_sandbox_session(genome, session_nonce="event-sink-session")
     journal = PaperSessionJournal(receipt, code_hash="code-event-sink-v1", started_ns=base_ns)
@@ -37,7 +42,11 @@ def test_real_nautilus_position_closed_events_are_recorded_into_paper_journal():
             if parent is not None:
                 parent(event)
 
-    strategy = RecordingStrategy(config=compiled.config)
+    strategy = RecordingStrategy(
+        config=compiled.config,
+        genome=genome,
+        risk_runtime=build_research_backtest_risk_runtime(),
+    )
     bar_type = strategy.config.bar_type
     prices = (
         [2100 - i * 2 for i in range(15)]

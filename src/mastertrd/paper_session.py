@@ -14,7 +14,7 @@ from .paper_forward import PaperForwardReport
 
 @dataclass(frozen=True, slots=True)
 class _PaperSessionEvent:
-    kind: Literal["closed_trade", "reconciliation"]
+    kind: Literal["closed_trade", "reconciliation", "market_event"]
     event_id: str
     timestamp_ns: int
     value: float | bool
@@ -38,6 +38,31 @@ class PaperSessionJournal:
         self._event_ids: set[str] = set()
         self._finalized = False
 
+    @property
+    def session_id(self) -> str:
+        return self._receipt.session_id
+
+    @property
+    def strategy_id(self) -> str:
+        return self._receipt.strategy_id
+
+    @property
+    def genome_hash(self) -> str:
+        return self._receipt.genome_hash
+
+    @property
+    def code_hash(self) -> str:
+        return self._code_hash
+
+    @property
+    def latest_timestamp_ns(self) -> int:
+        if self._events:
+            return self._events[-1].timestamp_ns
+        return self._started_ns
+
+    def has_event(self, event_id: str) -> bool:
+        return event_id in self._event_ids
+
     def _append(self, event: _PaperSessionEvent) -> None:
         if self._finalized:
             raise ValueError("paper session is already finalized")
@@ -51,6 +76,9 @@ class PaperSessionJournal:
             raise ValueError("paper session events must be append-only in timestamp order")
         self._events.append(event)
         self._event_ids.add(event.event_id)
+
+    def record_market_event(self, event_id: str, *, timestamp_ns: int) -> None:
+        self._append(_PaperSessionEvent("market_event", event_id, int(timestamp_ns), True))
 
     def record_closed_trade(self, trade_id: str, realized_return: float, *, timestamp_ns: int) -> None:
         value = float(realized_return)
@@ -97,7 +125,11 @@ class PaperSessionJournal:
                 value = raw["value"]
             except (KeyError, TypeError, ValueError) as exc:
                 raise ValueError("paper session state is invalid") from exc
-            if kind == "closed_trade":
+            if kind == "market_event":
+                if value is not True:
+                    raise ValueError("paper session state is invalid")
+                journal.record_market_event(event_id, timestamp_ns=timestamp_ns)
+            elif kind == "closed_trade":
                 journal.record_closed_trade(event_id, float(value), timestamp_ns=timestamp_ns)
             elif kind == "reconciliation":
                 if not isinstance(value, bool):

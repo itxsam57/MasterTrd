@@ -48,7 +48,7 @@ def policy() -> HftStressPolicy:
     )
 
 
-def test_hft_report_produces_all_required_specialist_evidence():
+def test_hft_report_produces_supporting_specialist_evidence_only():
     genome = candidate()
     records = hft_stress_evidence(genome, report(), policy())
 
@@ -60,7 +60,11 @@ def test_hft_report_produces_all_required_specialist_evidence():
     }
     assert all(record.passed for record in records)
     assert all(record.engine == "hftbacktest" for record in records)
+    assert all(record.supporting_only for record in records)
 
+    # Generic ROBUST prerequisites are evaluated before family-specific evidence.
+    # The dedicated real-L2 integration test proves hft_real_l2 remains required
+    # once those generic prerequisites are satisfied.
     decision = evaluate_validated_promotion(
         StrategyState.BACKTESTED,
         StrategyState.ROBUST,
@@ -87,9 +91,10 @@ def test_hft_stress_failure_blocks_its_specialist_record():
     by_type = {record.evidence_type: record for record in records}
     assert by_type["hft_feed_latency_stress"].passed is False
     assert by_type["hft_queue_model"].passed is True
+    assert all(record.supporting_only for record in records)
 
 
-def test_hft_report_is_bound_to_candidate_and_real_hft_engine_identity():
+def test_hft_report_is_bound_to_candidate_and_hft_engine_identity():
     genome = candidate()
     with pytest.raises(ValueError, match="strategy_id"):
         hft_stress_evidence(genome, report(strategy_id="OTHER"), policy())

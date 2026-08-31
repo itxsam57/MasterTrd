@@ -9,6 +9,8 @@ from .contracts import EvaluationResult
 from .genome import StrategyGenome
 from .nautilus_backtest import _build_binance_spot_engine
 from .nautilus_strategy import compile_genome_to_nautilus
+from .risk_profiles import build_research_backtest_risk_runtime
+from .risk_runtime import RiskRuntime
 
 
 def _finite(value: float, default: float = 0.0) -> float:
@@ -63,6 +65,7 @@ def run_binance_spot_evaluation(
     slippage: float = 0.0,
     starting_balances: Sequence[str] = ("100000 USDT",),
     trade_size_override: str | None = None,
+    risk_runtime: RiskRuntime | None = None,
 ) -> EvaluationResult:
     if not dataset_hash or not code_hash:
         raise ValueError("dataset_hash and code_hash are required")
@@ -75,10 +78,15 @@ def run_binance_spot_evaluation(
     if not events:
         raise ValueError("historical data is required")
 
+    # This function is an explicitly historical backtest boundary. It may use the
+    # named simulation profile when callers do not request a stricter research
+    # runtime; the compiler itself never creates or guesses a risk dependency.
+    evaluation_risk = risk_runtime or build_research_backtest_risk_runtime()
     strategy = compile_genome_to_nautilus(
         genome,
         instrument=instrument,
         trade_size_override=trade_size_override,
+        risk_runtime=evaluation_risk,
     )
     engine = _build_binance_spot_engine(
         instrument=instrument,

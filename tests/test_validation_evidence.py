@@ -17,7 +17,13 @@ def genome(family: str = "trend") -> StrategyGenome:
     )
 
 
-def evidence(g: StrategyGenome, kind: str, *, passed: bool = True) -> ValidationEvidence:
+def evidence(
+    g: StrategyGenome,
+    kind: str,
+    *,
+    passed: bool = True,
+    supporting_only: bool = False,
+) -> ValidationEvidence:
     return ValidationEvidence(
         strategy_id=g.strategy_id,
         genome_hash=g.genome_hash,
@@ -28,6 +34,7 @@ def evidence(g: StrategyGenome, kind: str, *, passed: bool = True) -> Validation
         engine_version="1",
         passed=passed,
         metrics={"score": 1.0, "drawdown": -0.05},
+        supporting_only=supporting_only,
     )
 
 
@@ -59,14 +66,15 @@ def test_evidence_hash_is_deterministic_across_metric_order():
     assert a.evidence_hash == b.evidence_hash
 
 
-def test_failed_or_wrong_genome_evidence_is_not_accepted():
+def test_failed_wrong_genome_or_supporting_only_evidence_is_not_accepted():
     g = genome()
     good = evidence(g, "walk_forward")
     failed = evidence(g, "cost_stress", passed=False)
+    supporting = evidence(g, "parameter_stability", supporting_only=True)
     wrong = ValidationEvidence(
         strategy_id=g.strategy_id,
         genome_hash="other-genome",
-        evidence_type="parameter_stability",
+        evidence_type="asset_transfer",
         dataset_hash="dataset-sha256",
         code_hash="code-sha256",
         engine="mastertrd-test",
@@ -74,7 +82,7 @@ def test_failed_or_wrong_genome_evidence_is_not_accepted():
         passed=True,
         metrics={"score": 1.0},
     )
-    assert validated_evidence_types(g, [good, failed, wrong]) == {"walk_forward"}
+    assert validated_evidence_types(g, [good, failed, supporting, wrong]) == {"walk_forward"}
 
 
 def test_trend_strategy_requires_real_robustness_records_for_promotion():
@@ -88,7 +96,7 @@ def test_trend_strategy_requires_real_robustness_records_for_promotion():
     assert decision.allowed
 
 
-def test_hft_strategy_cannot_become_robust_without_hft_specialist_evidence():
+def test_hft_strategy_cannot_become_robust_without_real_l2_evidence():
     g = genome("scalping")
     generic = generic_robust_records(g)
     denied = evaluate_validated_promotion(
@@ -98,19 +106,19 @@ def test_hft_strategy_cannot_become_robust_without_hft_specialist_evidence():
         generic,
     )
     assert not denied.allowed
-    assert denied.missing_evidence == {
-        "hft_queue_model",
-        "hft_feed_latency_stress",
-        "hft_order_latency_stress",
-        "spread_stress",
-    }
+    assert denied.missing_evidence == {"hft_real_l2"}
 
-    complete = generic + [
-        evidence(g, "hft_queue_model"),
-        evidence(g, "hft_feed_latency_stress"),
-        evidence(g, "hft_order_latency_stress"),
-        evidence(g, "spread_stress"),
-    ]
+    synthetic = generic + [evidence(g, "hft_real_l2", supporting_only=True)]
+    synthetic_denied = evaluate_validated_promotion(
+        StrategyState.BACKTESTED,
+        StrategyState.ROBUST,
+        g,
+        synthetic,
+    )
+    assert not synthetic_denied.allowed
+    assert synthetic_denied.missing_evidence == {"hft_real_l2"}
+
+    complete = generic + [evidence(g, "hft_real_l2")]
     assert evaluate_validated_promotion(
         StrategyState.BACKTESTED,
         StrategyState.ROBUST,

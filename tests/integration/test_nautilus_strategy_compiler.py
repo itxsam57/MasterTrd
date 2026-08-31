@@ -2,6 +2,7 @@ import pytest
 
 from mastertrd.genome import StrategyGenome
 from mastertrd.nautilus_strategy import compile_genome_to_nautilus
+from mastertrd.risk_profiles import build_research_backtest_risk_runtime
 
 
 def ema_genome(*, family: str = "trend") -> StrategyGenome:
@@ -27,7 +28,11 @@ def test_bar_genome_compiles_to_stable_nautilus_strategy():
     from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
     instrument = TestInstrumentProvider.ethusdt_binance()
-    strategy = compile_genome_to_nautilus(ema_genome(), instrument=instrument)
+    strategy = compile_genome_to_nautilus(
+        ema_genome(),
+        instrument=instrument,
+        risk_runtime=build_research_backtest_risk_runtime(),
+    )
 
     assert isinstance(strategy, EMACross)
     assert strategy.config.instrument_id == instrument.id
@@ -63,4 +68,8 @@ def test_compiler_rejects_invalid_ema_periods():
         allow_short=genome.allow_short,
     )
     with pytest.raises(ValueError, match="fast_period must be less than slow_period"):
-        compile_genome_to_nautilus(invalid, instrument=TestInstrumentProvider.ethusdt_binance())
+        compile_genome_to_nautilus(
+            invalid,
+            instrument=TestInstrumentProvider.ethusdt_binance(),
+            risk_runtime=build_research_backtest_risk_runtime(),
+        )

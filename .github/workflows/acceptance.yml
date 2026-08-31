@@ -1,0 +1,103 @@
+name: Completion Acceptance
+
+on:
+  push:
+    paths:
+      - 'MASTER_PLAN.md'
+      - 'uv.lock'
+      - 'src/**'
+      - 'tests/**'
+      - 'README.md'
+      - 'docs/ACCEPTANCE_REPORT.md'
+      - '.github/workflows/acceptance.yml'
+      - 'docs/superpowers/plans/**'
+  pull_request:
+    paths:
+      - 'MASTER_PLAN.md'
+      - 'uv.lock'
+      - 'src/**'
+      - 'tests/**'
+      - 'README.md'
+      - 'docs/ACCEPTANCE_REPORT.md'
+      - '.github/workflows/acceptance.yml'
+      - 'docs/superpowers/plans/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MASTERTRD_ACCEPTANCE_TESTNET_SMOKE: BLOCKED_OWNER_INPUT
+  MASTERTRD_PROMOTION_GOVERNOR_ALLOWED: 'false'
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install uv
+        run: python -m pip install --disable-pip-version-check uv
+      - name: Verify locked full stack
+        run: |
+          uv lock --check
+          uv sync --locked --all-extras
+          uv pip check
+          echo 'MASTERTRD_ACCEPTANCE_LOCKED_INSTALL=PASS' >> "$GITHUB_ENV"
+      - name: Run cumulative tests
+        run: |
+          uv run pytest -q
+          echo 'MASTERTRD_ACCEPTANCE_CUMULATIVE_TESTS_AND_COVERAGE=PASS' >> "$GITHUB_ENV"
+      - name: Verify risk reconciliation and kill evidence
+        run: |
+          uv run pytest -q \
+            tests/test_live_evidence.py \
+            tests/test_live_readiness.py \
+            tests/test_risk_runtime.py \
+            tests/test_reconciliation.py \
+            tests/integration/test_risk_execution_hook.py \
+            tests/integration/test_reconciliation_evidence.py \
+            tests/integration/test_kill_switch_evidence.py
+          echo 'MASTERTRD_ACCEPTANCE_RISK_REVIEW=PASS' >> "$GITHUB_ENV"
+          echo 'MASTERTRD_ACCEPTANCE_RECONCILIATION_TEST=PASS' >> "$GITHUB_ENV"
+          echo 'MASTERTRD_ACCEPTANCE_KILL_SWITCH_TEST=PASS' >> "$GITHUB_ENV"
+      - name: Public repo safety proof
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          python -m pip install --disable-pip-version-check pip-audit detect-secrets
+          detect-secrets scan --all-files --exclude-files '(^|/)(\.git|\.venv)(/|$)' > artifacts/detect-secrets.json
+          if git grep -nEi '(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|aws_secret_access_key[[:space:]]*=[[:space:]]*["'"'][^"'"']{8,}["'"']|api[_-]?secret[[:space:]]*=[[:space:]]*["'"'][^"'"']{16,}["'"']|seed phrase[[:space:]]*=[[:space:]]*["'"'][^"'"']+["'"'])' -- 'src/**' ':!*.example' ':!MASTER_PLAN.md'; then
+            echo 'Potential committed credential material detected'
+            exit 1
+          fi
+          python -m pip install -e '.[dev]'
+          pip-audit --skip-editable
+          echo 'MASTERTRD_ACCEPTANCE_PUBLIC_REPO_SAFETY=PASS' >> "$GITHUB_ENV"
+      - name: Verify clean exact-SHA checkout
+        shell: bash
+        run: |
+          git diff --exit-code
+          git diff --cached --exit-code
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          echo 'MASTERTRD_ACCEPTANCE_CLEAN_CHECKOUT=PASS' >> "$GITHUB_ENV"
+      - name: Write exact-head acceptance artifacts
+        if: always()
+        run: |
+          mkdir -p artifacts
+          uv run python -m mastertrd.acceptance . --write artifacts/acceptance.json || true
+          uv run python -m mastertrd.acceptance . --write artifacts/ACCEPTANCE_REPORT.md || true
+          printf '%s\n' "${GITHUB_SHA}" > artifacts/commit-sha.txt
+      - name: Upload acceptance artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mastertrd-acceptance-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14

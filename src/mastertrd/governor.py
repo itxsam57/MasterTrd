@@ -23,7 +23,12 @@ _REQUIRED_EVIDENCE: Mapping[StrategyState, frozenset[str]] = {
     StrategyState.PAPER: frozenset({"paper_started"}),
     StrategyState.CHALLENGER: frozenset({"paper_minimum_evidence"}),
     StrategyState.CHAMPION: frozenset({"champion_comparison"}),
-    StrategyState.LIVE_ELIGIBLE: frozenset({"risk_review", "reconciliation_test", "kill_switch_test"}),
+    StrategyState.LIVE_ELIGIBLE: frozenset({
+        "risk_review",
+        "reconciliation_test",
+        "kill_switch_test",
+        "testnet_smoke",
+    }),
 }
 
 _NEXT: Mapping[StrategyState, StrategyState] = {
@@ -65,7 +70,8 @@ def evaluate_validated_promotion(
     genome: StrategyGenome,
     records: Iterable[ValidationEvidence],
 ) -> PromotionDecision:
-    evidence = validated_evidence_types(genome, records)
+    record_tuple = tuple(records)
+    evidence = validated_evidence_types(genome, record_tuple)
     base = evaluate_promotion(current, target, evidence)
     if not base.allowed:
         return base
@@ -75,4 +81,9 @@ def evaluate_validated_promotion(
     missing = frozenset(extra_required.difference(evidence))
     if missing:
         return PromotionDecision(False, target, missing, "family-specific validation evidence missing")
+    if target is StrategyState.LIVE_ELIGIBLE:
+        from .live_readiness import live_evidence_bundle_identity_ok
+
+        if not live_evidence_bundle_identity_ok(genome, record_tuple):
+            return PromotionDecision(False, target, reason="live evidence identity mismatch")
     return PromotionDecision(True, target, reason="validated promotion evidence satisfied")

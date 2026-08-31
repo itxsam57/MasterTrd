@@ -18,6 +18,7 @@ def build_nautilus_binance_configs(
     *,
     profile: BinanceExecutionProfile,
     account_id: str,
+    instrument_ids: frozenset[Any] | None = None,
 ) -> NautilusBinanceConfigs:
     if not account_id:
         raise ValueError("account_id is required")
@@ -30,6 +31,7 @@ def build_nautilus_binance_configs(
     from nautilus_trader.adapters.binance.common.enums import BinanceEnvironment
     from nautilus_trader.adapters.binance.config import BinanceDataClientConfig
     from nautilus_trader.adapters.binance.config import BinanceExecClientConfig
+    from nautilus_trader.config import InstrumentProviderConfig
 
     account_type_map = {
         BinanceProduct.SPOT: BinanceAccountType.SPOT,
@@ -47,17 +49,25 @@ def build_nautilus_binance_configs(
     except KeyError as exc:
         raise ValueError("unsupported Binance product or environment") from exc
 
+    provider = (
+        InstrumentProviderConfig(load_ids=instrument_ids)
+        if instrument_ids
+        else InstrumentProviderConfig()
+    )
     data = BinanceDataClientConfig(
         account_type=account_type,
         environment=environment,
         api_key=profile.api_key,
         api_secret=profile.api_secret,
+        instrument_provider=provider,
     )
     execution = BinanceExecClientConfig(
         account_type=account_type,
         environment=environment,
         api_key=profile.api_key,
         api_secret=profile.api_secret,
+        instrument_provider=provider,
+        max_retries=3,
     )
     return NautilusBinanceConfigs(
         data=data,
