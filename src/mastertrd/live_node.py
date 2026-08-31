@@ -12,6 +12,7 @@ from typing import Any
 from .contracts import RuntimeMode
 from .credentials import load_binance_credentials
 from .runtime import RuntimeConfig
+from .runtime_factory import build_execution_runtime
 
 
 class NodeReadiness(StrEnum):
@@ -119,13 +120,12 @@ def run_service(
 
 
 def main() -> None:
-    execution_runtime_factory = load_execution_runtime_factory(os.environ)
     run_service(
         os.environ,
         register_signal=signal.signal,
         sleep=time.sleep,
         heartbeat=lambda state: print(f"MasterTrd heartbeat: {state}", flush=True),
-        execution_runtime_factory=execution_runtime_factory,
+        execution_runtime_factory=build_execution_runtime,
     )
 
 
