@@ -52,6 +52,12 @@ def _bar_type(instrument_id: str, timeframe: str):
     )
 
 
+def _require_risk_runtime(risk_runtime: RiskRuntime | None) -> RiskRuntime:
+    if risk_runtime is None:
+        raise ValueError("risk_runtime is required")
+    return risk_runtime
+
+
 def _compile_ema_baseline(
     genome: StrategyGenome,
     *,
@@ -74,6 +80,7 @@ def _compile_ema_baseline(
         raise ValueError("EMA periods must be positive integers")
     if fast_period >= slow_period:
         raise ValueError("fast_period must be less than slow_period")
+    required_risk = _require_risk_runtime(risk_runtime)
 
     from nautilus_trader.examples.strategies.ema_cross import EMACrossConfig
 
@@ -92,7 +99,7 @@ def _compile_ema_baseline(
     return RiskManagedEMACross(
         config=config,
         genome=genome,
-        risk_runtime=risk_runtime,
+        risk_runtime=required_risk,
     )
 
 
@@ -137,6 +144,7 @@ def compile_genome_to_nautilus(
         missing = [key for key in genome.instruments if key not in instrument_map]
         if missing:
             raise ValueError(f"instrument_map missing: {', '.join(missing)}")
+        required_risk = _require_risk_runtime(risk_runtime)
 
         from .nautilus_multileg_strategy import (
             GeneratedMultiLegStrategy,
@@ -154,7 +162,7 @@ def compile_genome_to_nautilus(
         return GeneratedMultiLegStrategy(
             config=config,
             genome=genome,
-            risk_runtime=risk_runtime,
+            risk_runtime=required_risk,
         )
 
     if tuple(genome.instruments) != (instrument.id.value,):
@@ -163,6 +171,7 @@ def compile_genome_to_nautilus(
     if genome.family == "options":
         if genome.filters.get("defined_risk_only") is not True:
             raise ValueError("options compilation requires defined_risk_only")
+        required_risk = _require_risk_runtime(risk_runtime)
         from .nautilus_options_strategy import GeneratedOptionsStrategy, GeneratedOptionsStrategyConfig
 
         config = GeneratedOptionsStrategyConfig(
@@ -176,9 +185,10 @@ def compile_genome_to_nautilus(
         return GeneratedOptionsStrategy(
             config=config,
             genome=genome,
-            risk_runtime=risk_runtime,
+            risk_runtime=required_risk,
         )
 
+    required_risk = _require_risk_runtime(risk_runtime)
     from .nautilus_bar_strategy import GeneratedBarStrategy, GeneratedBarStrategyConfig
 
     config = GeneratedBarStrategyConfig(
@@ -191,5 +201,5 @@ def compile_genome_to_nautilus(
     return GeneratedBarStrategy(
         config=config,
         genome=genome,
-        risk_runtime=risk_runtime,
+        risk_runtime=required_risk,
     )
