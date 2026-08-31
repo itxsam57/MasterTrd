@@ -89,7 +89,16 @@ def atr(bars: Sequence[MarketBar], period: int) -> float:
     return current
 
 
-def _zscore(value: float, history: Sequence[float]) -> float:
+def donchian_extrema(bars: Sequence[MarketBar]) -> tuple[float, float]:
+    if not bars:
+        raise ValueError("Donchian extrema require market bars")
+    return (
+        max(float(bar.high) for bar in bars),
+        min(float(bar.low) for bar in bars),
+    )
+
+
+def zscore(value: float, history: Sequence[float]) -> float:
     if len(history) < 2:
         raise ValueError("z-score history requires at least two values")
     mean = fmean(float(item) for item in history)
@@ -139,8 +148,7 @@ def evaluate_bar_signal(genome: StrategyGenome, bars: Sequence[MarketBar]) -> Si
         if window <= 0 or len(bars) <= window:
             return _flat("donchian_warmup")
         prior = bars[-window - 1 : -1]
-        upper = max(float(bar.high) for bar in prior)
-        lower = min(float(bar.low) for bar in prior)
+        upper, lower = donchian_extrema(prior)
         current = float(bars[-1].close)
         if current > upper:
             return SignalDecision(SignalDirection.LONG, "donchian_breakout", current - upper)
@@ -153,7 +161,7 @@ def evaluate_bar_signal(genome: StrategyGenome, bars: Sequence[MarketBar]) -> Si
         threshold = float(genome.entry["z"])
         if window < 2 or len(closes) <= window:
             return _flat("zscore_warmup")
-        value = _zscore(closes[-1], closes[-window - 1 : -1])
+        value = zscore(closes[-1], closes[-window - 1 : -1])
         if value <= -threshold:
             return SignalDecision(SignalDirection.LONG, "zscore_reversion", -value)
         if value >= threshold:
@@ -244,7 +252,7 @@ def evaluate_multileg_signal(
         if count <= window:
             return _flat("spread_warmup")
         spreads = [float(left[-count + index].close) - float(right[-count + index].close) for index in range(count)]
-        value = _zscore(spreads[-1], spreads[-window - 1 : -1])
+        value = zscore(spreads[-1], spreads[-window - 1 : -1])
         if value >= threshold:
             return SignalDecision(
                 SignalDirection.SHORT,
