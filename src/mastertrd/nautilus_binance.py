@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable
+from threading import Event, Thread
+from typing import Any, Callable, Iterable
 
 from .execution import BinanceExecutionProfile
 from .venue import BinanceProduct
@@ -121,3 +122,68 @@ def build_nautilus_binance_node_config(
         timeout_disconnection=10.0,
         timeout_post_stop=2.0,
     )
+
+
+def build_nautilus_binance_trading_node(*, config: Any, strategy: Any | None = None):
+    """Construct and build the pinned Nautilus Binance live node exactly once."""
+    from nautilus_trader.adapters.binance import BINANCE
+    from nautilus_trader.adapters.binance import BinanceLiveDataClientFactory
+    from nautilus_trader.adapters.binance import BinanceLiveExecClientFactory
+    from nautilus_trader.live.node import TradingNode
+
+    node = TradingNode(config=config)
+    if strategy is not None:
+        node.trader.add_strategy(strategy)
+    node.add_data_client_factory(BINANCE, BinanceLiveDataClientFactory)
+    node.add_exec_client_factory(BINANCE, BinanceLiveExecClientFactory)
+    node.build()
+    return node
+
+
+class NautilusLiveExecutionRuntime:
+    """Adapt a blocking Nautilus ``TradingNode`` to MasterTrd's service boundary."""
+
+    def __init__(self, node: Any, *, stop_poll_seconds: float = 0.1) -> None:
+        if stop_poll_seconds <= 0.0:
+            raise ValueError("stop_poll_seconds must be positive")
+        self._node = node
+        self._stop_poll_seconds = float(stop_poll_seconds)
+        self._closed = False
+
+    def _request_stop(self) -> None:
+        loop = self._node.get_event_loop()
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(self._node.stop)
+        else:
+            self._node.stop()
+
+    def run(self, *, stop_requested: Callable[[], bool]) -> None:
+        watcher_done = Event()
+
+        def watch_for_stop() -> None:
+            while not watcher_done.wait(self._stop_poll_seconds):
+                if stop_requested():
+                    self._request_stop()
+                    return
+
+        watcher = Thread(
+            target=watch_for_stop,
+            name="mastertrd-nautilus-stop-watchdog",
+            daemon=True,
+        )
+        watcher.start()
+        try:
+            self._node.run(raise_exception=True)
+        finally:
+            watcher_done.set()
+            watcher.join(timeout=max(1.0, self._stop_poll_seconds * 2.0))
+            if self._node.is_running():
+                self._request_stop()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        if self._node.is_running():
+            self._request_stop()
+        self._node.dispose()
+        self._closed = True
