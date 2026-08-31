@@ -129,3 +129,22 @@ def test_research_brain_forwards_persisted_specialist_evidence_into_robustness(m
     )
 
     assert seen["specialist_evidence"] == (evidence,)
+
+
+def test_persisted_specialist_evidence_round_trips_validation_contract():
+    evidence = ValidationEvidence(
+        strategy_id="specialist-roundtrip",
+        genome_hash="a" * 64,
+        evidence_type="hft_latency_stress",
+        dataset_hash="specialist-dataset-v2",
+        code_hash="code-v2",
+        engine="hftbacktest",
+        engine_version="2.4.4",
+        passed=True,
+        metrics={"p99_latency_ms": 1.25, "fill_ratio": 0.98},
+        supporting_only=True,
+    )
+
+    restored = research_brain._validation_evidence_from_payload(asdict(evidence))
+
+    assert restored == evidence
