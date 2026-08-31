@@ -56,3 +56,20 @@ def test_compiler_accepts_explicit_risk_runtime_dependency():
         risk_runtime=risk,
     )
     assert strategy.risk_runtime is risk
+
+
+def test_direct_risk_managed_strategy_construction_requires_runtime():
+    from mastertrd.nautilus_risk_hook import RiskManagedEMACross
+    from nautilus_trader.test_kit.providers import TestInstrumentProvider
+
+    instrument = TestInstrumentProvider.ethusdt_binance()
+    candidate = genome(instrument.id.value)
+    compiled = compile_genome_to_nautilus(
+        candidate,
+        instrument=instrument,
+        trade_size="0.1",
+        risk_runtime=explicit_research_risk(),
+    )
+
+    with pytest.raises(ValueError, match="risk_runtime is required"):
+        RiskManagedEMACross(config=compiled.config, genome=candidate)
