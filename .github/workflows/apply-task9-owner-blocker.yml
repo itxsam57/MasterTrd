@@ -1,0 +1,57 @@
+name: Apply Task9 Owner Blocker
+
+on:
+  push:
+    branches:
+      - v2/plan-closure-20260831
+    paths:
+      - .github/workflows/apply-task9-owner-blocker.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v2/plan-closure-20260831
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Apply guarded owner-blocker ordering
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/mastertrd/testnet_smoke.py')
+          text = path.read_text(encoding='utf-8')
+          anchor = '''    rules = fetch_spot_testnet_rules(symbol)\n    if manifest is not None and rules.min_notional > manifest.order_notional_cap:\n        raise RuntimeError("venue minimum notional exceeds candidate order_notional_cap")\n'''
+          replacement = '''    if manifest is not None:\n        try:\n            load_binance_credentials(RuntimeMode.TESTNET, env)\n        except ValueError:\n            evidence = run_testnet_smoke(\n                candidate,\n                environ=env,\n                dataset_hash=manifest.dataset_hash,\n                code_hash=manifest.code_hash,\n                runtime_mode=RuntimeMode.TESTNET,\n                venue_minimum_notional=float(manifest.order_notional_cap),\n                submit_test_order=None,\n            )\n            payload = asdict(evidence)\n            payload["symbol"] = symbol\n            payload["runtime_mode"] = RuntimeMode.TESTNET.value\n            payload["live_enabled"] = False\n            payload["product"] = manifest.product.value\n            payload["probe_instrument"] = manifest.probe_instrument\n            payload["order_notional_cap"] = str(manifest.order_notional_cap)\n            payload["blocker"] = "BLOCKED_OWNER_INPUT"\n            return payload\n\n    rules = fetch_spot_testnet_rules(symbol)\n    if manifest is not None and rules.min_notional > manifest.order_notional_cap:\n        raise RuntimeError("venue minimum notional exceeds candidate order_notional_cap")\n'''
+          if anchor not in text:
+              raise SystemExit('guard failed: expected TESTNET rule-fetch anchor missing or already changed')
+          path.write_text(text.replace(anchor, replacement, 1), encoding='utf-8')
+          PY
+      - name: Install locked stack
+        run: |
+          python -m pip install --disable-pip-version-check 'uv==0.12.7'
+          uv lock --check
+          uv sync --locked --all-extras
+          uv pip check
+      - name: Verify focused GREEN
+        run: |
+          uv run pytest -q \
+            tests/integration/test_candidate_testnet_bundle.py \
+            tests/integration/test_candidate_testnet_runner.py \
+            tests/test_testnet_smoke_runner.py
+      - name: Commit real code and remove one-shot workflow
+        run: |
+          rm .github/workflows/apply-task9-owner-blocker.yml
+          git config user.name 'mastertrd-autopilot'
+          git config user.email 'mastertrd-autopilot@users.noreply.github.com'
+          git add src/mastertrd/testnet_smoke.py .github/workflows/apply-task9-owner-blocker.yml
+          git commit -m 'fix(testnet): emit owner blocker before network'
+          git push origin HEAD:v2/plan-closure-20260831
