@@ -55,10 +55,10 @@ def test_markdown_report_records_identity_status_and_owner_blocker(tmp_path: Pat
 
     assert written == output
     text = output.read_text(encoding="utf-8")
-    assert report.implementation_status is AcceptanceStatus.COMPLETE
+    assert report.implementation_status is AcceptanceStatus.PROCESS_READY
     assert f"`{report.commit_sha}`" in text
     assert f"`{report.lock_hash}`" in text
-    assert "Implementation status: `COMPLETE`" in text
+    assert "Implementation status: `PROCESS_READY`" in text
     assert "LIVE eligible: `false`" in text
     assert "testnet_smoke" in text
     assert "BLOCKED_OWNER_INPUT" in text
@@ -86,7 +86,7 @@ def test_markdown_cli_uses_verified_receipts_and_never_promotes_blocked_testnet(
 
     assert exit_code == 0
     text = output.read_text(encoding="utf-8")
-    assert "Implementation status: `COMPLETE`" in text
+    assert "Implementation status: `PROCESS_READY`" in text
     assert "LIVE eligible: `false`" in text
     assert "testnet_smoke" in text
     assert "BLOCKED_OWNER_INPUT" in text

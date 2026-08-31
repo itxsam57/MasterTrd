@@ -29,7 +29,7 @@ MANDATORY_LIVE_EVIDENCE: tuple[str, ...] = (
 
 
 class AcceptanceStatus(StrEnum):
-    COMPLETE = "COMPLETE"
+    PROCESS_READY = "PROCESS_READY"
     FAILED = "FAILED"
 
 
@@ -149,7 +149,7 @@ def run_full_acceptance(
         commit_sha=str(commit_sha),
         lock_hash=_lock_hash(root),
         implementation_status=(
-            AcceptanceStatus.COMPLETE
+            AcceptanceStatus.PROCESS_READY
             if implementation_complete
             else AcceptanceStatus.FAILED
         ),
@@ -258,7 +258,7 @@ def write_acceptance_markdown(output: Path, report: AcceptanceReport) -> Path:
             "",
             "## Safety conclusion",
             "",
-            "LIVE remains disabled by default. Implementation completion does not activate LIVE trading. ",
+            "LIVE remains disabled by default. Process readiness does not activate LIVE trading. ",
             "A real TESTNET smoke, coherent live-evidence bundle, Promotion Governor approval, and deliberate owner-controlled LIVE configuration are still required before any LIVE activation.",
             "",
         ]
@@ -385,7 +385,7 @@ def _report_from_environment(repo_root: Path) -> AcceptanceReport:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run MasterTrd completion acceptance checks")
+    parser = argparse.ArgumentParser(description="Run MasterTrd plan-closure acceptance checks")
     parser.add_argument("repo_root", nargs="?", default=".")
     parser.add_argument("--write", default="artifacts/acceptance.json")
     args = parser.parse_args(argv)
@@ -395,7 +395,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if output.suffix.lower() in {".md", ".markdown"}:
         report = _report_from_environment(root)
         write_acceptance_markdown(output, report)
-        return 0 if report.implementation_status is AcceptanceStatus.COMPLETE else 1
+        return 0 if report.implementation_status is AcceptanceStatus.PROCESS_READY else 1
 
     checks = run_static_acceptance(root)
     write_acceptance_json(output, checks)

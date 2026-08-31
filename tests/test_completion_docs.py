@@ -15,7 +15,7 @@ def test_checked_in_acceptance_snapshot_is_explicit_and_fail_closed() -> None:
 
     assert re.search(r"Source commit SHA: `[0-9a-f]{40}`", text)
     assert re.search(r"Lock SHA-256: `[0-9a-f]{64}`", text)
-    assert "Implementation status: `COMPLETE`" in text
+    assert "Implementation status: `PROCESS_READY`" in text
     assert "LIVE eligible: `false`" in text
     assert "Promotion Governor approved: `false`" in text
 
@@ -42,7 +42,7 @@ def test_readme_distinguishes_implementation_completion_from_live_activation() -
 
     assert "mastertrd is not yet complete" not in lower
     assert "implementation status" in lower
-    assert "complete" in lower
+    assert "process_ready" in lower
     assert "docs/acceptance_report.md" in lower
     assert "blocked_owner_input" in lower
     assert "testnet" in lower

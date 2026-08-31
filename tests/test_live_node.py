@@ -6,7 +6,6 @@ import mastertrd.live_node as live_node
 from mastertrd.contracts import RuntimeMode
 from mastertrd.live_node import (
     NodeReadiness,
-    load_execution_runtime_factory,
     preflight_node,
     run_node,
     run_service,
@@ -151,37 +150,11 @@ def test_run_service_can_build_concrete_execution_runtime_from_factory():
     assert signal.SIGINT in handlers and signal.SIGTERM in handlers
 
 
-def test_production_factory_loader_fails_closed_when_unconfigured_or_invalid():
-    with pytest.raises(RuntimeError, match="MASTERTRD_EXECUTION_FACTORY"):
-        load_execution_runtime_factory({})
-    for target in ("bad-format", ":factory", "module:", "module:function:extra"):
-        with pytest.raises(ValueError, match="module:function"):
-            load_execution_runtime_factory({"MASTERTRD_EXECUTION_FACTORY": target})
-
-
-def test_production_factory_loader_resolves_callable_and_rejects_non_callable():
-    factory = load_execution_runtime_factory(
-        {"MASTERTRD_EXECUTION_FACTORY": "mastertrd.runtime:RuntimeConfig"}
-    )
-    assert factory is RuntimeConfig
-
-    with pytest.raises(TypeError, match="callable factory"):
-        load_execution_runtime_factory(
-            {"MASTERTRD_EXECUTION_FACTORY": "mastertrd.live_node:signal"}
-        )
-
-
 def test_main_uses_repository_factory_without_external_factory_configuration(monkeypatch):
     sentinel_factory = object()
     calls: list[tuple[object, object]] = []
 
-    monkeypatch.delenv("MASTERTRD_EXECUTION_FACTORY", raising=False)
     monkeypatch.setattr(live_node, "build_execution_runtime", sentinel_factory, raising=False)
-    monkeypatch.setattr(
-        live_node,
-        "load_execution_runtime_factory",
-        lambda _environ: pytest.fail("production main must not load arbitrary execution factory"),
-    )
 
     def fake_run_service(environ, **kwargs):
         calls.append((environ, kwargs["execution_runtime_factory"]))

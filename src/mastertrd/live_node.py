@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from enum import StrEnum
-from importlib import import_module
 import os
 import signal
 import time
@@ -35,31 +34,6 @@ def preflight_node(runtime: RuntimeConfig, environ: Mapping[str, str]) -> NodeRe
     if runtime.mode is RuntimeMode.LIVE:
         return NodeReadiness.LIVE_READY
     return NodeReadiness.EXCHANGE_READY
-
-
-def load_execution_runtime_factory(
-    environ: Mapping[str, str],
-) -> Callable[[RuntimeConfig, Mapping[str, str]], Any]:
-    target = environ.get("MASTERTRD_EXECUTION_FACTORY", "").strip()
-    if not target:
-        raise RuntimeError(
-            "MASTERTRD_EXECUTION_FACTORY must be configured for production execution"
-        )
-
-    module_name, separator, function_name = target.partition(":")
-    if (
-        separator != ":"
-        or not module_name.strip()
-        or not function_name.strip()
-        or ":" in function_name
-    ):
-        raise ValueError("MASTERTRD_EXECUTION_FACTORY must use module:function format")
-
-    module = import_module(module_name.strip())
-    factory = getattr(module, function_name.strip(), None)
-    if not callable(factory):
-        raise TypeError("MASTERTRD_EXECUTION_FACTORY must reference a callable factory")
-    return factory
 
 
 def run_node(

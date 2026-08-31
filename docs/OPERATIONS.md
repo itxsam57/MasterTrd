@@ -26,7 +26,6 @@ The repository is deployable without embedding any secret, but an actual Oracle 
 
 The host itself requires `/etc/mastertrd/mastertrd.env`, owned by root and not stored in git. Set only the credentials required for the runtime mode being used. Relevant names are:
 
-- `MASTERTRD_EXECUTION_FACTORY=<python.module:callable>` for the concrete persistent execution runtime factory. `mastertrd.live_node` deliberately refuses production startup without it.
 - DEMO: `BINANCE_DEMO_API_KEY`, `BINANCE_DEMO_API_SECRET`, `BINANCE_DEMO_ACCOUNT_ID`.
 - TESTNET: `BINANCE_TESTNET_API_KEY`, `BINANCE_TESTNET_API_SECRET`, `BINANCE_TESTNET_ACCOUNT_ID`.
 - LIVE: `BINANCE_LIVE_API_KEY`, `BINANCE_LIVE_API_SECRET`, `BINANCE_LIVE_ACCOUNT_ID`.
@@ -53,7 +52,7 @@ $env:LIVE_TRADING_ENABLED = "false"
 $env:ORACLE_ENABLED = "false"
 ```
 
-`python -m mastertrd.live_node` is intentionally fail-closed unless `MASTERTRD_EXECUTION_FACTORY` names a concrete callable factory. Do not insert a dummy factory just to make the node stay alive.
+`python -m mastertrd.live_node` uses the repository-owned `build_execution_runtime` factory. PAPER needs no exchange execution credential; DEMO/TESTNET/LIVE still fail closed on their mode-specific credential and safety gates.
 
 ## Linux production node
 
@@ -71,7 +70,7 @@ The service uses `Restart=on-failure`, `NoNewPrivileges=true`, a restrictive uma
 
 1. Create the GitHub Environment `oracle` and add the exact owner inputs above.
 2. Keep its `ORACLE_ENABLED` variable false until the VM address, SSH key, and pinned known-host entry are verified.
-3. On the VM, create/edit `/etc/mastertrd/mastertrd.env`. Start from the generated template, then set `MASTERTRD_EXECUTION_FACTORY` and only the credentials required for the chosen non-LIVE mode.
+3. On the VM, create/edit `/etc/mastertrd/mastertrd.env`. Start from the generated template, then set only the runtime flags and mode-specific credentials required for the chosen non-LIVE mode.
 4. Run and validate PAPER or DEMO first.
 5. Set the host file to `ORACLE_ENABLED=true` only after the preceding checks are complete.
 6. Set GitHub Environment variable `ORACLE_ENABLED=true` and manually dispatch **Oracle Deploy**. There is no schedule, push, or automatic LIVE deployment trigger.
@@ -89,7 +88,7 @@ MASTERTRD_MODE=PAPER
 LIVE_TRADING_ENABLED=false
 ```
 
-PAPER never requires exchange execution credentials. Use it for persistent runtime recovery, journaling, reconciliation logic, and forward-paper evidence. The concrete execution factory still must be configured for `mastertrd.live_node` CLI service operation.
+PAPER never requires exchange execution credentials. Use it for persistent runtime recovery, journaling, reconciliation logic, and forward-paper evidence. `mastertrd.live_node` constructs the canonical repository-owned PAPER runtime directly.
 
 ### DEMO
 

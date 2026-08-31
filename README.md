@@ -13,11 +13,11 @@ Autonomous quantitative research, validation, paper/demo/testnet, and controlled
 
 ## Current implementation status
 
-**Implementation status: COMPLETE.** The end-to-end completion track in `docs/superpowers/plans/2026-08-30-mastertrd-full-completion.md` has reached its cumulative acceptance phase, and the verified implementation baseline is recorded in `docs/ACCEPTANCE_REPORT.md`.
+**Implementation status: PROCESS_READY.** The repository-owned research, PAPER, DEMO/TESTNET, risk, recovery, specialist, and evidence paths in `docs/superpowers/plans/2026-08-31-mastertrd-v2-plan-closure.md` are implemented and covered by cumulative acceptance; owner-controlled external receipts are tracked separately in `docs/ACCEPTANCE_REPORT.md`.
 
 The checked-in acceptance snapshot records verified historical-data ingestion, family-aware execution compilation, research screening/optimization/evolution, specialist statistical/regime/portfolio validation, the autonomous research brain, execution-risk wiring, persistent paper/demo/testnet runtime and recovery, real L2/HFT validation, live-readiness evidence production, autonomous workflows, Oracle/local deployment packaging, and exact-SHA acceptance.
 
-Implementation completion is deliberately separate from LIVE activation. The real `testnet_smoke` evidence is currently `BLOCKED_OWNER_INPUT` until approved Binance TESTNET credentials/account identity are supplied through the protected `testnet` environment. Therefore LIVE remains disabled and the Promotion Governor has not approved `LIVE_ELIGIBLE`.
+Process readiness is deliberately separate from LIVE activation. The real `testnet_smoke` evidence is currently `BLOCKED_OWNER_INPUT` until approved Binance TESTNET credentials/account identity are supplied through the protected `testnet` environment. Therefore LIVE remains disabled and the Promotion Governor has not approved `LIVE_ELIGIBLE`.
 
 The `Completion Acceptance` workflow produces the canonical exact-head acceptance artifact for every relevant branch change. The checked-in `docs/ACCEPTANCE_REPORT.md` is a provenance snapshot of the last fully verified implementation baseline; it does not replace the exact-head workflow artifact.
 
