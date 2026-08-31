@@ -10,6 +10,12 @@ from .risk_runtime import OrderIntent, RiskRuntime
 
 
 def default_nautilus_risk_limits() -> RiskLimits:
+    """Return the isolated research/backtest risk profile.
+
+    These deliberately broad limits preserve historical research behavior while
+    still forcing every executable strategy through RiskRuntime. Live/demo/testnet
+    callers must inject their own environment-specific runtime instead.
+    """
     return RiskLimits(
         max_order_notional=1e12,
         max_symbol_exposure=1e12,
@@ -26,6 +32,11 @@ def default_nautilus_risk_limits() -> RiskLimits:
         max_api_latency_ms=1_000_000_000.0,
         max_reconciliation_age_seconds=1_000_000_000.0,
     )
+
+
+def build_research_nautilus_risk_runtime() -> RiskRuntime:
+    """Build a fresh risk owner for one isolated research/backtest strategy."""
+    return RiskRuntime(default_nautilus_risk_limits())
 
 
 class NautilusRiskMixin:
