@@ -6,6 +6,7 @@ from mastertrd.binance_stream import BinancePublicMarketSource
 from mastertrd.contracts import RuntimeMode
 from mastertrd.execution_runtime import ExecutionRuntime
 from mastertrd.nautilus_paper import fixture_binance_spot_instrument
+from mastertrd.reconciliation import ExecutionState
 from mastertrd.runtime import RuntimeConfig
 from mastertrd.runtime_factory import build_execution_runtime
 
@@ -135,6 +136,44 @@ def test_paper_factory_builds_persistent_runtime_from_candidate_and_public_feed_
     assert payload["receipt"]["strategy_id"] == "paper-factory-trend-1"
     event_ids = {event["event_id"] for event in payload["events"]}
     assert "binance-fixture-1" in event_ids
+
+
+def test_paper_factory_resume_reconciles_persisted_execution_checkpoint_before_dispatch(tmp_path):
+    candidate_path = tmp_path / "candidate.json"
+    feed_path = tmp_path / "public-feed-recovery.jsonl"
+    session_path = tmp_path / "paper-session-recovery.json"
+    candidate_path.write_text(json.dumps(_candidate_manifest()), encoding="utf-8")
+    feed_path.write_text(json.dumps(_feed_event()) + "\n", encoding="utf-8")
+
+    runtime = RuntimeConfig(
+        mode=RuntimeMode.PAPER,
+        live_trading_enabled=False,
+        oracle_enabled=False,
+    )
+    environ = _factory_environment(candidate_path, feed_path, session_path)
+    initial = build_execution_runtime(runtime, environ)
+    seed = initial._engine_state()
+    expected_after_restart = ExecutionState(
+        account_id=seed.account_id,
+        positions={"ETHUSDT.BINANCE": Decimal("0.10000")},
+        open_order_ids=frozenset(),
+        balances=seed.balances,
+    )
+    initial._journal.record_execution_state(
+        expected_after_restart,
+        timestamp_ns=START_NS,
+    )
+    initial._session_store.save(initial._journal)
+    initial.close()
+
+    resumed = build_execution_runtime(runtime, environ)
+    report = resumed.run()
+
+    assert report.system_killed is True
+    assert report.processed_events == 0
+    assert report.reconciliation_checks == 1
+    assert report.reconciliation_errors == 1
+    assert resumed._journal.has_event("binance-fixture-1") is False
 
 
 def test_paper_factory_routes_public_feed_through_real_nautilus_strategy_and_records_close(tmp_path):
