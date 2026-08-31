@@ -257,6 +257,7 @@ def test_testnet_smoke_without_owner_credentials_is_candidate_bound_and_never_to
     assert payload["genome_hash"] == candidate().genome_hash
     assert payload["code_hash"] == "code-champion-001"
     assert payload["dataset_hash"] == "dataset-champion-001"
+    assert payload["runtime_mode"] == "TESTNET"
     assert payload["status"] == "CREDENTIALS_UNAVAILABLE"
     assert payload["passed"] is False
     assert payload["blocker"] == "BLOCKED_OWNER_INPUT"
