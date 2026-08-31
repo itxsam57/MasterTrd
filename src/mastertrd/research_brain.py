@@ -421,6 +421,7 @@ def run_research_brain(
     *,
     code_hash: str,
     lock_hash: str,
+    specialist_inputs_by_genome_hash: Mapping[str, SpecialistInputs] | None = None,
 ) -> ResearchBrainReport:
     """Run the approved autonomous research cycle without bypassing the Governor.
 
@@ -430,6 +431,7 @@ def run_research_brain(
     """
     if not code_hash or not lock_hash:
         raise ValueError("code_hash and lock_hash are required")
+    specialist_inputs_by_genome_hash = dict(specialist_inputs_by_genome_hash or {})
     run_id = _run_id(config, dataset, code_hash=code_hash, lock_hash=lock_hash)
     completed = memory.get_stage(run_id, RESEARCH_STAGES[-1])
     if completed is not None:
@@ -671,32 +673,10 @@ def run_research_brain(
     validation_artifact, _ = _stage(memory, run_id, "nautilus_validation", validation_stage)
 
     def specialist_stage() -> Mapping[str, Any]:
-        outcomes = []
-        for item in validation_artifact["outcomes"]:
-            genome = _genome_from_payload(item["genome"])
-            if not bool(item["passed"]):
-                outcomes.append(dict(item))
-                continue
-            extra = extra_evidence_for_target(genome, StrategyState.ROBUST)
-            if extra:
-                outcomes.append(
-                    {
-                        "genome": _genome_payload(genome),
-                        "passed": False,
-                        "score": float(item["score"]),
-                        "reason": "specialist_evidence_required:" + ",".join(sorted(extra)),
-                    }
-                )
-            else:
-                outcomes.append(
-                    {
-                        "genome": _genome_payload(genome),
-                        "passed": True,
-                        "score": float(item["score"]),
-                        "reason": "standard_execution_path",
-                    }
-                )
-        return {"outcomes": outcomes}
+        return run_research_specialist_stage(
+            validation_artifact["outcomes"],
+            specialist_inputs_by_genome_hash=specialist_inputs_by_genome_hash,
+        )
 
     specialist_artifact, _ = _stage(memory, run_id, "specialist_tests", specialist_stage)
 
