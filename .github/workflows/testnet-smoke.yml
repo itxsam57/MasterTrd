@@ -2,6 +2,11 @@ name: Testnet Smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      candidate_manifest_json:
+        description: Public-safe TestnetCandidateManifest JSON for the exact champion checkout
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -14,6 +19,7 @@ jobs:
     env:
       MASTERTRD_MODE: TESTNET
       MASTERTRD_TESTNET_EVIDENCE_PATH: artifacts/testnet_smoke.json
+      MASTERTRD_TESTNET_CANDIDATE_MANIFEST: artifacts/testnet_candidate.json
       BINANCE_TESTNET_API_KEY: ${{ secrets.BINANCE_TESTNET_API_KEY }}
       BINANCE_TESTNET_API_SECRET: ${{ secrets.BINANCE_TESTNET_API_SECRET }}
       BINANCE_TESTNET_ACCOUNT_ID: ${{ secrets.BINANCE_TESTNET_ACCOUNT_ID }}
@@ -45,6 +51,38 @@ jobs:
           uv lock --check
           uv sync --locked --all-extras
           uv pip check
+      - name: Materialize and validate champion candidate manifest
+        env:
+          MASTERTRD_TESTNET_CANDIDATE_JSON: ${{ inputs.candidate_manifest_json }}
+        run: |
+          uv run python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from mastertrd.testnet_candidate import TestnetCandidateManifest
+
+          raw = os.environ.get('MASTERTRD_TESTNET_CANDIDATE_JSON', '').strip()
+          if not raw:
+              raise SystemExit('candidate_manifest_json is required')
+          try:
+              payload = json.loads(raw)
+          except json.JSONDecodeError as exc:
+              raise SystemExit(f'invalid candidate_manifest_json: {exc}') from exc
+          if not isinstance(payload, dict):
+              raise SystemExit('candidate_manifest_json must contain a JSON object')
+          manifest = TestnetCandidateManifest.from_public_payload(payload)
+          checkout_sha = os.environ['GITHUB_SHA']
+          if manifest.code_hash != checkout_sha:
+              raise SystemExit('candidate manifest code_hash does not match the dispatched checkout')
+          path = Path(os.environ['MASTERTRD_TESTNET_CANDIDATE_MANIFEST'])
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_text(
+              json.dumps(manifest.to_public_payload(), sort_keys=True, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          print(f'candidate manifest validated for {manifest.strategy_id} {manifest.genome_hash}')
+          PY
       - name: Prove TESTNET-only runtime and credential preflight
         run: |
           uv run python - <<'PY'
