@@ -15,7 +15,7 @@ from .nautilus_paper import (
     load_public_binance_spot_instrument,
     open_persistent_paper_session,
 )
-from .reconciliation import ExecutionState, Reconciler
+from .reconciliation import Reconciler
 from .risk import RiskLimits
 from .risk_runtime import RiskRuntime
 from .risk_state import RiskStateProvider
@@ -89,15 +89,6 @@ def _paper_risk_limits() -> RiskLimits:
         max_api_error_rate=0.20,
         max_api_latency_ms=3_000.0,
         max_reconciliation_age_seconds=60.0,
-    )
-
-
-def _initial_paper_state(session_id: str) -> ExecutionState:
-    return ExecutionState(
-        account_id=f"paper:{session_id}",
-        positions={},
-        open_order_ids=frozenset(),
-        balances={},
     )
 
 
@@ -187,19 +178,21 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
         journal=session.journal,
         instrument=instrument,
     )
+    account_id = f"paper:{session.journal.session_id}"
 
-    # Task 5 recovery tests separately verify mismatch kill-before-dispatch. For
-    # the single-process sandbox the Nautilus engine is the venue simulator, so
-    # both reconciliation views share the same process snapshot until the
-    # engine-backed reconciliation adapter is enabled in the next Task 5 slice.
-    execution_state = _initial_paper_state(session.journal.session_id)
+    # PAPER has one authoritative Nautilus simulated venue/account. Both views
+    # intentionally snapshot that live engine state rather than a fabricated
+    # static seed; a later reconciliation slice compares this engine state with
+    # journal-derived expected state for independent recovery verification.
+    engine_state = lambda: execution.execution_state(account_id=account_id)
+    venue_state = lambda: execution.execution_state(account_id=account_id)
     return ExecutionRuntime(
         journal=session.journal,
         session_store=session.store,
         risk_runtime=risk_runtime,
         reconciler=Reconciler(),
-        engine_state=lambda: execution_state,
-        venue_state=lambda: execution_state,
+        engine_state=engine_state,
+        venue_state=venue_state,
         dispatch=execution.dispatch,
         stream=stream,
         finalizer=execution.close,
