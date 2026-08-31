@@ -10,6 +10,7 @@ from .risk_runtime import OrderIntent, RiskRuntime
 
 
 def default_nautilus_risk_limits() -> RiskLimits:
+    """Legacy research-limit constructor; never applied implicitly."""
     return RiskLimits(
         max_order_notional=1e12,
         max_symbol_exposure=1e12,
@@ -37,8 +38,10 @@ class NautilusRiskMixin:
         strategy_id: str,
         risk_runtime: RiskRuntime | None = None,
     ) -> None:
+        if risk_runtime is None:
+            raise ValueError("risk_runtime is required for risk-managed Nautilus strategies")
         self._risk_strategy_id = strategy_id
-        self.risk_runtime = risk_runtime or RiskRuntime(default_nautilus_risk_limits())
+        self.risk_runtime = risk_runtime
 
     def _risk_reference_price(self, instrument_id) -> float:
         return 0.0
