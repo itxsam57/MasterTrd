@@ -1,0 +1,123 @@
+name: Apply ResearchBrain durable specialist routing
+
+on:
+  push:
+    branches:
+      - v2/plan-closure-20260831
+    paths:
+      - .github/workflows/apply-research-specialist-durable.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v2/plan-closure-20260831
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Apply guarded durable routing
+        run: |
+          git pull --ff-only origin v2/plan-closure-20260831
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/mastertrd/research_brain.py')
+          text = path.read_text()
+
+          old_signature = '''def run_research_brain(
+              config: ResearchBrainConfig,
+              dataset: ResearchDataset,
+              memory: DuckDbResearchMemory,
+              *,
+              code_hash: str,
+              lock_hash: str,
+          ) -> ResearchBrainReport:
+          '''
+          new_signature = '''def run_research_brain(
+              config: ResearchBrainConfig,
+              dataset: ResearchDataset,
+              memory: DuckDbResearchMemory,
+              *,
+              code_hash: str,
+              lock_hash: str,
+              specialist_inputs_by_genome_hash: Mapping[str, SpecialistInputs] | None = None,
+          ) -> ResearchBrainReport:
+          '''
+          if old_signature not in text:
+              raise SystemExit('expected run_research_brain signature not found; refusing drifted write')
+          text = text.replace(old_signature, new_signature, 1)
+
+          old_guard = '''    if not code_hash or not lock_hash:
+              raise ValueError("code_hash and lock_hash are required")
+          run_id = _run_id(config, dataset, code_hash=code_hash, lock_hash=lock_hash)
+          '''
+          new_guard = '''    if not code_hash or not lock_hash:
+              raise ValueError("code_hash and lock_hash are required")
+          specialist_inputs_by_genome_hash = dict(specialist_inputs_by_genome_hash or {})
+          run_id = _run_id(config, dataset, code_hash=code_hash, lock_hash=lock_hash)
+          '''
+          if old_guard not in text:
+              raise SystemExit('expected code/lock guard not found; refusing drifted write')
+          text = text.replace(old_guard, new_guard, 1)
+
+          old_stage = '''    def specialist_stage() -> Mapping[str, Any]:
+              outcomes = []
+              for item in validation_artifact["outcomes"]:
+                  genome = _genome_from_payload(item["genome"])
+                  if not bool(item["passed"]):
+                      outcomes.append(dict(item))
+                      continue
+                  extra = extra_evidence_for_target(genome, StrategyState.ROBUST)
+                  if extra:
+                      outcomes.append(
+                          {
+                              "genome": _genome_payload(genome),
+                              "passed": False,
+                              "score": float(item["score"]),
+                              "reason": "specialist_evidence_required:" + ",".join(sorted(extra)),
+                          }
+                      )
+                  else:
+                      outcomes.append(
+                          {
+                              "genome": _genome_payload(genome),
+                              "passed": True,
+                              "score": float(item["score"]),
+                              "reason": "standard_execution_path",
+                          }
+                      )
+              return {"outcomes": outcomes}
+          '''
+          new_stage = '''    def specialist_stage() -> Mapping[str, Any]:
+              return run_research_specialist_stage(
+                  validation_artifact["outcomes"],
+                  specialist_inputs_by_genome_hash=specialist_inputs_by_genome_hash,
+              )
+          '''
+          if old_stage not in text:
+              raise SystemExit('expected hardcoded specialist stage not found; refusing drifted write')
+          text = text.replace(old_stage, new_stage, 1)
+          path.write_text(text)
+          PY
+      - name: Verify focused GREEN
+        run: |
+          python -m pip install --disable-pip-version-check 'uv==0.12.7'
+          uv sync --locked --all-extras
+          uv run pytest -q \
+            tests/test_research_brain_specialist_stage.py \
+            tests/test_research_brain_specialist_batch.py \
+            tests/test_research_brain_specialist_wiring.py
+      - name: Commit real code and remove one-shot workflow
+        run: |
+          rm .github/workflows/apply-research-specialist-durable.yml
+          git config user.name 'itxsam57'
+          git config user.email '143406136+itxsam57@users.noreply.github.com'
+          git add src/mastertrd/research_brain.py .github/workflows/apply-research-specialist-durable.yml
+          git commit -m 'feat(research): route durable specialist evidence'
+          git push origin HEAD:v2/plan-closure-20260831
