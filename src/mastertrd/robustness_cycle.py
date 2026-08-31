@@ -214,6 +214,7 @@ def run_generated_robustness_cycle(
         ]
     ] = (),
     asset_transfer_policy: AssetTransferPolicy | None = None,
+    specialist_evidence: Sequence[ValidationEvidence] = (),
 ) -> GeneratedRobustnessCycle:
     base_events = _materialize_data(
         candidate,
@@ -320,6 +321,7 @@ def run_generated_robustness_cycle(
     ]
     if transfer_cases and asset_transfer_policy is not None:
         evidence_items.append(asset_transfer_evidence(candidate, transfer_cases, asset_transfer_policy))
+    evidence_items.extend(specialist_evidence)
     evidence = tuple(evidence_items)
 
     promotion = evaluate_validated_promotion(
