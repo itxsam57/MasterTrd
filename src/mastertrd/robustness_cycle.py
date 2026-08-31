@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from numbers import Integral, Real
-from typing import Iterable, Sequence
 
 from .advanced_validation import (
     AdvancedValidationPolicy,
@@ -13,7 +13,7 @@ from .asset_transfer import AssetTransferPolicy, asset_transfer_evidence
 from .contracts import EvaluationResult, StrategyState
 from .genome import StrategyGenome
 from .governor import PromotionDecision, evaluate_validated_promotion
-from .nautilus_evaluation import run_binance_spot_evaluation
+from .nautilus_evaluation import run_nautilus_evaluation
 from .robustness import (
     RobustnessPolicy,
     cost_stress_evidence,
@@ -113,13 +113,7 @@ def _parameter_neighbors(
     *,
     max_neighbors: int = 4,
 ) -> tuple[StrategyGenome, ...]:
-    """Build a small deterministic local neighborhood for any numeric genome.
-
-    Only already-declared numeric entry/exit/filter/risk parameters are changed,
-    one coordinate at a time. Strategy identity, family, instruments, timeframe,
-    data requirements, and shorting contract remain fixed. The bounded size keeps
-    robustness evaluation cost predictable while removing the former EMA-only path.
-    """
+    """Build a small deterministic local neighborhood for any numeric genome."""
     if max_neighbors < 2:
         raise ValueError("max_neighbors must be at least two")
 
@@ -149,32 +143,110 @@ def _parameter_neighbors(
     return tuple(neighbors)
 
 
+def _materialize_data(
+    candidate: StrategyGenome,
+    data_by_instrument: Mapping[str, Iterable[object]],
+    *,
+    label: str,
+) -> dict[str, tuple[object, ...]]:
+    expected = tuple(candidate.instruments)
+    supplied = set(data_by_instrument)
+    missing = [instrument_id for instrument_id in expected if instrument_id not in supplied]
+    extras = sorted(supplied - set(expected))
+    if missing:
+        raise ValueError(f"{label} is missing instruments: {', '.join(missing)}")
+    if extras:
+        raise ValueError(f"{label} has unexpected instruments: {', '.join(extras)}")
+
+    materialized: dict[str, tuple[object, ...]] = {}
+    for instrument_id in expected:
+        events = tuple(data_by_instrument[instrument_id])
+        if not events:
+            raise ValueError(f"{label} is empty for {instrument_id}")
+        materialized[instrument_id] = events
+    return materialized
+
+
+def _canonical_primary_inputs(
+    candidate: StrategyGenome,
+    instruments: Mapping[str, object] | None,
+    data_by_instrument: Mapping[str, Iterable[object]] | None,
+    legacy_inputs: dict[str, object],
+) -> tuple[Mapping[str, object], dict[str, tuple[object, ...]]]:
+    if instruments is not None or data_by_instrument is not None:
+        if instruments is None or data_by_instrument is None:
+            raise ValueError("instruments and data_by_instrument must be supplied together")
+        if legacy_inputs:
+            raise TypeError("legacy single-instrument inputs cannot be mixed with generalized inputs")
+        return instruments, _materialize_data(candidate, data_by_instrument, label="base robustness dataset")
+
+    unknown = sorted(set(legacy_inputs) - {"instrument", "data"})
+    if unknown:
+        raise TypeError(f"unexpected robustness inputs: {', '.join(unknown)}")
+    if set(legacy_inputs) != {"instrument", "data"}:
+        raise ValueError("instruments and data_by_instrument are required")
+    if len(candidate.instruments) != 1:
+        raise ValueError("legacy single-instrument inputs cannot evaluate a multi-leg candidate")
+
+    instrument = legacy_inputs["instrument"]
+    instrument_id = candidate.instruments[0]
+    observed_id = getattr(getattr(instrument, "id", None), "value", None)
+    if observed_id != instrument_id:
+        raise ValueError("legacy instrument does not match the candidate instrument")
+    events = tuple(legacy_inputs["data"])
+    if not events:
+        raise ValueError("base robustness dataset is required")
+    return {instrument_id: instrument}, {instrument_id: events}
+
+
+def _canonical_dataset(
+    candidate: StrategyGenome,
+    payload: Mapping[str, Iterable[object]] | Iterable[object],
+    *,
+    label: str,
+) -> dict[str, tuple[object, ...]]:
+    if isinstance(payload, Mapping):
+        return _materialize_data(candidate, payload, label=label)
+    if len(candidate.instruments) != 1:
+        raise ValueError(f"{label} must provide every multi-leg instrument")
+    instrument_id = candidate.instruments[0]
+    events = tuple(payload)
+    if not events:
+        raise ValueError(f"{label} is empty for {instrument_id}")
+    return {instrument_id: events}
+
+
 def _evaluate_datasets(
     *,
     candidate: StrategyGenome,
-    datasets: Sequence[tuple[str, Iterable[object]]],
+    instruments: Mapping[str, object],
+    datasets: Sequence[tuple[str, Mapping[str, Iterable[object]]]],
     common: dict[str, object],
 ) -> tuple[EvaluationResult, ...]:
-    return tuple(
-        run_binance_spot_evaluation(
-            genome=candidate,
-            data=tuple(events),
-            dataset_hash=dataset_hash,
-            **common,
+    results: list[EvaluationResult] = []
+    for dataset_hash, payload in datasets:
+        events = _canonical_dataset(candidate, payload, label=f"dataset {dataset_hash}")
+        results.append(
+            run_nautilus_evaluation(
+                genome=candidate,
+                instruments=instruments,
+                data_by_instrument=events,
+                dataset_hash=dataset_hash,
+                **common,
+            )
         )
-        for dataset_hash, events in datasets
-    )
+    return tuple(results)
 
 
 def run_generated_robustness_cycle(
     *,
     candidate: StrategyGenome,
-    instrument,
-    data: Iterable[object],
+    instruments: Mapping[str, object] | None = None,
+    data_by_instrument: Mapping[str, Iterable[object]] | None = None,
     dataset_hash: str,
-    fold_datasets: Sequence[tuple[str, Iterable[object]]],
-    cpcv_datasets: Sequence[tuple[str, Iterable[object]]],
-    monte_carlo_datasets: Sequence[tuple[str, Iterable[object]]],
+    fold_datasets: Sequence[tuple[str, Mapping[str, Iterable[object]]]],
+    cpcv_datasets: Sequence[tuple[str, Mapping[str, Iterable[object]]]],
+    monte_carlo_datasets: Sequence[tuple[str, Mapping[str, Iterable[object]]]],
     code_hash: str,
     trade_size: str,
     policy: RobustnessPolicy,
@@ -183,13 +255,22 @@ def run_generated_robustness_cycle(
     stressed_slippage: float,
     starting_balances: Sequence[str] = ("100000 USDT",),
     asset_transfer_datasets: Sequence[
-        tuple[StrategyGenome, object, str, Iterable[object]]
+        tuple[
+            StrategyGenome,
+            Mapping[str, object],
+            str,
+            Mapping[str, Iterable[object]],
+        ]
     ] = (),
     asset_transfer_policy: AssetTransferPolicy | None = None,
+    **legacy_inputs: object,
 ) -> GeneratedRobustnessCycle:
-    base_events = tuple(data)
-    if not base_events:
-        raise ValueError("base robustness dataset is required")
+    resolved_instruments, base_events = _canonical_primary_inputs(
+        candidate,
+        instruments,
+        data_by_instrument,
+        legacy_inputs,
+    )
     if not fold_datasets:
         raise ValueError("walk-forward fold datasets are required")
     if not cpcv_datasets:
@@ -202,42 +283,55 @@ def run_generated_robustness_cycle(
         raise ValueError("cost stress must increase fees or slippage")
 
     common: dict[str, object] = dict(
-        instrument=instrument,
         code_hash=code_hash,
         trade_size_override=trade_size,
         starting_balances=starting_balances,
     )
-    base_result = run_binance_spot_evaluation(
+    base_result = run_nautilus_evaluation(
         genome=candidate,
-        data=base_events,
+        instruments=resolved_instruments,
+        data_by_instrument=base_events,
         dataset_hash=dataset_hash,
         **common,
     )
-    stressed_result = run_binance_spot_evaluation(
+    stressed_result = run_nautilus_evaluation(
         genome=candidate,
-        data=base_events,
+        instruments=resolved_instruments,
+        data_by_instrument=base_events,
         dataset_hash=dataset_hash,
         fees=stressed_fees,
         slippage=stressed_slippage,
         **common,
     )
 
-    fold_results = _evaluate_datasets(candidate=candidate, datasets=fold_datasets, common=common)
+    fold_results = _evaluate_datasets(
+        candidate=candidate,
+        instruments=resolved_instruments,
+        datasets=fold_datasets,
+        common=common,
+    )
 
     neighbors = _parameter_neighbors(candidate)
     neighbor_results = tuple(
-        run_binance_spot_evaluation(
+        run_nautilus_evaluation(
             genome=neighbor,
-            data=base_events,
+            instruments=resolved_instruments,
+            data_by_instrument=base_events,
             dataset_hash=dataset_hash,
             **common,
         )
         for neighbor in neighbors
     )
 
-    cpcv_results = _evaluate_datasets(candidate=candidate, datasets=cpcv_datasets, common=common)
+    cpcv_results = _evaluate_datasets(
+        candidate=candidate,
+        instruments=resolved_instruments,
+        datasets=cpcv_datasets,
+        common=common,
+    )
     monte_carlo_results = _evaluate_datasets(
         candidate=candidate,
+        instruments=resolved_instruments,
         datasets=monte_carlo_datasets,
         common=common,
     )
@@ -249,20 +343,32 @@ def run_generated_robustness_cycle(
             trade_size_override=trade_size,
             starting_balances=starting_balances,
         )
-        transfer_cases = tuple(
-            (
+        cases: list[tuple[StrategyGenome, EvaluationResult]] = []
+        for transfer_genome, raw_instruments, transfer_dataset_hash, raw_events in asset_transfer_datasets:
+            if isinstance(raw_instruments, Mapping):
+                transfer_instruments = raw_instruments
+            else:
+                if len(transfer_genome.instruments) != 1:
+                    raise ValueError("legacy transfer instrument cannot represent a multi-leg transfer")
+                transfer_instruments = {transfer_genome.instruments[0]: raw_instruments}
+            transfer_events = _canonical_dataset(
                 transfer_genome,
-                run_binance_spot_evaluation(
-                    genome=transfer_genome,
-                    instrument=transfer_instrument,
-                    data=tuple(transfer_events),
-                    dataset_hash=transfer_dataset_hash,
-                    **transfer_common,
-                ),
+                raw_events,
+                label=f"transfer dataset {transfer_dataset_hash}",
             )
-            for transfer_genome, transfer_instrument, transfer_dataset_hash, transfer_events
-            in asset_transfer_datasets
-        )
+            cases.append(
+                (
+                    transfer_genome,
+                    run_nautilus_evaluation(
+                        genome=transfer_genome,
+                        instruments=transfer_instruments,
+                        data_by_instrument=transfer_events,
+                        dataset_hash=transfer_dataset_hash,
+                        **transfer_common,
+                    ),
+                )
+            )
+        transfer_cases = tuple(cases)
 
     evidence_items: list[ValidationEvidence] = [
         walk_forward_evidence(candidate, fold_results, policy),
