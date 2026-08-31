@@ -120,3 +120,26 @@ def test_runtime_owned_api_health_and_correlation_snapshots_feed_order_checks():
     runtime.update_correlated_exposure(portfolio_id="P-1", exposure=30_000.0)
     correlation_denied = runtime.check_order(_intent(), _snapshot())
     assert correlation_denied.action is RiskAction.BLOCK_ORDER
+
+
+def test_runtime_owns_order_rate_even_when_strategy_snapshot_reports_zero():
+    times = iter((100.0, 101.0, 102.0, 161.1))
+    limits = RiskLimits(
+        max_order_notional=10_000.0,
+        max_symbol_exposure=100_000.0,
+        max_portfolio_exposure=100_000.0,
+        max_daily_loss=2_000.0,
+        max_drawdown=0.25,
+        max_orders_per_minute=2,
+        duplicate_order_window_seconds=0.0,
+    )
+    runtime = RiskRuntime(limits, monotonic_clock=lambda: next(times))
+
+    assert runtime.check_order(_intent(side="BUY", quantity=0.10), _snapshot()).action is RiskAction.ALLOW
+    assert runtime.check_order(_intent(side="BUY", quantity=0.11), _snapshot()).action is RiskAction.ALLOW
+    blocked = runtime.check_order(_intent(side="BUY", quantity=0.12), _snapshot())
+    assert blocked.action is RiskAction.BLOCK_ORDER
+    assert "order" in blocked.reason.lower()
+
+    after_window = runtime.check_order(_intent(side="BUY", quantity=0.13), _snapshot())
+    assert after_window.action is RiskAction.ALLOW
