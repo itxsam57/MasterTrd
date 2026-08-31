@@ -26,6 +26,7 @@ def test_robustness_cycle_uses_generalized_instrument_and_data_mappings():
     assert "data_by_instrument" in parameters
     assert "instrument" not in parameters
     assert "data" not in parameters
+    assert "legacy_inputs" not in parameters
 
 
 def test_hidden_cycle_uses_generalized_instrument_and_data_mappings():
@@ -35,6 +36,7 @@ def test_hidden_cycle_uses_generalized_instrument_and_data_mappings():
     assert "hidden_data_by_instrument" in parameters
     assert "instrument" not in parameters
     assert "hidden_data" not in parameters
+    assert "legacy_inputs" not in parameters
 
 
 def test_research_brain_calls_robustness_cycle_through_generalized_contract():
