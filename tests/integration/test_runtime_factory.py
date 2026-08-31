@@ -1,6 +1,6 @@
 import json
 
-from mastertrd.binance_stream import BinancePublicBookTickerSource
+from mastertrd.binance_stream import BinancePublicMarketSource
 from mastertrd.contracts import RuntimeMode
 from mastertrd.execution_runtime import ExecutionRuntime
 from mastertrd.runtime import RuntimeConfig
@@ -168,5 +168,6 @@ def test_paper_factory_defaults_to_checked_in_binance_public_stream_without_fixt
     built = build_execution_runtime(runtime, _public_stream_environment(candidate_path, session_path))
 
     assert isinstance(built, ExecutionRuntime)
-    assert isinstance(built._stream._source, BinancePublicBookTickerSource)
+    assert isinstance(built._stream._source, BinancePublicMarketSource)
     assert built._stream._source.symbols == ("ETHUSDT",)
+    assert built._stream._source.timeframe == "1m"
