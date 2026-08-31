@@ -12,6 +12,7 @@ from .genome import StrategyGenome
 from .nautilus_paper import (
     NautilusStreamingPaperExecution,
     fixture_binance_spot_instrument,
+    load_public_binance_spot_instrument,
     open_persistent_paper_session,
 )
 from .reconciliation import ExecutionState, Reconciler
@@ -105,8 +106,20 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
     session_path = Path(_required(environ, "MASTERTRD_SESSION_STATE"))
     code_hash = _required(environ, "MASTERTRD_CODE_HASH")
     session_nonce = environ.get("MASTERTRD_SESSION_NONCE", "runtime-paper").strip() or "runtime-paper"
-    resume = session_path.exists()
 
+    if len(candidate.instruments) != 1:
+        raise RuntimeError("PAPER runtime currently requires one instrument")
+
+    fixture_path = environ.get("MASTERTRD_PUBLIC_FEED_FIXTURE", "").strip()
+    if fixture_path:
+        instrument = fixture_binance_spot_instrument(candidate.instruments[0])
+    else:
+        # Resolve exact current exchange precision and trading filters before a
+        # persistent session is created. A metadata/network failure therefore
+        # cannot leave behind a half-initialized PAPER session.
+        instrument = load_public_binance_spot_instrument(candidate.instruments[0])
+
+    resume = session_path.exists()
     if resume:
         started_ns = None
     else:
@@ -130,10 +143,6 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
         resume=resume,
     )
 
-    if len(candidate.instruments) != 1:
-        raise RuntimeError("PAPER runtime currently requires one instrument")
-
-    fixture_path = environ.get("MASTERTRD_PUBLIC_FEED_FIXTURE", "").strip()
     if fixture_path:
         stream = MarketStream(_fixture_source(fixture_path))
         # Recorded fixtures replay historical exchange timestamps. Tie freshness
@@ -172,7 +181,6 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
         latency_ms=0.0,
     )
 
-    instrument = fixture_binance_spot_instrument(candidate.instruments[0])
     execution = NautilusStreamingPaperExecution(
         candidate=candidate,
         risk_runtime=risk_runtime,
