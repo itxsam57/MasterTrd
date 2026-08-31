@@ -229,6 +229,21 @@ def _genome_from_payload(payload: Mapping[str, Any]) -> StrategyGenome:
     )
 
 
+def _validation_evidence_from_payload(payload: Mapping[str, Any]) -> ValidationEvidence:
+    return ValidationEvidence(
+        strategy_id=str(payload["strategy_id"]),
+        genome_hash=str(payload["genome_hash"]),
+        evidence_type=str(payload["evidence_type"]),
+        dataset_hash=str(payload["dataset_hash"]),
+        code_hash=str(payload["code_hash"]),
+        engine=str(payload["engine"]),
+        engine_version=str(payload["engine_version"]),
+        passed=bool(payload["passed"]),
+        metrics={str(key): float(value) for key, value in dict(payload.get("metrics", {})).items()},
+        supporting_only=bool(payload.get("supporting_only", False)),
+    )
+
+
 def _run_id(
     config: ResearchBrainConfig,
     dataset: ResearchDataset,
@@ -711,6 +726,10 @@ def run_research_brain(
                 )
                 continue
             try:
+                specialist_evidence = tuple(
+                    _validation_evidence_from_payload(record)
+                    for record in item.get("evidence", ())
+                )
                 bars = _instrument_bars(dataset, key)
                 research, hidden, manifest = chronological_holdout(
                     bars,
@@ -752,6 +771,7 @@ def run_research_brain(
                     stressed_fees=config.stressed_fees,
                     stressed_slippage=config.stressed_slippage,
                     starting_balances=config.starting_balances,
+                    specialist_evidence=specialist_evidence,
                 )
                 if not robust.promotion.allowed:
                     raise RuntimeError("robustness promotion denied:" + ",".join(sorted(robust.promotion.missing_evidence)))
