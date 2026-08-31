@@ -8,7 +8,11 @@ import time
 from .contracts import RuntimeMode
 from .execution_runtime import ExecutionRuntime
 from .genome import StrategyGenome
-from .nautilus_paper import open_persistent_paper_session
+from .nautilus_paper import (
+    NautilusStreamingPaperExecution,
+    fixture_binance_spot_instrument,
+    open_persistent_paper_session,
+)
 from .reconciliation import ExecutionState, Reconciler
 from .risk import RiskLimits
 from .risk_runtime import RiskRuntime
@@ -131,9 +135,16 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
             "repository Binance public stream is not configured; "
             "MASTERTRD_PUBLIC_FEED_FIXTURE is required until live public streaming is enabled"
         )
+    if len(candidate.instruments) != 1:
+        raise RuntimeError("deterministic PAPER fixture currently requires one instrument")
     stream = MarketStream(_fixture_source(fixture_path))
 
-    state_provider = RiskStateProvider()
+    # Recorded fixtures replay historical exchange timestamps. Tie freshness to
+    # the append-only journal clock so Task 4's production provider remains
+    # fail-closed without falsely treating valid replay batches as wall-clock stale.
+    state_provider = RiskStateProvider(
+        clock=lambda: session.journal.latest_timestamp_ns / 1_000_000_000.0,
+    )
     for symbol in candidate.instruments:
         state_provider.update_account_state(
             symbol=symbol,
@@ -146,7 +157,25 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
             correlated_exposure=0.0,
         )
     risk_runtime = RiskRuntime(_paper_risk_limits(), state_provider=state_provider)
+    risk_runtime.update_api_health(
+        venue="BINANCE",
+        healthy=True,
+        error_rate=0.0,
+        latency_ms=0.0,
+    )
 
+    instrument = fixture_binance_spot_instrument(candidate.instruments[0])
+    execution = NautilusStreamingPaperExecution(
+        candidate=candidate,
+        risk_runtime=risk_runtime,
+        journal=session.journal,
+        instrument=instrument,
+    )
+
+    # Task 5 recovery tests separately verify mismatch kill-before-dispatch. For
+    # this deterministic single-process sandbox the Nautilus engine is the venue
+    # simulator, so both reconciliation views intentionally share the same
+    # process snapshot until the live Binance adapter state source is enabled.
     execution_state = _initial_paper_state(session.journal.session_id)
     return ExecutionRuntime(
         journal=session.journal,
@@ -155,7 +184,7 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
         reconciler=Reconciler(),
         engine_state=lambda: execution_state,
         venue_state=lambda: execution_state,
-        dispatch=lambda _event: None,
+        dispatch=execution.dispatch,
         stream=stream,
     )
 
