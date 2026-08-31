@@ -20,6 +20,7 @@ jobs:
       MASTERTRD_MODE: TESTNET
       MASTERTRD_TESTNET_EVIDENCE_PATH: artifacts/testnet_smoke.json
       MASTERTRD_TESTNET_CANDIDATE_MANIFEST: artifacts/testnet_candidate.json
+      MASTERTRD_TESTNET_BUNDLE_PATH: artifacts/testnet_candidate_bundle.json
       BINANCE_TESTNET_API_KEY: ${{ secrets.BINANCE_TESTNET_API_KEY }}
       BINANCE_TESTNET_API_SECRET: ${{ secrets.BINANCE_TESTNET_API_SECRET }}
       BINANCE_TESTNET_ACCOUNT_ID: ${{ secrets.BINANCE_TESTNET_ACCOUNT_ID }}
@@ -114,6 +115,59 @@ jobs:
             tests/integration/test_reconciliation_evidence.py
       - name: Submit bounded Nautilus TESTNET smoke order
         run: uv run python -m mastertrd.testnet_smoke
+      - name: Build candidate-bound TESTNET evidence bundle
+        if: always()
+        run: |
+          uv run python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from mastertrd.contracts import RuntimeMode
+          from mastertrd.live_evidence import LiveEvidenceStatus, LiveValidationEvidence
+          from mastertrd.testnet_candidate import (
+              TestnetCandidateManifest,
+              build_candidate_testnet_evidence_bundle,
+          )
+
+          manifest_path = Path(os.environ['MASTERTRD_TESTNET_CANDIDATE_MANIFEST'])
+          smoke_path = Path(os.environ['MASTERTRD_TESTNET_EVIDENCE_PATH'])
+          bundle_path = Path(os.environ['MASTERTRD_TESTNET_BUNDLE_PATH'])
+          if not manifest_path.is_file():
+              raise SystemExit('candidate manifest artifact is unavailable')
+          if not smoke_path.is_file():
+              raise SystemExit('candidate TESTNET smoke evidence is unavailable')
+
+          manifest_payload = json.loads(manifest_path.read_text(encoding='utf-8'))
+          smoke_payload = json.loads(smoke_path.read_text(encoding='utf-8'))
+          manifest = TestnetCandidateManifest.from_public_payload(manifest_payload)
+          smoke = LiveValidationEvidence(
+              strategy_id=str(smoke_payload['strategy_id']),
+              genome_hash=str(smoke_payload['genome_hash']),
+              evidence_type=str(smoke_payload['evidence_type']),
+              dataset_hash=str(smoke_payload['dataset_hash']),
+              code_hash=str(smoke_payload['code_hash']),
+              engine=str(smoke_payload['engine']),
+              engine_version=str(smoke_payload['engine_version']),
+              passed=bool(smoke_payload['passed']),
+              metrics={str(key): float(value) for key, value in dict(smoke_payload.get('metrics', {})).items()},
+              supporting_only=bool(smoke_payload.get('supporting_only', False)),
+              status=LiveEvidenceStatus(str(smoke_payload['status'])),
+          )
+          bundle = build_candidate_testnet_evidence_bundle(
+              manifest,
+              smoke_evidence=smoke,
+              runtime_mode=RuntimeMode.TESTNET,
+          )
+          if smoke.status is LiveEvidenceStatus.CREDENTIALS_UNAVAILABLE and bundle.blocker != 'BLOCKED_OWNER_INPUT':
+              raise SystemExit('owner credential blocker was not preserved')
+          bundle_path.parent.mkdir(parents=True, exist_ok=True)
+          bundle_path.write_text(
+              json.dumps(bundle.to_public_payload(), sort_keys=True, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          print(f'candidate TESTNET bundle eligible={bundle.eligible} blocker={bundle.blocker}')
+          PY
       - name: Upload exact-SHA TESTNET evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -122,5 +176,6 @@ jobs:
           path: |
             artifacts/testnet_candidate.json
             artifacts/testnet_smoke.json
+            artifacts/testnet_candidate_bundle.json
           if-no-files-found: warn
           retention-days: 14
