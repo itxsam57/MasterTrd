@@ -1,6 +1,7 @@
 from mastertrd.contracts import EvaluationResult
 from mastertrd.genome import StrategyGenome
 from mastertrd.nautilus_evaluation import run_binance_spot_evaluation
+from mastertrd.risk_profiles import build_research_backtest_risk_runtime
 
 
 def test_real_nautilus_backtest_maps_to_evaluation_result():
@@ -27,7 +28,11 @@ def test_real_nautilus_backtest_maps_to_evaluation_result():
 
     from mastertrd.nautilus_strategy import compile_genome_to_nautilus
 
-    strategy = compile_genome_to_nautilus(genome, instrument=instrument)
+    strategy = compile_genome_to_nautilus(
+        genome,
+        instrument=instrument,
+        risk_runtime=build_research_backtest_risk_runtime(),
+    )
     bar_type = strategy.config.bar_type
     prices = (
         [2100 - i * 2 for i in range(15)]
