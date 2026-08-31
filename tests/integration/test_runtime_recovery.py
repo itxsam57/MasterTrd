@@ -119,7 +119,7 @@ def test_restart_restores_session_identity_and_replays_market_events_idempotentl
     assert store.load().has_event("market-e2") is True
 
 
-def test_reconciliation_mismatch_kills_system_before_next_market_event(tmp_path):
+def test_reconciliation_mismatch_kills_system_before_first_market_event(tmp_path):
     store = JsonPaperSessionStore(tmp_path / "paper-session.json")
     journal = PaperSessionJournal(receipt(), code_hash="code-v1", started_ns=START_NS)
     store.save(journal)
@@ -141,7 +141,9 @@ def test_reconciliation_mismatch_kills_system_before_next_market_event(tmp_path)
 
     assert report.system_killed is True
     assert report.reconciliation_errors == 1
-    assert dispatched == ["market-e1"]
+    assert report.reconciliation_checks == 1
+    assert report.processed_events == 0
+    assert dispatched == []
 
     decision = risk.check_order(
         OrderIntent(
