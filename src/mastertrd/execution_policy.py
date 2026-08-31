@@ -276,8 +276,13 @@ def evaluate_multileg_execution_policy(
         raise ValueError("multi-leg execution policy requires at least two instruments")
     if bars_held < 0:
         raise ValueError("bars_held cannot be negative")
-    aligned = _aligned_multileg_bars(genome, bars_by_instrument)
+    if set(current_legs) != set(genome.instruments):
+        raise ValueError("current_legs must match the strategy instrument set exactly")
     open_legs = _float_legs(current_legs)
+    if any(not isfinite(weight) for weight in open_legs.values()):
+        raise ValueError("current_legs weights must be finite")
+
+    aligned = _aligned_multileg_bars(genome, bars_by_instrument)
     is_open = any(abs(weight) > 0.0 for weight in open_legs.values())
 
     if not is_open:
