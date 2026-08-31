@@ -11,3 +11,4 @@ def test_hft_strategy_is_owned_by_focused_execution_gate() -> None:
     assert "src/mastertrd/hft_strategy.py" in core
     assert execution.count("src/mastertrd/hft_strategy.py") >= 2
     assert execution.count("tests/test_hft_strategy.py") >= 3
+    assert execution.count("tests/integration/test_hft_nautilus_execution.py") >= 3
