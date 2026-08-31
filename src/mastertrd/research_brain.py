@@ -684,17 +684,17 @@ def run_research_brain(
 
                 robust = run_generated_robustness_cycle(
                     candidate=genome,
-                    instrument=instrument,
-                    data=converted[0],
+                    instruments={key: instrument},
+                    data_by_instrument={key: converted[0]},
                     dataset_hash=_slice_hash(run_id, key, "robust-base", windows[0]),
-                    fold_datasets=((_slice_hash(run_id, key, "fold", windows[1]), converted[1]),),
-                    cpcv_datasets=((_slice_hash(run_id, key, "cpcv", windows[2]), converted[2]),),
-                    monte_carlo_datasets=((_slice_hash(run_id, key, "mc", windows[3]), converted[3]),),
+                    fold_datasets=((_slice_hash(run_id, key, "fold", windows[1]), {key: converted[1]}),),
+                    cpcv_datasets=((_slice_hash(run_id, key, "cpcv", windows[2]), {key: converted[2]}),),
+                    monte_carlo_datasets=((_slice_hash(run_id, key, "mc", windows[3]), {key: converted[3]}),),
                     asset_transfer_datasets=((
                         transfer_genome,
-                        transfer_instrument,
+                        {transfer_key: transfer_instrument},
                         _slice_hash(run_id, transfer_key, "transfer", transfer_bars),
-                        transfer_events,
+                        {transfer_key: transfer_events},
                     ),),
                     code_hash=code_hash,
                     trade_size=config.trade_size,
@@ -711,13 +711,13 @@ def run_research_brain(
                 hidden_events = market_bars_to_nautilus(hidden, instrument=instrument)
                 hidden_cycle = run_generated_hidden_cycle(
                     candidate=genome,
-                    instrument=instrument,
-                    hidden_data=hidden_events,
+                    instruments={key: instrument},
+                    hidden_data_by_instrument={key: hidden_events},
                     manifest=manifest,
                     regime_datasets=(
-                        (_slice_hash(run_id, key, "regime-a", windows[1]), converted[1]),
-                        (_slice_hash(run_id, key, "regime-b", windows[2]), converted[2]),
-                        (_slice_hash(run_id, key, "regime-c", windows[3]), converted[3]),
+                        (_slice_hash(run_id, key, "regime-a", windows[1]), {key: converted[1]}),
+                        (_slice_hash(run_id, key, "regime-b", windows[2]), {key: converted[2]}),
+                        (_slice_hash(run_id, key, "regime-c", windows[3]), {key: converted[3]}),
                     ),
                     code_hash=code_hash,
                     trade_size=config.trade_size,
