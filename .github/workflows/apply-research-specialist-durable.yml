@@ -35,11 +35,7 @@ jobs:
               marker = '    lock_hash: str,\n) -> ResearchBrainReport:\n'
               if text.count(marker) != 1:
                   raise SystemExit('run_research_brain signature marker is ambiguous; refusing write')
-              text = text.replace(
-                  marker,
-                  '    lock_hash: str,\n' + parameter + ') -> ResearchBrainReport:\n',
-                  1,
-              )
+              text = text.replace(marker, '    lock_hash: str,\n' + parameter + ') -> ResearchBrainReport:\n', 1)
 
           normalization = '    specialist_inputs_by_genome_hash = dict(specialist_inputs_by_genome_hash or {})\n'
           if normalization not in text:
@@ -55,13 +51,13 @@ jobs:
                   raise SystemExit('specialist stage markers are ambiguous; refusing write')
               start = text.index(stage_start_marker)
               end = text.index(stage_end_marker, start)
-              replacement = '''    def specialist_stage() -> Mapping[str, Any]:
-              return run_research_specialist_stage(
-                  validation_artifact["outcomes"],
-                  specialist_inputs_by_genome_hash=specialist_inputs_by_genome_hash,
+              replacement = (
+                  '    def specialist_stage() -> Mapping[str, Any]:\n'
+                  '        return run_research_specialist_stage(\n'
+                  '            validation_artifact["outcomes"],\n'
+                  '            specialist_inputs_by_genome_hash=specialist_inputs_by_genome_hash,\n'
+                  '        )\n\n'
               )
-
-'''
               text = text[:start] + replacement + text[end:]
 
           path.write_text(text)
