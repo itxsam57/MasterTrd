@@ -23,16 +23,10 @@ def _genome(family: str, instruments: tuple[str, ...], *, defined_risk: bool = F
 
 
 def _option():
-    from nautilus_trader.model import (
-        AssetClass,
-        Currency,
-        InstrumentId,
-        OptionContract,
-        OptionKind,
-        Price,
-        Quantity,
-        Symbol,
-    )
+    from nautilus_trader.model.enums import AssetClass, OptionKind
+    from nautilus_trader.model.identifiers import InstrumentId, Symbol
+    from nautilus_trader.model.instruments import OptionContract
+    from nautilus_trader.model.objects import Currency, Price, Quantity
 
     return OptionContract(
         instrument_id=InstrumentId.from_str("AAPL211217C00150000.OPRA"),
