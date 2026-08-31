@@ -49,6 +49,26 @@ def test_autonomous_research_is_scheduled_public_safe_and_cancellable():
     assert "ACTIONS/UPLOAD-ARTIFACT" in upper
 
 
+def test_autonomous_research_uploads_only_the_public_report():
+    text, workflow = _load("autonomous-research.yml")
+    jobs = _jobs(workflow)
+    job = next(iter(jobs.values()))
+    upload_steps = [
+        step
+        for step in job.get("steps", [])
+        if str(step.get("uses", "")).lower().startswith("actions/upload-artifact@")
+    ]
+
+    assert len(upload_steps) == 1
+    upload = upload_steps[0]
+    assert upload.get("with", {}).get("path") == "artifacts/research/research-report.json"
+
+    lower = text.lower()
+    assert "artifacts/research/public-data" not in lower
+    assert "research.duckdb" not in lower
+    assert "secrets." not in lower
+
+
 def test_testnet_smoke_is_environment_gated_and_never_live():
     text, workflow = _load("testnet-smoke.yml")
     assert workflow.get("permissions") == {"contents": "read"}
