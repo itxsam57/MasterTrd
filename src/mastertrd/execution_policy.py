@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from math import isfinite
 from statistics import fmean
 from typing import Mapping, Sequence
@@ -287,8 +288,10 @@ def _positive_hft_limit(genome: StrategyGenome, key: str) -> float:
 
 
 def _hft_pnl_ticks(state: HftPositionState) -> float:
-    direction = 1.0 if state.direction is SignalDirection.LONG else -1.0
-    return direction * (state.current_price - state.entry_price) / state.tick_size
+    direction = Decimal("1") if state.direction is SignalDirection.LONG else Decimal("-1")
+    price_delta = Decimal(str(state.current_price)) - Decimal(str(state.entry_price))
+    tick_size = Decimal(str(state.tick_size))
+    return float(direction * price_delta / tick_size)
 
 
 def evaluate_hft_execution_policy(
