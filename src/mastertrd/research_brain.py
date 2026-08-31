@@ -302,6 +302,34 @@ def evaluate_research_specialist_candidate(
     }
 
 
+
+def run_research_specialist_stage(
+    validated_outcomes: Sequence[Mapping[str, Any]],
+    *,
+    specialist_inputs_by_genome_hash: Mapping[str, SpecialistInputs],
+) -> dict[str, Any]:
+    """Route validated candidates through their candidate-bound specialist inputs."""
+    outcomes: list[dict[str, Any]] = []
+    for item in validated_outcomes:
+        if not bool(item["passed"]):
+            outcomes.append(dict(item))
+            continue
+        candidate = _genome_from_payload(item["genome"])
+        inputs = specialist_inputs_by_genome_hash.get(
+            candidate.genome_hash,
+            SpecialistInputs(),
+        )
+        outcome = evaluate_research_specialist_candidate(
+            candidate,
+            score=float(item["score"]),
+            inputs=inputs,
+        )
+        genome_payload = dict(outcome["genome"])
+        genome_payload["genome_hash"] = candidate.genome_hash
+        outcome["genome"] = genome_payload
+        outcomes.append(outcome)
+    return {"outcomes": outcomes}
+
 def _parameter_space(genome: StrategyGenome) -> dict[str, object]:
     space: dict[str, object] = {}
     for key, value in genome.entry.items():
