@@ -75,11 +75,14 @@ def run_node(
     readiness = preflight_node(runtime, environ)
     if execution_runtime is not None:
         heartbeat(readiness)
-        execution_runtime.run(stop_requested=stop_requested)
+        try:
+            execution_runtime.run(stop_requested=stop_requested)
+        finally:
+            execution_runtime.close()
         return readiness
 
     # Backward-compatible observability-only loop for injected/test callers.
-    # Production main() fails closed unless a concrete runtime factory is configured.
+    # Production main() uses the repository-owned runtime factory.
     while not stop_requested():
         heartbeat(readiness)
         sleep(interval_seconds)
