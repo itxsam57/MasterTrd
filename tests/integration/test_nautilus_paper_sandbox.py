@@ -1,7 +1,12 @@
 import pytest
 
+import mastertrd.nautilus_paper as nautilus_paper_module
 from mastertrd.genome import StrategyGenome
-from mastertrd.nautilus_paper import open_persistent_paper_session, probe_nautilus_sandbox_session
+from mastertrd.nautilus_paper import (
+    fixture_binance_spot_instrument,
+    open_persistent_paper_session,
+    probe_nautilus_sandbox_session,
+)
 
 
 def genome() -> StrategyGenome:
@@ -82,3 +87,32 @@ def test_persistent_nautilus_paper_resume_fails_closed_on_code_mismatch(tmp_path
             code_hash="code-v2",
             resume=True,
         )
+
+
+def test_public_binance_spot_instrument_loader_uses_exact_provider_metadata(monkeypatch):
+    expected = fixture_binance_spot_instrument("ETHUSDT.BINANCE")
+
+    class FakeProvider:
+        def __init__(self):
+            self.loaded = []
+
+        async def load_async(self, instrument_id):
+            self.loaded.append(instrument_id)
+
+        def find(self, instrument_id):
+            if self.loaded and instrument_id == expected.id:
+                return expected
+            return None
+
+    provider = FakeProvider()
+    monkeypatch.setattr(
+        nautilus_paper_module,
+        "_build_public_binance_spot_provider",
+        lambda: provider,
+        raising=False,
+    )
+
+    loaded = nautilus_paper_module.load_public_binance_spot_instrument("ETHUSDT.BINANCE")
+
+    assert loaded is expected
+    assert [instrument_id.value for instrument_id in provider.loaded] == ["ETHUSDT.BINANCE"]
