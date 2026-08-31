@@ -1,3 +1,4 @@
+import inspect
 from types import SimpleNamespace
 
 import mastertrd.research_brain as research_brain
@@ -29,6 +30,13 @@ def _config():
         paper_queue_cap=0,
         validation_window=50,
     )
+
+
+def test_research_brain_public_api_accepts_candidate_bound_specialist_inputs():
+    parameter = inspect.signature(research_brain.run_research_brain).parameters[
+        "specialist_inputs_by_genome_hash"
+    ]
+    assert parameter.default is None
 
 
 def test_run_research_brain_routes_candidate_bound_inputs_into_durable_specialist_stage(monkeypatch):
