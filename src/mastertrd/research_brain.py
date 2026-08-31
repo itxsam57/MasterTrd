@@ -31,6 +31,7 @@ from .research_candidate_generation import (
 )
 from .robustness import RobustnessPolicy
 from .robustness_cycle import run_generated_robustness_cycle
+from .specialist_orchestrator import SpecialistInputs, run_specialist_gate
 from .validation import ValidationEvidence, extra_evidence_for_target, nautilus_backtest_evidence
 
 
@@ -280,6 +281,25 @@ def _screen_evidence(
             "trade_count": float(result.trade_count),
         },
     )
+
+
+def evaluate_research_specialist_candidate(
+    candidate: StrategyGenome,
+    *,
+    score: float,
+    inputs: SpecialistInputs,
+) -> dict[str, Any]:
+    """Run the real specialist gate and persist its candidate-bound evidence payload."""
+    result = run_specialist_gate(candidate, inputs)
+    return {
+        "genome": _genome_payload(candidate),
+        "passed": bool(result.passed),
+        "score": float(score),
+        "reason": result.reason,
+        "evidence": [asdict(record) for record in result.evidence],
+        "missing_evidence": sorted(result.missing_evidence),
+        "failed_evidence": sorted(result.failed_evidence),
+    }
 
 
 def _parameter_space(genome: StrategyGenome) -> dict[str, object]:
