@@ -29,13 +29,8 @@ jobs:
 
           production = Path('src/mastertrd/research_job.py')
           text = production.read_text(encoding='utf-8')
-          old = '''    artifact_dir = Path(os.environ.get("MASTERTRD_RESEARCH_ARTIFACT_DIR", "artifacts/research"))
-    code_hash = os.environ.get("GITHUB_SHA") or os.environ.get("MASTERTRD_CODE_HASH")
-'''
-          new = '''    artifact_dir = Path(os.environ.get("MASTERTRD_RESEARCH_ARTIFACT_DIR", "artifacts/research"))
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    code_hash = os.environ.get("GITHUB_SHA") or os.environ.get("MASTERTRD_CODE_HASH")
-'''
+          old = '    artifact_dir = Path(os.environ.get("MASTERTRD_RESEARCH_ARTIFACT_DIR", "artifacts/research"))\n    code_hash = os.environ.get("GITHUB_SHA") or os.environ.get("MASTERTRD_CODE_HASH")\n'
+          new = '    artifact_dir = Path(os.environ.get("MASTERTRD_RESEARCH_ARTIFACT_DIR", "artifacts/research"))\n    artifact_dir.mkdir(parents=True, exist_ok=True)\n    code_hash = os.environ.get("GITHUB_SHA") or os.environ.get("MASTERTRD_CODE_HASH")\n'
           if text.count(old) != 1:
               raise SystemExit('research_job main insertion anchor drifted')
           production.write_text(text.replace(old, new), encoding='utf-8')
@@ -43,17 +38,7 @@ jobs:
           test_path = Path('tests/test_research_job.py')
           test = test_path.read_text(encoding='utf-8')
           old_return = '        return SimpleNamespace(bars=(token,), manifest=manifest)\n'
-          new_return = '''        timestamp = datetime(
-            int(kwargs["period"][:4]),
-            int(kwargs["period"][5:7]),
-            1,
-            tzinfo=timezone.utc,
-        )
-        return SimpleNamespace(
-            bars=(SimpleNamespace(timestamp=timestamp, token=token),),
-            manifest=manifest,
-        )
-'''
+          new_return = '        timestamp = datetime(\n            int(kwargs["period"][:4]),\n            int(kwargs["period"][5:7]),\n            1,\n            tzinfo=timezone.utc,\n        )\n        return SimpleNamespace(\n            bars=(SimpleNamespace(timestamp=timestamp, token=token),),\n            manifest=manifest,\n        )\n'
           if test.count(old_return) != 1:
               raise SystemExit('research_job fake archive anchor drifted')
           test = test.replace(old_return, new_return)
