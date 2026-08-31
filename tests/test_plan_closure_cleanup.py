@@ -11,6 +11,7 @@ from mastertrd.acceptance import (
     ProbeStatus,
     run_full_acceptance,
 )
+from mastertrd.research_job import default_research_job_plan
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,3 +69,23 @@ def test_operator_docs_report_process_ready_and_owner_blocker_truthfully() -> No
     assert "Implementation status: `PROCESS_READY`" in report
     assert "`testnet_smoke` | `BLOCKED_OWNER_INPUT`" in report
     assert "MASTERTRD_EXECUTION_FACTORY" not in operations
+
+
+def test_scheduled_research_and_testnet_paths_are_repository_owned_and_fail_closed() -> None:
+    plan = default_research_job_plan()
+    assert len(plan.runnable_families) > 1
+    blocked = {item.family: item.reason for item in plan.blocked_families}
+    assert blocked["options"] == "qualifying_public_option_data_unavailable"
+    assert blocked["market_making"] == "qualifying_public_l2_data_unavailable"
+
+    research_workflow = (ROOT / ".github" / "workflows" / "autonomous-research.yml").read_text(
+        encoding="utf-8"
+    )
+    testnet_workflow = (ROOT / ".github" / "workflows" / "testnet-smoke.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "uv run python -m mastertrd.research_job" in research_workflow
+    assert "candidate_manifest_json" in testnet_workflow
+    assert "BLOCKED_OWNER_INPUT" in testnet_workflow
+    assert "testnet_candidate_bundle.json" in testnet_workflow
