@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from math import isfinite
 
 from .paper_session import JsonPaperSessionStore, PaperSessionJournal
 from .reconciliation import ExecutionState, Reconciler
@@ -40,6 +41,49 @@ class ExecutionRuntime:
         self._dispatch = dispatch
         self._stream = stream
 
+    @staticmethod
+    def _risk_symbol(event: MarketStreamEvent) -> str:
+        instrument = event.data.instrument
+        if "." in instrument:
+            return instrument
+        return f"{instrument}.{event.data.venue}"
+
+    def _refresh_market_risk_state(self, event: MarketStreamEvent) -> None:
+        extras = event.data.extras
+        volatility_raw = extras.get("realized_volatility")
+        if volatility_raw is None:
+            return
+        try:
+            realized_volatility = float(volatility_raw)
+        except (TypeError, ValueError):
+            return
+        if not isfinite(realized_volatility) or realized_volatility < 0.0:
+            return
+
+        if event.kind == "tick":
+            tick = event.tick
+            midpoint = (float(tick.bid) + float(tick.ask)) / 2.0
+            if midpoint <= 0.0:
+                return
+            spread_bps = ((float(tick.ask) - float(tick.bid)) / midpoint) * 10_000.0
+        else:
+            spread_raw = extras.get("spread_bps")
+            if spread_raw is None:
+                return
+            try:
+                spread_bps = float(spread_raw)
+            except (TypeError, ValueError):
+                return
+            if not isfinite(spread_bps) or spread_bps < 0.0:
+                return
+
+        self._risk_runtime.update_market_state(
+            symbol=self._risk_symbol(event),
+            spread_bps=spread_bps,
+            realized_volatility=realized_volatility,
+            observed_at=event.timestamp_ns / 1_000_000_000.0,
+        )
+
     def run(
         self,
         stream: MarketStream | None = None,
@@ -69,6 +113,10 @@ class ExecutionRuntime:
             self._journal.record_market_event(event.event_id, timestamp_ns=event.timestamp_ns)
             self._session_store.save(self._journal)
 
+            # Fresh market state must exist before a strategy can submit against
+            # this event. Missing or malformed required metrics remain absent and
+            # therefore fail closed in RiskStateProvider.
+            self._refresh_market_risk_state(event)
             self._dispatch(event)
             processed_events += 1
 
@@ -82,6 +130,10 @@ class ExecutionRuntime:
 
             reconciliation_id = f"reconcile:{event.event_id}"
             reconciliation_timestamp = max(event.timestamp_ns, self._journal.latest_timestamp_ns)
+            self._risk_runtime.update_reconciliation_state(
+                ok=reconciliation.ok,
+                observed_at=reconciliation_timestamp / 1_000_000_000.0,
+            )
             self._journal.record_reconciliation(
                 reconciliation_id,
                 ok=reconciliation.ok,
