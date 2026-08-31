@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, replace
 from enum import StrEnum
 import hashlib
@@ -95,6 +96,7 @@ class RiskRuntime:
         self._clock = monotonic_clock
         self.decisions: list[RiskDecision] = []
         self._last_allowed: dict[str, float] = {}
+        self._accepted_order_times: deque[float] = deque()
         self._kills: dict[KillScope, dict[str, str]] = {
             KillScope.STRATEGY: {},
             KillScope.SYMBOL: {},
@@ -190,6 +192,14 @@ class RiskRuntime:
                 return action, reason
         return None
 
+    def _orders_in_last_minute(self, checked_at: float) -> int:
+        while (
+            self._accepted_order_times
+            and checked_at - self._accepted_order_times[0] >= 60.0
+        ):
+            self._accepted_order_times.popleft()
+        return len(self._accepted_order_times)
+
     def check_order(self, intent: OrderIntent, snapshot: RiskSnapshot) -> RiskDecision:
         checked_at = float(self._clock())
         fingerprint = intent.fingerprint
@@ -221,6 +231,10 @@ class RiskRuntime:
         )
         effective = replace(
             snapshot,
+            orders_last_minute=max(
+                int(snapshot.orders_last_minute),
+                self._orders_in_last_minute(checked_at),
+            ),
             duplicate_order=duplicate,
             correlated_exposure=max(float(snapshot.correlated_exposure), correlated),
             venue_healthy=(snapshot.venue_healthy and health.healthy) if health else snapshot.venue_healthy,
@@ -237,4 +251,5 @@ class RiskRuntime:
         )
         if action is RiskAction.ALLOW:
             self._last_allowed[fingerprint] = checked_at
+            self._accepted_order_times.append(checked_at)
         return decision
