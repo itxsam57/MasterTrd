@@ -1,0 +1,258 @@
+name: Apply plan closure cleanup
+
+on:
+  push:
+    branches:
+      - v2/plan-closure-20260831
+    paths:
+      - .github/workflows/apply-plan-closure-cleanup.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Synchronize exact branch head
+        shell: bash
+        run: |
+          git fetch origin v2/plan-closure-20260831
+          git reset --hard origin/v2/plan-closure-20260831
+          git rev-parse HEAD > /tmp/mastertrd-cleanup-base
+      - name: Apply guarded Task 10 cleanup
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def read(path: str) -> str:
+              return Path(path).read_text(encoding='utf-8')
+
+          def write(path: str, text: str) -> None:
+              Path(path).write_text(text, encoding='utf-8')
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              text = read(path)
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one guarded match, found {count}: {old!r}')
+              write(path, text.replace(old, new, 1))
+
+          def replace_all(path: str, old: str, new: str, *, minimum: int = 1) -> None:
+              text = read(path)
+              count = text.count(old)
+              if count < minimum:
+                  raise SystemExit(f'{path}: expected at least {minimum} matches, found {count}: {old!r}')
+              write(path, text.replace(old, new))
+
+          def remove_function(path: str, name: str) -> None:
+              text = read(path)
+              marker = f'\ndef {name}('
+              start = text.find(marker)
+              if start < 0:
+                  raise SystemExit(f'{path}: missing function {name}')
+              next_def = text.find('\ndef ', start + len(marker))
+              next_class = text.find('\nclass ', start + len(marker))
+              candidates = [pos for pos in (next_def, next_class) if pos >= 0]
+              if not candidates:
+                  raise SystemExit(f'{path}: cannot find end of function {name}')
+              end = min(candidates)
+              write(path, text[:start] + text[end:])
+
+          # Generated acceptance truth: implementation gates earn PROCESS_READY,
+          # while LIVE eligibility remains a separate owner/evidence decision.
+          replace_once(
+              'src/mastertrd/acceptance.py',
+              'class AcceptanceStatus(StrEnum):\n    COMPLETE = "COMPLETE"\n    FAILED = "FAILED"',
+              'class AcceptanceStatus(StrEnum):\n    PROCESS_READY = "PROCESS_READY"\n    FAILED = "FAILED"',
+          )
+          replace_all(
+              'src/mastertrd/acceptance.py',
+              'AcceptanceStatus.COMPLETE',
+              'AcceptanceStatus.PROCESS_READY',
+              minimum=2,
+          )
+          replace_all(
+              'src/mastertrd/acceptance.py',
+              'Implementation completion does not activate LIVE trading.',
+              'Process readiness does not activate LIVE trading.',
+          )
+          replace_once(
+              'src/mastertrd/acceptance.py',
+              'description="Run MasterTrd completion acceptance checks"',
+              'description="Run MasterTrd plan-closure acceptance checks"',
+          )
+
+          # Remove the obsolete arbitrary production factory hook. main() has
+          # used build_execution_runtime directly since Task 5.
+          replace_once('src/mastertrd/live_node.py', 'from importlib import import_module\n', '')
+          remove_function('src/mastertrd/live_node.py', 'load_execution_runtime_factory')
+
+          # Remove the unused permissive risk-limit constructor. Historical
+          # evaluation owns its explicit SimulationRiskStateProvider profile.
+          replace_once(
+              'src/mastertrd/nautilus_risk_hook.py',
+              'from .risk import RiskAction, RiskLimits, RiskSnapshot',
+              'from .risk import RiskAction, RiskSnapshot',
+          )
+          remove_function('src/mastertrd/nautilus_risk_hook.py', 'default_nautilus_risk_limits')
+
+          # Update tests which intentionally encoded the superseded contract.
+          replace_all(
+              'tests/test_acceptance.py',
+              'AcceptanceStatus.COMPLETE',
+              'AcceptanceStatus.PROCESS_READY',
+          )
+          replace_all(
+              'tests/test_acceptance_report.py',
+              'AcceptanceStatus.COMPLETE',
+              'AcceptanceStatus.PROCESS_READY',
+          )
+          replace_all(
+              'tests/test_acceptance_report.py',
+              'Implementation status: `COMPLETE`',
+              'Implementation status: `PROCESS_READY`',
+          )
+          replace_all(
+              'tests/test_completion_docs.py',
+              'Implementation status: `COMPLETE`',
+              'Implementation status: `PROCESS_READY`',
+          )
+          replace_once(
+              'tests/test_completion_docs.py',
+              '    assert "complete" in lower',
+              '    assert "process_ready" in lower',
+          )
+          replace_once(
+              'tests/test_live_node.py',
+              '    load_execution_runtime_factory,\n',
+              '',
+          )
+          remove_function(
+              'tests/test_live_node.py',
+              'test_production_factory_loader_fails_closed_when_unconfigured_or_invalid',
+          )
+          remove_function(
+              'tests/test_live_node.py',
+              'test_production_factory_loader_resolves_callable_and_rejects_non_callable',
+          )
+          replace_once(
+              'tests/test_live_node.py',
+              '    monkeypatch.delenv("MASTERTRD_EXECUTION_FACTORY", raising=False)\n',
+              '',
+          )
+          replace_once(
+              'tests/test_live_node.py',
+              '    monkeypatch.setattr(\n        live_node,\n        "load_execution_runtime_factory",\n        lambda _environ: pytest.fail("production main must not load arbitrary execution factory"),\n    )\n',
+              '',
+          )
+
+          # README: state what is usable now without conflating it with LIVE.
+          replace_once(
+              'README.md',
+              '**Implementation status: COMPLETE.** The end-to-end completion track in `docs/superpowers/plans/2026-08-30-mastertrd-full-completion.md` has reached its cumulative acceptance phase, and the verified implementation baseline is recorded in `docs/ACCEPTANCE_REPORT.md`.',
+              '**Implementation status: PROCESS_READY.** The repository-owned research, PAPER, DEMO/TESTNET, risk, recovery, specialist, and evidence paths in `docs/superpowers/plans/2026-08-31-mastertrd-v2-plan-closure.md` are implemented and covered by cumulative acceptance; owner-controlled external receipts are tracked separately in `docs/ACCEPTANCE_REPORT.md`.',
+          )
+          replace_all(
+              'README.md',
+              'Implementation completion is deliberately separate from LIVE activation.',
+              'Process readiness is deliberately separate from LIVE activation.',
+          )
+
+          # Operations: production startup uses the canonical repository factory.
+          replace_once(
+              'docs/OPERATIONS.md',
+              '- `MASTERTRD_EXECUTION_FACTORY=<python.module:callable>` for the concrete persistent execution runtime factory. `mastertrd.live_node` deliberately refuses production startup without it.\n',
+              '',
+          )
+          replace_once(
+              'docs/OPERATIONS.md',
+              '`python -m mastertrd.live_node` is intentionally fail-closed unless `MASTERTRD_EXECUTION_FACTORY` names a concrete callable factory. Do not insert a dummy factory just to make the node stay alive.',
+              '`python -m mastertrd.live_node` uses the repository-owned `build_execution_runtime` factory. PAPER needs no exchange execution credential; DEMO/TESTNET/LIVE still fail closed on their mode-specific credential and safety gates.',
+          )
+          replace_once(
+              'docs/OPERATIONS.md',
+              '3. On the VM, create/edit `/etc/mastertrd/mastertrd.env`. Start from the generated template, then set `MASTERTRD_EXECUTION_FACTORY` and only the credentials required for the chosen non-LIVE mode.',
+              '3. On the VM, create/edit `/etc/mastertrd/mastertrd.env`. Start from the generated template, then set only the runtime flags and mode-specific credentials required for the chosen non-LIVE mode.',
+          )
+          replace_once(
+              'docs/OPERATIONS.md',
+              'PAPER never requires exchange execution credentials. Use it for persistent runtime recovery, journaling, reconciliation logic, and forward-paper evidence. The concrete execution factory still must be configured for `mastertrd.live_node` CLI service operation.',
+              'PAPER never requires exchange execution credentials. Use it for persistent runtime recovery, journaling, reconciliation logic, and forward-paper evidence. `mastertrd.live_node` constructs the canonical repository-owned PAPER runtime directly.',
+          )
+
+          # Checked-in report remains a provenance snapshot; exact-head workflow
+          # artifacts are canonical. Correct status and current fail-closed wording.
+          replace_once(
+              'docs/ACCEPTANCE_REPORT.md',
+              '- Implementation status: `COMPLETE`',
+              '- Implementation status: `PROCESS_READY`',
+          )
+          replace_all(
+              'docs/ACCEPTANCE_REPORT.md',
+              'Implementation completion does not activate LIVE trading.',
+              'Process readiness does not activate LIVE trading.',
+          )
+          replace_once(
+              'docs/ACCEPTANCE_REPORT.md',
+              '- The manual `Testnet Smoke` workflow now invokes the real production runner and uploads `artifacts/testnet_smoke.json` as exact-SHA evidence.',
+              '- The manual `Testnet Smoke` workflow invokes the real production runner and uploads the exact-SHA smoke record plus `artifacts/testnet_candidate_bundle.json`, which binds risk, reconciliation, kill-switch, and smoke evidence to the dispatched candidate identity.',
+          )
+          replace_once(
+              'docs/ACCEPTANCE_REPORT.md',
+              '- The workflow continues to refuse non-TESTNET runtime, missing credentials, and any credential marked withdrawal-capable.',
+              '- The workflow refuses non-TESTNET runtime and any credential marked withdrawal-capable. Missing credentials are preserved as `CREDENTIALS_UNAVAILABLE` / `BLOCKED_OWNER_INPUT` evidence and never converted into PASS.',
+          )
+          replace_once(
+              'docs/ACCEPTANCE_REPORT.md',
+              'This is the **checked-in provenance snapshot** of the latest fully verified implementation baseline.',
+              'This is a **checked-in provenance snapshot** of a verified implementation baseline.',
+          )
+
+          # Fail if obsolete production/config claims survived outside the tests
+          # which intentionally assert their absence.
+          forbidden = {
+              'src/mastertrd/live_node.py': 'MASTERTRD_EXECUTION_FACTORY',
+              'src/mastertrd/nautilus_risk_hook.py': 'default_nautilus_risk_limits',
+              'docs/OPERATIONS.md': 'MASTERTRD_EXECUTION_FACTORY',
+          }
+          for path, token in forbidden.items():
+              if token in read(path):
+                  raise SystemExit(f'{path}: obsolete token survived: {token}')
+          if 'Implementation status: `COMPLETE`' in read('docs/ACCEPTANCE_REPORT.md'):
+              raise SystemExit('checked-in acceptance report still claims COMPLETE')
+          if 'Implementation status: COMPLETE' in read('README.md'):
+              raise SystemExit('README still claims COMPLETE')
+          PY
+      - name: Verify focused GREEN
+        run: |
+          python -m pip install --disable-pip-version-check 'uv==0.12.8'
+          uv lock --check
+          uv sync --locked --all-extras
+          uv pip check
+          uv run pytest -q \
+            tests/test_plan_closure_cleanup.py \
+            tests/test_acceptance.py \
+            tests/test_acceptance_report.py \
+            tests/test_acceptance_workflow.py \
+            tests/test_completion_docs.py \
+            tests/test_live_node.py
+      - name: Commit real cleanup and remove one-shot workflow
+        shell: bash
+        run: |
+          base="$(cat /tmp/mastertrd-cleanup-base)"
+          git fetch origin v2/plan-closure-20260831
+          test "$(git rev-parse origin/v2/plan-closure-20260831)" = "$base"
+          rm .github/workflows/apply-plan-closure-cleanup.yml
+          git config user.name 'MasterTrd Plan Closure'
+          git config user.email 'actions@users.noreply.github.com'
+          git add src/mastertrd/acceptance.py src/mastertrd/live_node.py src/mastertrd/nautilus_risk_hook.py README.md docs/OPERATIONS.md docs/ACCEPTANCE_REPORT.md tests/test_acceptance.py tests/test_acceptance_report.py tests/test_completion_docs.py tests/test_live_node.py .github/workflows/apply-plan-closure-cleanup.yml
+          git commit -m 'refactor(plan): remove obsolete shims and truthful closure status'
+          git push origin HEAD:v2/plan-closure-20260831
