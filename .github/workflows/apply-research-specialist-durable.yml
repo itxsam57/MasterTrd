@@ -30,79 +30,40 @@ jobs:
           path = Path('src/mastertrd/research_brain.py')
           text = path.read_text()
 
-          old_signature = '''def run_research_brain(
-              config: ResearchBrainConfig,
-              dataset: ResearchDataset,
-              memory: DuckDbResearchMemory,
-              *,
-              code_hash: str,
-              lock_hash: str,
-          ) -> ResearchBrainReport:
-          '''
-          new_signature = '''def run_research_brain(
-              config: ResearchBrainConfig,
-              dataset: ResearchDataset,
-              memory: DuckDbResearchMemory,
-              *,
-              code_hash: str,
-              lock_hash: str,
-              specialist_inputs_by_genome_hash: Mapping[str, SpecialistInputs] | None = None,
-          ) -> ResearchBrainReport:
-          '''
-          if old_signature not in text:
-              raise SystemExit('expected run_research_brain signature not found; refusing drifted write')
-          text = text.replace(old_signature, new_signature, 1)
+          parameter = '    specialist_inputs_by_genome_hash: Mapping[str, SpecialistInputs] | None = None,\n'
+          if parameter not in text:
+              marker = '    lock_hash: str,\n) -> ResearchBrainReport:\n'
+              if text.count(marker) != 1:
+                  raise SystemExit('run_research_brain signature marker is ambiguous; refusing write')
+              text = text.replace(
+                  marker,
+                  '    lock_hash: str,\n' + parameter + ') -> ResearchBrainReport:\n',
+                  1,
+              )
 
-          old_guard = '''    if not code_hash or not lock_hash:
-              raise ValueError("code_hash and lock_hash are required")
-          run_id = _run_id(config, dataset, code_hash=code_hash, lock_hash=lock_hash)
-          '''
-          new_guard = '''    if not code_hash or not lock_hash:
-              raise ValueError("code_hash and lock_hash are required")
-          specialist_inputs_by_genome_hash = dict(specialist_inputs_by_genome_hash or {})
-          run_id = _run_id(config, dataset, code_hash=code_hash, lock_hash=lock_hash)
-          '''
-          if old_guard not in text:
-              raise SystemExit('expected code/lock guard not found; refusing drifted write')
-          text = text.replace(old_guard, new_guard, 1)
+          normalization = '    specialist_inputs_by_genome_hash = dict(specialist_inputs_by_genome_hash or {})\n'
+          if normalization not in text:
+              guard = '    if not code_hash or not lock_hash:\n        raise ValueError("code_hash and lock_hash are required")\n'
+              if text.count(guard) != 1:
+                  raise SystemExit('code/lock guard marker is ambiguous; refusing write')
+              text = text.replace(guard, guard + normalization, 1)
 
-          old_stage = '''    def specialist_stage() -> Mapping[str, Any]:
-              outcomes = []
-              for item in validation_artifact["outcomes"]:
-                  genome = _genome_from_payload(item["genome"])
-                  if not bool(item["passed"]):
-                      outcomes.append(dict(item))
-                      continue
-                  extra = extra_evidence_for_target(genome, StrategyState.ROBUST)
-                  if extra:
-                      outcomes.append(
-                          {
-                              "genome": _genome_payload(genome),
-                              "passed": False,
-                              "score": float(item["score"]),
-                              "reason": "specialist_evidence_required:" + ",".join(sorted(extra)),
-                          }
-                      )
-                  else:
-                      outcomes.append(
-                          {
-                              "genome": _genome_payload(genome),
-                              "passed": True,
-                              "score": float(item["score"]),
-                              "reason": "standard_execution_path",
-                          }
-                      )
-              return {"outcomes": outcomes}
-          '''
-          new_stage = '''    def specialist_stage() -> Mapping[str, Any]:
+          stage_start_marker = '    def specialist_stage() -> Mapping[str, Any]:\n'
+          stage_end_marker = '    specialist_artifact, _ = _stage(memory, run_id, "specialist_tests", specialist_stage)\n'
+          if 'return run_research_specialist_stage(' not in text:
+              if text.count(stage_start_marker) != 1 or text.count(stage_end_marker) != 1:
+                  raise SystemExit('specialist stage markers are ambiguous; refusing write')
+              start = text.index(stage_start_marker)
+              end = text.index(stage_end_marker, start)
+              replacement = '''    def specialist_stage() -> Mapping[str, Any]:
               return run_research_specialist_stage(
                   validation_artifact["outcomes"],
                   specialist_inputs_by_genome_hash=specialist_inputs_by_genome_hash,
               )
-          '''
-          if old_stage not in text:
-              raise SystemExit('expected hardcoded specialist stage not found; refusing drifted write')
-          text = text.replace(old_stage, new_stage, 1)
+
+'''
+              text = text[:start] + replacement + text[end:]
+
           path.write_text(text)
           PY
       - name: Verify focused GREEN
