@@ -37,6 +37,7 @@ class PaperSessionJournal:
         self._events: list[_PaperSessionEvent] = []
         self._event_ids: set[str] = set()
         self._finalized = False
+        self._final_report: PaperForwardReport | None = None
 
     @property
     def session_id(self) -> str:
@@ -59,6 +60,11 @@ class PaperSessionJournal:
         if self._events:
             return self._events[-1].timestamp_ns
         return self._started_ns
+
+    @property
+    def finalized_report(self) -> PaperForwardReport | None:
+        """Return the immutable persisted final report, if this session is closed."""
+        return self._final_report
 
     def has_event(self, event_id: str) -> bool:
         return event_id in self._event_ids
@@ -96,7 +102,30 @@ class PaperSessionJournal:
             "started_ns": self._started_ns,
             "events": [asdict(event) for event in self._events],
             "finalized": self._finalized,
+            "final_report": None if self._final_report is None else asdict(self._final_report),
         }
+
+    @staticmethod
+    def _validate_restored_report(
+        report: PaperForwardReport,
+        *,
+        receipt: PaperStartReceipt,
+        code_hash: str,
+    ) -> None:
+        expected = (
+            (report.strategy_id, receipt.strategy_id, "strategy_id"),
+            (report.genome_hash, receipt.genome_hash, "genome_hash"),
+            (report.session_id, receipt.session_id, "session_id"),
+            (report.venue, receipt.venue, "venue"),
+            (report.engine, receipt.engine, "engine"),
+            (report.engine_version, receipt.engine_version, "engine_version"),
+            (report.code_hash, code_hash, "code_hash"),
+        )
+        for actual, required, field in expected:
+            if actual != required:
+                raise ValueError(f"paper session final report {field} mismatch")
+        if not report.provenance_verified or not report.session_event_hash:
+            raise ValueError("paper session final report provenance is invalid")
 
     @classmethod
     def _restore(cls, payload: dict[str, object]) -> "PaperSessionJournal":
@@ -109,6 +138,7 @@ class PaperSessionJournal:
             started_ns = int(payload["started_ns"])
             events = payload["events"]
             finalized = bool(payload.get("finalized", False))
+            final_report_raw = payload.get("final_report")
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("paper session state is invalid") from exc
         if not isinstance(events, list):
@@ -137,7 +167,19 @@ class PaperSessionJournal:
                 journal.record_reconciliation(event_id, ok=value, timestamp_ns=timestamp_ns)
             else:
                 raise ValueError("paper session state is invalid")
-        journal._finalized = finalized
+
+        if finalized:
+            if not isinstance(final_report_raw, dict):
+                raise ValueError("paper session finalized state is missing final report")
+            try:
+                final_report = PaperForwardReport(**final_report_raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("paper session final report is invalid") from exc
+            cls._validate_restored_report(final_report, receipt=receipt, code_hash=code_hash)
+            journal._final_report = final_report
+            journal._finalized = True
+        elif final_report_raw is not None:
+            raise ValueError("paper session non-finalized state cannot contain final report")
         return journal
 
     def finalize(self, *, ended_ns: int) -> PaperForwardReport:
@@ -180,8 +222,7 @@ class PaperSessionJournal:
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
 
-        self._finalized = True
-        return PaperForwardReport(
+        report = PaperForwardReport(
             strategy_id=self._receipt.strategy_id,
             genome_hash=self._receipt.genome_hash,
             session_id=self._receipt.session_id,
@@ -199,6 +240,9 @@ class PaperSessionJournal:
             session_event_hash=session_event_hash,
             provenance_verified=True,
         )
+        self._final_report = report
+        self._finalized = True
+        return report
 
 
 class JsonPaperSessionStore:
