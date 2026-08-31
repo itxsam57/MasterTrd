@@ -129,6 +129,9 @@ def test_testnet_smoke_runner_uses_candidate_bound_manifest(monkeypatch, tmp_pat
             "MASTERTRD_MODE": "TESTNET",
             "MASTERTRD_TESTNET_CANDIDATE_MANIFEST": str(manifest_path),
             "GITHUB_SHA": manifest.code_hash,
+            "BINANCE_TESTNET_API_KEY": "test-key",
+            "BINANCE_TESTNET_API_SECRET": "test-secret",
+            "BINANCE_TESTNET_ACCOUNT_ID": "test-account",
         }
     )
 
