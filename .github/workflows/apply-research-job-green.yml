@@ -1,0 +1,67 @@
+name: Apply research job green fix
+
+on:
+  push:
+    branches:
+      - v2/plan-closure-20260831
+    paths:
+      - '.github/workflows/apply-research-job-green.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v2/plan-closure-20260831
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Apply guarded fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          production = Path('src/mastertrd/research_job.py')
+          text = production.read_text(encoding='utf-8')
+          old = '    artifact_dir = Path(os.environ.get("MASTERTRD_RESEARCH_ARTIFACT_DIR", "artifacts/research"))\n    code_hash = os.environ.get("GITHUB_SHA") or os.environ.get("MASTERTRD_CODE_HASH")\n'
+          new = '    artifact_dir = Path(os.environ.get("MASTERTRD_RESEARCH_ARTIFACT_DIR", "artifacts/research"))\n    artifact_dir.mkdir(parents=True, exist_ok=True)\n    code_hash = os.environ.get("GITHUB_SHA") or os.environ.get("MASTERTRD_CODE_HASH")\n'
+          if text.count(old) != 1:
+              raise SystemExit('research_job main insertion anchor drifted')
+          production.write_text(text.replace(old, new), encoding='utf-8')
+
+          test_path = Path('tests/test_research_job.py')
+          test = test_path.read_text(encoding='utf-8')
+          old_return = '        return SimpleNamespace(bars=(token,), manifest=manifest)\n'
+          new_return = '        timestamp = datetime(int(kwargs["period"][:4]), int(kwargs["period"][5:7]), 1, tzinfo=timezone.utc)\n        return SimpleNamespace(bars=(SimpleNamespace(timestamp=timestamp, token=token),), manifest=manifest)\n'
+          if test.count(old_return) != 1:
+              raise SystemExit('research_job fake archive anchor drifted')
+          test = test.replace(old_return, new_return)
+          old_hash = '    monkeypatch.setattr(research_job, "dataset_hash_for_bars", lambda bars: "combined:" + "|".join(bars))\n'
+          new_hash = '    monkeypatch.setattr(research_job, "dataset_hash_for_bars", lambda bars: "combined:" + "|".join(bar.token for bar in bars))\n'
+          if test.count(old_hash) != 1:
+              raise SystemExit('research_job dataset hash fixture anchor drifted')
+          test_path.write_text(test.replace(old_hash, new_hash), encoding='utf-8')
+          PY
+      - name: Install locked stack
+        run: |
+          python -m pip install --disable-pip-version-check 'uv==0.12.7'
+          uv lock --check
+          uv sync --locked --all-extras
+          uv pip check
+      - name: Verify focused GREEN
+        run: uv run pytest -q tests/test_research_job.py tests/test_workflow_policy.py
+      - name: Commit real fix and remove one-shot workflow
+        run: |
+          git config user.name 'MasterTrd Automation'
+          git config user.email 'actions@users.noreply.github.com'
+          rm .github/workflows/apply-research-job-green.yml
+          git add src/mastertrd/research_job.py tests/test_research_job.py .github/workflows/apply-research-job-green.yml
+          git commit -m 'fix(research): harden scheduled job entrypoint'
+          git pull --rebase origin v2/plan-closure-20260831
+          git push origin HEAD:v2/plan-closure-20260831
