@@ -9,9 +9,9 @@ import numpy as np
 import pandas as pd
 
 from mastertrd.contracts import EvaluationResult, MarketBar
+from mastertrd.execution_policy import PositionState, evaluate_execution_policy
 from mastertrd.execution_signals import (
     SignalDirection,
-    evaluate_bar_signal,
     evaluate_multileg_signal,
 )
 from mastertrd.genome import StrategyGenome
@@ -120,9 +120,9 @@ def _synthetic_prices(
             dtype=float,
         )
 
-    # A normalized equal-weight basket is used only as the VectorBT screening
-    # price path. Direction/leg decisions still come from the exact shared
-    # execution signal implementation below.
+    # Multi-leg VectorBT screening currently uses a normalized basket only as
+    # the PnL price path. Task 2 replaces this approximation with per-leg
+    # sizing and execution; leg direction still comes from shared semantics.
     first = aligned[genome.instruments[0]]
     matrix = np.asarray(
         [[float(bar.close) for bar in aligned[instrument]] for instrument in genome.instruments],
@@ -137,28 +137,86 @@ def _synthetic_prices(
     )
 
 
-def screen_genome(
+def _flat_state() -> PositionState:
+    return PositionState(SignalDirection.FLAT, 0.0, 0.0, 0.0, 0)
+
+
+def _opened_state(direction: SignalDirection, bar: MarketBar) -> PositionState:
+    price = float(bar.close)
+    return PositionState(direction, price, price, price, 0)
+
+
+def _advance_state(position: PositionState, bar: MarketBar) -> PositionState:
+    if position.direction is SignalDirection.FLAT:
+        return position
+    return PositionState(
+        direction=position.direction,
+        entry_price=position.entry_price,
+        peak_price=max(position.peak_price, float(bar.high)),
+        trough_price=min(position.trough_price, float(bar.low)),
+        bars_held=position.bars_held + 1,
+    )
+
+
+def _single_leg_signals(
     genome: StrategyGenome,
-    bars_by_instrument: Mapping[str, Sequence[MarketBar]],
-    *,
-    fees: float,
-    slippage: float,
-) -> EvaluationResult:
-    """Fast VectorBT screening using the same pure signals as execution."""
-    if fees < 0.0 or slippage < 0.0:
-        raise ValueError("fees and slippage cannot be negative")
-    aligned = _validate_bars(genome, bars_by_instrument)
+    bars: Sequence[MarketBar],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    count = len(bars)
+    entries = np.zeros(count, dtype=bool)
+    exits = np.zeros(count, dtype=bool)
+    short_entries = np.zeros(count, dtype=bool)
+    short_exits = np.zeros(count, dtype=bool)
+    position = _flat_state()
+
+    for index in range(count):
+        current = bars[index]
+        if position.direction is not SignalDirection.FLAT:
+            position = _advance_state(position, current)
+        decision = evaluate_execution_policy(genome, bars[: index + 1], position)
+
+        if position.direction is SignalDirection.FLAT:
+            if decision.direction is SignalDirection.LONG:
+                entries[index] = True
+                position = _opened_state(SignalDirection.LONG, current)
+            elif decision.direction is SignalDirection.SHORT and genome.allow_short:
+                short_entries[index] = True
+                position = _opened_state(SignalDirection.SHORT, current)
+            continue
+
+        if not decision.close_position:
+            continue
+
+        if position.direction is SignalDirection.LONG:
+            exits[index] = True
+        else:
+            short_exits[index] = True
+
+        if decision.direction is SignalDirection.LONG:
+            entries[index] = True
+            position = _opened_state(SignalDirection.LONG, current)
+        elif decision.direction is SignalDirection.SHORT and genome.allow_short:
+            short_entries[index] = True
+            position = _opened_state(SignalDirection.SHORT, current)
+        else:
+            position = _flat_state()
+
+    return entries, exits, short_entries, short_exits
+
+
+def _multi_leg_direction_signals(
+    genome: StrategyGenome,
+    aligned: Mapping[str, Sequence[MarketBar]],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    # This preserves the pre-V2 multi-leg screening behavior until Task 2
+    # replaces basket approximation with real per-leg quantities and exits.
     count = len(next(iter(aligned.values())))
     directions: list[SignalDirection] = []
-    multi_leg = len(genome.instruments) > 1
     for index in range(1, count + 1):
-        if multi_leg:
-            decision = evaluate_multileg_signal(
-                genome,
-                {key: value[:index] for key, value in aligned.items()},
-            )
-        else:
-            decision = evaluate_bar_signal(genome, aligned[genome.instruments[0]][:index])
+        decision = evaluate_multileg_signal(
+            genome,
+            {key: value[:index] for key, value in aligned.items()},
+        )
         directions.append(decision.direction)
 
     entries = np.zeros(count, dtype=bool)
@@ -182,6 +240,28 @@ def screen_genome(
             elif previous is SignalDirection.SHORT:
                 short_exits[index] = True
         previous = direction
+    return entries, exits, short_entries, short_exits
+
+
+def screen_genome(
+    genome: StrategyGenome,
+    bars_by_instrument: Mapping[str, Sequence[MarketBar]],
+    *,
+    fees: float,
+    slippage: float,
+) -> EvaluationResult:
+    """Fast VectorBT screening using the same executable policy as execution."""
+    if fees < 0.0 or slippage < 0.0:
+        raise ValueError("fees and slippage cannot be negative")
+    aligned = _validate_bars(genome, bars_by_instrument)
+
+    if len(genome.instruments) == 1:
+        entries, exits, short_entries, short_exits = _single_leg_signals(
+            genome,
+            aligned[genome.instruments[0]],
+        )
+    else:
+        entries, exits, short_entries, short_exits = _multi_leg_direction_signals(genome, aligned)
 
     import vectorbt as vbt
 
@@ -201,7 +281,7 @@ def screen_genome(
         strategy_id=genome.strategy_id,
         genome_hash=genome.genome_hash,
         dataset_hash=_dataset_hash(aligned),
-        code_hash=hashlib.sha256(b"screen_genome:shared-signals:v1").hexdigest(),
+        code_hash=hashlib.sha256(b"screen_genome:shared-execution-policy:v2").hexdigest(),
         engine_version=str(getattr(vbt, "__version__", "unknown")),
         fees=fees,
         slippage=slippage,
