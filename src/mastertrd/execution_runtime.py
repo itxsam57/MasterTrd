@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from math import isfinite
 
 from .paper_session import JsonPaperSessionStore, PaperSessionJournal
-from .reconciliation import ExecutionState, Reconciler
+from .reconciliation import ExecutionState, Reconciler, ReconciliationResult
 from .risk_runtime import KillScope, RiskRuntime
 from .streaming import MarketStream, MarketStreamEvent
 
@@ -40,6 +40,7 @@ class ExecutionRuntime:
         self._venue_state = venue_state
         self._dispatch = dispatch
         self._stream = stream
+        self._startup_reconciled = False
 
     @staticmethod
     def _risk_symbol(event: MarketStreamEvent) -> str:
@@ -84,6 +85,30 @@ class ExecutionRuntime:
             observed_at=event.timestamp_ns / 1_000_000_000.0,
         )
 
+    def _reconcile(self) -> ReconciliationResult:
+        return self._reconciler.reconcile(
+            self._engine_state(),
+            self._venue_state(),
+        )
+
+    def _record_reconciliation(
+        self,
+        *,
+        reconciliation: ReconciliationResult,
+        reconciliation_id: str,
+        timestamp_ns: int,
+    ) -> None:
+        self._risk_runtime.update_reconciliation_state(
+            ok=reconciliation.ok,
+            observed_at=timestamp_ns / 1_000_000_000.0,
+        )
+        self._journal.record_reconciliation(
+            reconciliation_id,
+            ok=reconciliation.ok,
+            timestamp_ns=timestamp_ns,
+        )
+        self._session_store.save(self._journal)
+
     def run(
         self,
         stream: MarketStream | None = None,
@@ -108,6 +133,23 @@ class ExecutionRuntime:
                 duplicate_events += 1
                 continue
 
+            if not self._startup_reconciled:
+                startup_reconciliation = self._reconcile()
+                reconciliation_checks += 1
+                if not startup_reconciliation.ok:
+                    reconciliation_errors += 1
+                startup_timestamp = max(event.timestamp_ns, self._journal.latest_timestamp_ns)
+                self._record_reconciliation(
+                    reconciliation=startup_reconciliation,
+                    reconciliation_id=f"reconcile:startup:{event.event_id}",
+                    timestamp_ns=startup_timestamp,
+                )
+                if not startup_reconciliation.ok:
+                    self._risk_runtime.kill(KillScope.SYSTEM, startup_reconciliation.summary)
+                    system_killed = True
+                    break
+                self._startup_reconciled = True
+
             # Persist identity before dispatch. A crash may suppress this event on
             # restart, but it can never cause the same market event to submit twice.
             self._journal.record_market_event(event.event_id, timestamp_ns=event.timestamp_ns)
@@ -120,26 +162,17 @@ class ExecutionRuntime:
             self._dispatch(event)
             processed_events += 1
 
-            reconciliation = self._reconciler.reconcile(
-                self._engine_state(),
-                self._venue_state(),
-            )
+            reconciliation = self._reconcile()
             reconciliation_checks += 1
             if not reconciliation.ok:
                 reconciliation_errors += 1
 
-            reconciliation_id = f"reconcile:{event.event_id}"
             reconciliation_timestamp = max(event.timestamp_ns, self._journal.latest_timestamp_ns)
-            self._risk_runtime.update_reconciliation_state(
-                ok=reconciliation.ok,
-                observed_at=reconciliation_timestamp / 1_000_000_000.0,
-            )
-            self._journal.record_reconciliation(
-                reconciliation_id,
-                ok=reconciliation.ok,
+            self._record_reconciliation(
+                reconciliation=reconciliation,
+                reconciliation_id=f"reconcile:{event.event_id}",
                 timestamp_ns=reconciliation_timestamp,
             )
-            self._session_store.save(self._journal)
 
             if not reconciliation.ok:
                 self._risk_runtime.kill(KillScope.SYSTEM, reconciliation.summary)
