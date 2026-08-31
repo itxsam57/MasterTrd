@@ -8,6 +8,7 @@ from typing import Iterable, Sequence
 from .contracts import EvaluationResult
 from .genome import StrategyGenome
 from .nautilus_backtest import _build_binance_spot_engine
+from .nautilus_risk_hook import build_research_nautilus_risk_runtime
 from .nautilus_strategy import compile_genome_to_nautilus
 
 
@@ -75,10 +76,15 @@ def run_binance_spot_evaluation(
     if not events:
         raise ValueError("historical data is required")
 
+    # Research/backtest execution gets an explicit fresh risk owner. Runtime
+    # modes with venue/account state inject their environment-specific risk
+    # dependency through their own execution path instead of using this profile.
+    risk_runtime = build_research_nautilus_risk_runtime()
     strategy = compile_genome_to_nautilus(
         genome,
         instrument=instrument,
         trade_size_override=trade_size_override,
+        risk_runtime=risk_runtime,
     )
     engine = _build_binance_spot_engine(
         instrument=instrument,
