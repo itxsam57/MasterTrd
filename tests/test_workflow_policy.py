@@ -45,7 +45,7 @@ def test_autonomous_research_is_scheduled_public_safe_and_cancellable():
     assert "SECRETS." not in upper
     assert "UV LOCK --CHECK" in upper
     assert "UV SYNC --LOCKED" in upper or "UV SYNC --FROZEN" in upper
-    assert "RESEARCHBRAIN" in upper or "MASTERTRD.RESEARCH_BRAIN" in upper
+    assert "RESEARCHBRAIN" in upper or "MASTERTRD.RESEARCH_BRAIN" in upper or "MASTERTRD.RESEARCH_JOB" in upper
     assert "ACTIONS/UPLOAD-ARTIFACT" in upper
 
 
@@ -88,3 +88,25 @@ def test_existing_stack_workflows_keep_read_only_permissions_and_locked_installs
         assert "UV SYNC --LOCKED" in upper or "UV SYNC --FROZEN" in upper
         assert "PIP INSTALL -E" not in upper
         assert "LIVE_TRADING_ENABLED" not in upper
+
+
+def test_scheduled_research_job_is_owned_by_research_stack_not_core_coverage():
+    research_text, research_workflow = _load("research-stack.yml")
+    triggers = _on(research_workflow)
+    push_paths = set(triggers["push"]["paths"])
+    pull_paths = set(triggers["pull_request"]["paths"])
+    required_paths = {
+        "src/mastertrd/research_job.py",
+        ".github/workflows/autonomous-research.yml",
+        "tests/test_research_job.py",
+        "tests/test_workflow_policy.py",
+    }
+    assert required_paths <= push_paths
+    assert required_paths <= pull_paths
+
+    lower = research_text.lower()
+    assert "tests/test_research_job.py" in lower
+    assert "tests/test_workflow_policy.py" in lower
+
+    core_text, _ = _load("ci.yml")
+    assert "src/mastertrd/research_job.py" in core_text
