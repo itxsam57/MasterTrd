@@ -4,6 +4,7 @@ import pytest
 
 from mastertrd.nautilus_strategy import SpecialistPathRequired, compile_genome_to_nautilus
 from mastertrd.research.generator import generate_candidate
+from mastertrd.risk_profiles import build_research_backtest_risk_runtime
 
 
 BAR_FAMILIES = (
@@ -41,6 +42,7 @@ def test_generated_bar_family_compiles(family: str) -> None:
         genome,
         instrument=instrument,
         trade_size_override="0.10",
+        risk_runtime=build_research_backtest_risk_runtime(),
     )
 
     assert isinstance(strategy, GeneratedBarStrategy)
@@ -66,6 +68,7 @@ def test_generated_multi_leg_family_compiles_with_instrument_map(family: str) ->
         instrument=eth,
         instrument_map={eth.id.value: eth, btc.id.value: btc},
         trade_size_override="0.10",
+        risk_runtime=build_research_backtest_risk_runtime(),
     )
 
     assert isinstance(strategy, GeneratedMultiLegStrategy)
@@ -84,6 +87,7 @@ def test_options_family_compiles_to_defined_risk_adapter() -> None:
         genome,
         instrument=instrument,
         trade_size_override="0.10",
+        risk_runtime=build_research_backtest_risk_runtime(),
     )
 
     assert isinstance(strategy, GeneratedOptionsStrategy)
