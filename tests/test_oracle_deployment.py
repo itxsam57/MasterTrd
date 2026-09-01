@@ -48,6 +48,21 @@ def paper_candidate_manifest(*, code_hash: str = "code-v1", lock_hash: str = "lo
     }
 
 
+def test_oracle_deployment_spec_rejects_blank_required_fields():
+    values = {
+        "app_dir": "/opt/mastertrd",
+        "service_user": "mastertrd",
+        "python_bin": "/opt/mastertrd/.venv/bin/python",
+        "module": "mastertrd.live_node",
+        "env_file": "/etc/mastertrd/mastertrd.env",
+    }
+    for field in tuple(values):
+        invalid = dict(values)
+        invalid[field] = " "
+        with pytest.raises(ValueError, match=field):
+            OracleDeploymentSpec(**invalid)
+
+
 def test_oracle_adapter_is_dormant_and_never_embeds_secrets():
     text = render_env_template()
     assert "ORACLE_ENABLED=false" in text
@@ -74,7 +89,6 @@ def test_oracle_env_template_matches_repository_owned_paper_runtime_contract():
 
 
 def test_oracle_paper_candidate_manifest_is_identity_bound_to_exact_source():
-    assert hasattr(oracle_module, "validate_paper_candidate_manifest")
     validator = oracle_module.validate_paper_candidate_manifest
     manifest = paper_candidate_manifest()
 
@@ -96,22 +110,59 @@ def test_oracle_paper_candidate_manifest_is_identity_bound_to_exact_source():
     with pytest.raises(ValueError, match="genome_hash"):
         validator(wrong_identity, expected_code_hash="code-v1", expected_lock_hash="lock-v1")
 
+    wrong_strategy = dict(manifest)
+    wrong_strategy["strategy_id"] = "R-wrong"
+    with pytest.raises(ValueError, match="strategy_id"):
+        validator(wrong_strategy, expected_code_hash="code-v1", expected_lock_hash="lock-v1")
 
-def test_oracle_paper_candidate_manifest_rejects_multi_instrument_runtime_candidate():
-    assert hasattr(oracle_module, "validate_paper_candidate_manifest")
+
+def test_oracle_paper_candidate_manifest_rejects_missing_or_invalid_provenance():
+    validator = oracle_module.validate_paper_candidate_manifest
     manifest = paper_candidate_manifest()
+
+    with pytest.raises(ValueError, match="expected_code_hash"):
+        validator(manifest, expected_code_hash="", expected_lock_hash="lock-v1")
+    with pytest.raises(ValueError, match="expected_lock_hash"):
+        validator(manifest, expected_code_hash="code-v1", expected_lock_hash="")
+
+    missing_candidate = dict(manifest)
+    missing_candidate.pop("candidate")
+    with pytest.raises(ValueError, match="candidate is required"):
+        validator(missing_candidate, expected_code_hash="code-v1", expected_lock_hash="lock-v1")
+
+    invalid_candidate = dict(manifest)
+    invalid_candidate["candidate"] = {"strategy_id": "incomplete"}
+    with pytest.raises(ValueError, match="candidate is invalid"):
+        validator(invalid_candidate, expected_code_hash="code-v1", expected_lock_hash="lock-v1")
+
+    for field in ("strategy_id", "genome_hash", "code_hash", "dataset_hash", "lock_hash"):
+        missing = dict(manifest)
+        missing[field] = " "
+        with pytest.raises(ValueError, match=field):
+            validator(missing, expected_code_hash="code-v1", expected_lock_hash="lock-v1")
+
+
+def test_oracle_paper_candidate_manifest_rejects_unsupported_runtime_universe():
+    validator = oracle_module.validate_paper_candidate_manifest
+    manifest = paper_candidate_manifest()
+
     raw_candidate = dict(manifest["candidate"])
     raw_candidate["instruments"] = ["BTCUSDT.BINANCE", "ETHUSDT.BINANCE"]
     candidate = StrategyGenome(**raw_candidate)
-    manifest["candidate"] = candidate.canonical_payload()
-    manifest["genome_hash"] = candidate.genome_hash
-
+    multi = dict(manifest)
+    multi["candidate"] = candidate.canonical_payload()
+    multi["genome_hash"] = candidate.genome_hash
     with pytest.raises(ValueError, match="one instrument"):
-        oracle_module.validate_paper_candidate_manifest(
-            manifest,
-            expected_code_hash="code-v1",
-            expected_lock_hash="lock-v1",
-        )
+        validator(multi, expected_code_hash="code-v1", expected_lock_hash="lock-v1")
+
+    raw_candidate = dict(manifest["candidate"])
+    raw_candidate["instruments"] = ["BTC-USD.KRAKEN"]
+    candidate = StrategyGenome(**raw_candidate)
+    wrong_venue = dict(manifest)
+    wrong_venue["candidate"] = candidate.canonical_payload()
+    wrong_venue["genome_hash"] = candidate.genome_hash
+    with pytest.raises(ValueError, match="BINANCE instrument"):
+        validator(wrong_venue, expected_code_hash="code-v1", expected_lock_hash="lock-v1")
 
 
 def test_systemd_unit_restarts_and_loads_protected_environment():
