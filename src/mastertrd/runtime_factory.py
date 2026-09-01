@@ -217,6 +217,15 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
     if len(candidate.instruments) != 1:
         raise RuntimeError("PAPER runtime currently requires one instrument")
 
+    # Resolve authoritative instrument metadata before touching durable session
+    # state. A public-network metadata failure must not leave behind a session
+    # file that falsely looks like a successfully initialized PAPER process.
+    fixture_path = environ.get("MASTERTRD_PUBLIC_FEED_FIXTURE", "").strip()
+    if fixture_path:
+        instrument = fixture_binance_spot_instrument(candidate.instruments[0])
+    else:
+        instrument = load_public_binance_spot_instrument(candidate.instruments[0])
+
     archive: JsonPaperReportArchive | None = None
     history_dir: Path | None = None
     rotation_request_path: Path | None = None
@@ -272,10 +281,8 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
             resume=False,
         )
 
-    fixture_path = environ.get("MASTERTRD_PUBLIC_FEED_FIXTURE", "").strip()
     journal_ref = {"journal": session.journal}
     if fixture_path:
-        instrument = fixture_binance_spot_instrument(candidate.instruments[0])
         stream = MarketStream(_fixture_source(fixture_path))
         # Recorded fixtures replay historical exchange timestamps. Tie freshness
         # to the active append-only journal clock so rotated evidence windows do
@@ -284,10 +291,6 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
             clock=lambda: journal_ref["journal"].latest_timestamp_ns / 1_000_000_000.0,
         )
     else:
-        # Resolve exact current exchange precision and trading filters before a
-        # persistent session is created. A metadata/network failure therefore
-        # cannot leave behind a half-initialized PAPER execution engine.
-        instrument = load_public_binance_spot_instrument(candidate.instruments[0])
         stream = MarketStream(
             BinancePublicMarketSource(
                 candidate.instruments,
@@ -345,7 +348,7 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
             current = journal_ref["journal"]
             if current.finalized_report is not None:
                 raise RuntimeError("active PAPER evidence session is already finalized")
-            report = current.finalize(ended_ns=int(ended_ns))
+            current.finalize(ended_ns=int(ended_ns))
             JsonPaperSessionStore(session_path).save(current)
             _archive_finalized_paper_session(
                 current,
@@ -365,7 +368,6 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
             journal_ref["journal"] = replacement.journal
             account_id_ref["value"] = f"paper:{replacement.journal.session_id}"
             rotation_request_path.unlink(missing_ok=True)
-            del report
             return replacement.journal, replacement.store
 
     return ExecutionRuntime(
