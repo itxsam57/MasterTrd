@@ -162,7 +162,17 @@ def _target_group(prefix: str, family: str, names: tuple[str, ...], *, assets: t
 
 
 _TARGET_RECIPES: tuple[StrategyRecipe, ...] = (
-    *_target_group("momentum", "momentum", ("Cross-Sectional Momentum", "Dual Momentum", "Residual Momentum", "Sector Momentum", "Industry Momentum", "Country Momentum", "52-Week High Momentum", "Earnings Momentum", "Intraday Momentum", "Volume-Confirmed Momentum", "Absolute Momentum", "Factor Momentum"), assets=(AssetClass.EQUITY, AssetClass.FUTURES, AssetClass.FX, AssetClass.CRYPTO), horizons=(TradingHorizon.INTRADAY, TradingHorizon.SWING, TradingHorizon.POSITION), source="jegadeesh-titman"),
+    _blocked(
+        "cross-sectional-momentum",
+        "Cross-Sectional Momentum",
+        "momentum",
+        assets=(AssetClass.EQUITY, AssetClass.FUTURES, AssetClass.FX, AssetClass.CRYPTO),
+        horizons=(TradingHorizon.SWING, TradingHorizon.POSITION),
+        readiness=RecipeReadiness.PRIMITIVE_REQUIRED,
+        sources=("jegadeesh-titman",),
+        blocker="exact_strategy_primitive_not_yet_implemented",
+    ),
+    *_target_group("momentum", "momentum", ("Dual Momentum", "Residual Momentum", "Sector Momentum", "Industry Momentum", "Country Momentum", "52-Week High Momentum", "Earnings Momentum", "Intraday Momentum", "Volume-Confirmed Momentum", "Absolute Momentum", "Factor Momentum"), assets=(AssetClass.EQUITY, AssetClass.FUTURES, AssetClass.FX, AssetClass.CRYPTO), horizons=(TradingHorizon.INTRADAY, TradingHorizon.SWING, TradingHorizon.POSITION), source="jegadeesh-titman"),
     *_target_group("reversion", "mean_reversion", ("Bollinger Reversion", "RSI-2 Reversion", "VWAP Reversion", "Gap Fade", "Failed Breakout Reversal", "Liquidity Shock Reversal", "Keltner Reversion", "Volume Exhaustion", "Long-Term Loser Reversal", "Basis Mean Reversion"), assets=(AssetClass.CRYPTO, AssetClass.EQUITY, AssetClass.FX, AssetClass.FUTURES), horizons=(TradingHorizon.INTRADAY, TradingHorizon.SWING), source="quantconnect-library"),
     *_target_group("breakout", "breakout", ("Opening Range Breakout", "Dual Thrust", "Bollinger Squeeze Breakout", "NR4 Breakout", "NR7 Breakout", "VWAP Breakout", "Previous-Day High/Low Breakout", "Multi-Timeframe Breakout"), assets=(AssetClass.CRYPTO, AssetClass.EQUITY, AssetClass.FX, AssetClass.FUTURES), horizons=(TradingHorizon.INTRADAY, TradingHorizon.SWING), source="quantconnect-library"),
     *_target_group("trend", "trend", ("SuperTrend", "Ichimoku Trend", "ADX/DMI Trend", "Parabolic SAR Trend", "MACD Trend", "Moving-Average Ribbon", "Price Channel Trend", "Crisis Trend"), assets=ALL_LIQUID, horizons=(TradingHorizon.INTRADAY, TradingHorizon.SWING, TradingHorizon.POSITION), source="moskowitz-tsmom"),
@@ -225,9 +235,6 @@ def compile_strategy_recipe(recipe_id: str, *, instruments: Sequence[str], seed:
         raise ValueError("at least one instrument is required")
     _validate_recipe_instruments(recipe, instruments)
 
-    # Import lazily to keep the universe registry usable without creating a module
-    # import cycle. These are the existing semantics already parity-tested between
-    # research and Nautilus execution.
     from mastertrd.research import generator as legacy
 
     digest = sha256(f"{recipe_id}|{seed}".encode()).digest()
