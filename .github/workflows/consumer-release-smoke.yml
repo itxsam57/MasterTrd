@@ -9,6 +9,7 @@ on:
       - 'src/**'
       - 'README.md'
       - 'docs/OPERATIONS.md'
+      - '.env.example'
       - 'pyproject.toml'
       - 'uv.lock'
       - '.github/workflows/consumer-release-smoke.yml'
@@ -91,6 +92,84 @@ jobs:
             'research-job-missing-code-identity' \
             'GITHUB_SHA or MASTERTRD_CODE_HASH is required' \
             env -u GITHUB_SHA -u MASTERTRD_CODE_HASH uv run python -m mastertrd.research_job
+
+          uv run python - <<'PY'
+          import json
+          from pathlib import Path
+          from mastertrd.research.generator import generate_candidate
+
+          root = Path('artifacts/consumer-release-smoke')
+          candidate = generate_candidate(
+              family='trend',
+              instruments=('BTCUSDT.BINANCE',),
+              seed=42,
+          )
+          (root / 'candidate.json').write_text(
+              json.dumps(candidate.canonical_payload(), sort_keys=True),
+              encoding='utf-8',
+          )
+          interval_ms = {
+              '1m': 60_000,
+              '3m': 180_000,
+              '5m': 300_000,
+              '15m': 900_000,
+              '30m': 1_800_000,
+              '1h': 3_600_000,
+              '2h': 7_200_000,
+              '4h': 14_400_000,
+              '6h': 21_600_000,
+              '8h': 28_800_000,
+              '12h': 43_200_000,
+              '1d': 86_400_000,
+          }[candidate.timeframe]
+          with (root / 'feed.jsonl').open('w', encoding='utf-8') as handle:
+              for index in range(96):
+                  base = 60_000.0 + index * 25.0
+                  payload = {
+                      'event_id': f'consumer-bar-{index}',
+                      'venue': 'BINANCE',
+                      'instrument': 'BTCUSDT.BINANCE',
+                      'timeframe': candidate.timeframe,
+                      'timestamp_ms': (index + 1) * interval_ms,
+                      'open': base,
+                      'high': base + 30.0,
+                      'low': base - 20.0,
+                      'close': base + 10.0,
+                      'volume': 10.0,
+                      'spread_bps': 2.0,
+                      'realized_volatility': 0.01,
+                  }
+                  handle.write(json.dumps(payload, sort_keys=True) + '\n')
+          print('paper_candidate_timeframe=' + candidate.timeframe)
+          PY
+
+          set +e
+          paper_output=$(
+            env \
+              MASTERTRD_MODE=PAPER \
+              LIVE_TRADING_ENABLED=false \
+              MASTERTRD_CANDIDATE_MANIFEST="$PWD/artifacts/consumer-release-smoke/candidate.json" \
+              MASTERTRD_SESSION_STATE="$PWD/artifacts/consumer-release-smoke/paper-session.json" \
+              MASTERTRD_CODE_HASH="$GITHUB_SHA" \
+              MASTERTRD_PUBLIC_FEED_FIXTURE="$PWD/artifacts/consumer-release-smoke/feed.jsonl" \
+              MASTERTRD_PAPER_START_NS=1 \
+              uv run python -m mastertrd.live_node 2>&1
+          )
+          paper_status=$?
+          set -e
+          printf '## deterministic-paper-boot\nexit=%s\n%s\n\n' "$paper_status" "$paper_output" >> "$report"
+          if [ "$paper_status" -ne 0 ]; then
+            echo 'deterministic PAPER operator path failed' >&2
+            exit 1
+          fi
+          test -s artifacts/consumer-release-smoke/paper-session.json
+          uv run python - <<'PY' >> "$report"
+          import json
+          from pathlib import Path
+          payload = json.loads(Path('artifacts/consumer-release-smoke/paper-session.json').read_text(encoding='utf-8'))
+          print('paper_session_persisted=PASS')
+          print('paper_session_top_level_keys=' + ','.join(sorted(payload)))
+          PY
 
           echo 'consumer_smoke=PASS' >> "$report"
           cat "$report"
