@@ -221,7 +221,23 @@ def generate_candidate(
     instruments: Sequence[str],
     seed: int,
     trade_size: str | None = None,
+    recipe_id: str | None = None,
 ) -> StrategyGenome:
+    if recipe_id is not None:
+        from mastertrd.strategy_universe import compile_strategy_recipe, strategy_recipe
+
+        recipe = strategy_recipe(recipe_id)
+        if recipe.family != family:
+            raise ValueError(
+                f"recipe {recipe_id} belongs to family {recipe.family}, not {family}"
+            )
+        return compile_strategy_recipe(
+            recipe_id,
+            instruments=instruments,
+            seed=seed,
+            trade_size=trade_size,
+        )
+
     spec = family_spec(family)
     if not instruments:
         raise ValueError("at least one instrument is required")
