@@ -8,9 +8,12 @@ on:
       - 'src/mastertrd/research_candidate_generation.py'
       - 'src/mastertrd/research_job.py'
       - 'src/mastertrd/strategy_universe.py'
+      - 'src/mastertrd/nautilus_paper.py'
       - 'src/mastertrd/memory_duckdb.py'
       - 'tests/integration/**'
+      - 'tests/test_binance_public_metadata.py'
       - 'tests/test_research_job.py'
+      - 'tests/test_research_metadata_workflow_policy.py'
       - 'tests/test_research_paper_handoff.py'
       - 'tests/test_research_recipe_scheduling.py'
       - 'tests/test_scheduled_recipe_research.py'
@@ -28,9 +31,12 @@ on:
       - 'src/mastertrd/research_candidate_generation.py'
       - 'src/mastertrd/research_job.py'
       - 'src/mastertrd/strategy_universe.py'
+      - 'src/mastertrd/nautilus_paper.py'
       - 'src/mastertrd/memory_duckdb.py'
       - 'tests/integration/**'
+      - 'tests/test_binance_public_metadata.py'
       - 'tests/test_research_job.py'
+      - 'tests/test_research_metadata_workflow_policy.py'
       - 'tests/test_research_paper_handoff.py'
       - 'tests/test_research_recipe_scheduling.py'
       - 'tests/test_scheduled_recipe_research.py'
@@ -67,7 +73,9 @@ jobs:
       - name: Run research integration tests
         run: |
           uv run pytest -q \
+            tests/test_binance_public_metadata.py \
             tests/test_research_job.py \
+            tests/test_research_metadata_workflow_policy.py \
             tests/test_research_paper_handoff.py \
             tests/test_research_recipe_scheduling.py \
             tests/test_scheduled_recipe_research.py \
