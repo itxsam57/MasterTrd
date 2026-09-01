@@ -128,6 +128,24 @@ def default_research_job_plan() -> ResearchJobPlan:
     )
 
 
+def research_job_plan_for_recipe(recipe_id: str) -> ResearchJobPlan:
+    """Return one fail-closed shard of the default autonomous research plan."""
+    base = default_research_job_plan()
+    if recipe_id not in base.runnable_recipe_ids:
+        raise ValueError(f"{recipe_id!r} is not in the default autonomous research schedule")
+    recipe = strategy_recipe(recipe_id)
+    return ResearchJobPlan(
+        requested_families=base.requested_families,
+        runnable_families=(recipe.family,),
+        blocked_families=base.blocked_families,
+        instruments=base.instruments,
+        seed_start=base.seed_start,
+        seed_stop=base.seed_stop,
+        archive_months=base.archive_months,
+        runnable_recipe_ids=(recipe_id,),
+    )
+
+
 def _stable_archive_periods(*, today: date | None = None, count: int) -> tuple[str, ...]:
     if count <= 0:
         raise ValueError("archive period count must be positive")
@@ -473,8 +491,10 @@ def main() -> int:
         raise RuntimeError("uv.lock is required")
     lock_hash = hashlib.sha256(lock_path.read_bytes()).hexdigest()
 
+    recipe_id = os.environ.get("MASTERTRD_RESEARCH_RECIPE_ID", "").strip()
+    plan = research_job_plan_for_recipe(recipe_id) if recipe_id else default_research_job_plan()
     report = run_research_job(
-        default_research_job_plan(),
+        plan,
         artifact_dir=artifact_dir,
         code_hash=code_hash,
         lock_hash=lock_hash,

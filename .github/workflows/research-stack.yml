@@ -12,6 +12,7 @@ on:
       - 'src/mastertrd/memory_duckdb.py'
       - 'tests/integration/**'
       - 'tests/test_research_job.py'
+      - 'tests/test_research_sharding.py'
       - 'tests/test_research_paper_handoff.py'
       - 'tests/test_research_recipe_scheduling.py'
       - 'tests/test_scheduled_recipe_research.py'
@@ -33,6 +34,7 @@ on:
       - 'src/mastertrd/memory_duckdb.py'
       - 'tests/integration/**'
       - 'tests/test_research_job.py'
+      - 'tests/test_research_sharding.py'
       - 'tests/test_research_paper_handoff.py'
       - 'tests/test_research_recipe_scheduling.py'
       - 'tests/test_scheduled_recipe_research.py'
@@ -70,6 +72,7 @@ jobs:
         run: |
           uv run pytest -q \
             tests/test_research_job.py \
+            tests/test_research_sharding.py \
             tests/test_research_paper_handoff.py \
             tests/test_research_recipe_scheduling.py \
             tests/test_scheduled_recipe_research.py \

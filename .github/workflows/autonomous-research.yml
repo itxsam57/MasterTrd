@@ -24,6 +24,23 @@ jobs:
   research-brain:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        recipe_id:
+          - ema-cross-fast
+          - ema-cross-balanced
+          - rsi-momentum-fast
+          - rsi-momentum-balanced
+          - donchian-20
+          - donchian-55
+          - zscore-fast
+          - zscore-balanced
+          - atr-breakout-fast
+          - atr-breakout-balanced
+    env:
+      MASTERTRD_RESEARCH_RECIPE_ID: ${{ matrix.recipe_id }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -42,7 +59,7 @@ jobs:
       - name: Upload public-safe research report
         uses: actions/upload-artifact@v4
         with:
-          name: autonomous-research-${{ github.sha }}
+          name: autonomous-research-${{ github.sha }}-${{ matrix.recipe_id }}
           path: artifacts/research/research-report.json
           if-no-files-found: error
           retention-days: 14
