@@ -1,6 +1,13 @@
 name: Autonomous Research
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/mastertrd/research_job.py'
+      - 'src/mastertrd/research_brain.py'
+      - 'src/mastertrd/strategy_universe.py'
   schedule:
     - cron: '17 3 * * 1'
   workflow_dispatch:
