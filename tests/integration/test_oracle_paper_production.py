@@ -71,35 +71,49 @@ def _runtime_config() -> RuntimeConfig:
     )
 
 
-def test_controlled_paper_completion_archives_verified_report_and_preserves_final_session(tmp_path):
+def test_paper_rotation_archives_report_preserves_history_and_keeps_engine_process_alive(tmp_path):
     candidate_path = tmp_path / "candidate.json"
     feed_path = tmp_path / "feed.jsonl"
     candidate_path.write_text(json.dumps(_candidate_payload()), encoding="utf-8")
-    feed_path.write_text(json.dumps(_feed_event()) + "\n", encoding="utf-8")
+    feed_path.write_text(
+        json.dumps(_feed_event("paper-production-1"))
+        + "\n"
+        + json.dumps(_feed_event("paper-production-2", offset_ms=60_000))
+        + "\n",
+        encoding="utf-8",
+    )
     environ = _paper_environment(tmp_path, feed_path=feed_path)
 
     runtime = build_execution_runtime(_runtime_config(), environ)
-    run_report = runtime.run()
-    assert run_report.system_killed is False
+    first_session_id = runtime._journal.session_id
+    execution_owner = runtime._dispatch.__self__
+    (tmp_path / "paper-rotate.request").write_text("rotate\n", encoding="utf-8")
 
-    session_id = runtime._journal.session_id
-    runtime.complete_session()
-    runtime.close()
+    run_report = runtime.run()
+
+    assert run_report.system_killed is False
+    assert run_report.session_rotations == 1
+    assert run_report.processed_events == 2
+    assert runtime._dispatch.__self__ is execution_owner
+    assert runtime._journal.session_id != first_session_id
+    assert runtime._journal.has_event("paper-production-2")
 
     archive = JsonPaperReportArchive(environ["MASTERTRD_PAPER_ARCHIVE"])
     reports = archive.load()
     assert len(reports) == 1
-    assert reports[0].session_id == session_id
+    assert reports[0].session_id == first_session_id
     assert reports[0].strategy_id == "paper-production-trend"
     assert reports[0].code_hash == "code-production-v1"
     assert reports[0].provenance_verified is True
     assert reports[0].completed is True
 
-    assert not (tmp_path / "current-session.json").exists()
-    history_path = tmp_path / "paper-sessions" / f"{session_id}.json"
+    history_path = tmp_path / "paper-sessions" / f"{first_session_id}.json"
     assert history_path.exists()
-    restored = JsonPaperSessionStore(history_path).load()
-    assert restored.finalized_report == reports[0]
+    assert JsonPaperSessionStore(history_path).load().finalized_report == reports[0]
+    assert (tmp_path / "current-session.json").exists()
+    assert not (tmp_path / "paper-rotate.request").exists()
+
+    runtime.close()
 
 
 def test_paper_factory_recovers_finalized_current_session_before_starting_a_new_one(tmp_path):
@@ -116,6 +130,7 @@ def test_paper_factory_recovers_finalized_current_session_before_starting_a_new_
     stranded_report = initial._journal.finalize(ended_ns=ended_ns)
     initial._session_store.save(initial._journal)
     initial.close()
+    (tmp_path / "paper-rotate.request").write_text("rotate\n", encoding="utf-8")
 
     recovered = build_execution_runtime(_runtime_config(), environ)
 
@@ -125,9 +140,11 @@ def test_paper_factory_recovers_finalized_current_session_before_starting_a_new_
     assert archive.load() == (stranded_report,)
     history_path = tmp_path / "paper-sessions" / f"{old_session_id}.json"
     assert JsonPaperSessionStore(history_path).load().finalized_report == stranded_report
+    assert not (tmp_path / "paper-rotate.request").exists()
+    recovered.close()
 
 
-def test_rotation_request_waits_for_authoritative_flat_execution_state(tmp_path):
+def test_rotation_request_waits_for_authoritative_flat_execution_state_and_continues_stream(tmp_path):
     receipt = PaperStartReceipt(
         strategy_id="paper-flat-boundary",
         genome_hash="a" * 64,
@@ -147,6 +164,7 @@ def test_rotation_request_waits_for_authoritative_flat_execution_state(tmp_path)
             balances={"USDT": Decimal("100000")},
         )
     }
+    rotations: list[int] = []
 
     def dispatch(_event):
         state["value"] = ExecutionState(
@@ -155,6 +173,26 @@ def test_rotation_request_waits_for_authoritative_flat_execution_state(tmp_path)
             open_order_ids=frozenset(),
             balances={"USDT": Decimal("100000")},
         )
+
+    def rotate(ended_ns: int):
+        rotations.append(ended_ns)
+        next_receipt = PaperStartReceipt(
+            strategy_id="paper-flat-boundary",
+            genome_hash="a" * 64,
+            session_id="paper-flat-session-2",
+            venue="SANDBOX",
+            engine="nautilus_trader",
+            engine_version="1.231.0",
+            connected=True,
+        )
+        next_journal = PaperSessionJournal(
+            next_receipt,
+            code_hash="code-flat",
+            started_ns=ended_ns,
+        )
+        next_store = JsonPaperSessionStore(tmp_path / "flat-session-2.json")
+        next_store.save(next_journal)
+        return next_journal, next_store
 
     runtime = ExecutionRuntime(
         journal=journal,
@@ -179,11 +217,15 @@ def test_rotation_request_waits_for_authoritative_flat_execution_state(tmp_path)
                 _feed_event("flat-boundary-2", offset_ms=60_000),
             ]
         ),
-        rotation_requested=lambda: True,
+        rotation_requested=lambda: len(rotations) == 0,
+        rotate_session=rotate,
     )
 
     report = runtime.run()
 
-    assert report.processed_events == 1
-    assert report.session_rotation_requested is True
+    assert report.processed_events == 2
+    assert report.session_rotations == 1
     assert state["value"].positions == {}
+    assert journal.has_event("flat-boundary-1")
+    assert runtime._journal.session_id == "paper-flat-session-2"
+    assert runtime._journal.has_event("flat-boundary-2")
