@@ -10,6 +10,7 @@ on:
       - 'README.md'
       - 'docs/ACCEPTANCE_REPORT.md'
       - '.github/workflows/acceptance.yml'
+      - '.github/workflows/security.yml'
       - 'docs/superpowers/plans/**'
   pull_request:
     paths:
@@ -20,6 +21,7 @@ on:
       - 'README.md'
       - 'docs/ACCEPTANCE_REPORT.md'
       - '.github/workflows/acceptance.yml'
+      - '.github/workflows/security.yml'
       - 'docs/superpowers/plans/**'
   workflow_dispatch:
 
