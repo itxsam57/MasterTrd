@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import mastertrd.research_job as research_job
 from mastertrd.genome import StrategyGenome
+
+
+ROOT = Path(__file__).resolve().parents[1]
+AUTONOMOUS_RESEARCH_WORKFLOW = ROOT / ".github" / "workflows" / "autonomous-research.yml"
 
 
 def _candidate() -> StrategyGenome:
@@ -110,3 +115,13 @@ def test_research_job_exports_recoverable_public_paper_candidate_manifest(monkey
             "recipe_id": None,
         }
     ]
+
+
+def test_autonomous_research_self_starts_when_research_code_lands_on_main():
+    text = AUTONOMOUS_RESEARCH_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "  push:\n" in text
+    assert "    branches:\n      - main\n" in text
+    assert "      - 'src/mastertrd/research_job.py'\n" in text
+    assert "      - 'src/mastertrd/research_brain.py'\n" in text
+    assert "      - 'src/mastertrd/strategy_universe.py'\n" in text
