@@ -72,6 +72,7 @@ def generate_research_candidates(config: Any, dataset: Any) -> ResearchCandidate
                         family=family,
                         instruments=instrument_set,
                         seed=seed,
+                        trade_size=config.trade_size,
                     ),
                 )
 
