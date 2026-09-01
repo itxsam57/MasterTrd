@@ -45,6 +45,7 @@ def test_acceptance_workflow_earns_receipts_and_writes_full_exact_head_report() 
     assert "DETECT-SECRETS" in upper
     assert "EXCLUDE-FILES" in upper
     assert ".VENV" in upper
+    assert "git grep -nEi -e " in text
     assert "GIT DIFF --EXIT-CODE" in upper
     assert "GIT REV-PARSE HEAD" in upper
     assert "GITHUB_SHA" in upper
