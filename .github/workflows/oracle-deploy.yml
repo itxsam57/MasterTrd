@@ -2,6 +2,11 @@ name: Oracle Deploy
 
 on:
   workflow_dispatch:
+    inputs:
+      paper_candidate_manifest_json:
+        description: Public-safe ResearchJob PAPER candidate manifest for this exact source SHA
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -46,9 +51,52 @@ jobs:
           uv pip check
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
-      - name: Render deployment bundle
+      - name: Validate identity-bound PAPER candidate
+        env:
+          PAPER_CANDIDATE_MANIFEST_JSON: ${{ inputs.paper_candidate_manifest_json }}
         run: |
           mkdir -p artifacts/oracle
+          uv run python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          from mastertrd.oracle import validate_paper_candidate_manifest
+
+          try:
+              payload = json.loads(os.environ["PAPER_CANDIDATE_MANIFEST_JSON"])
+          except (KeyError, json.JSONDecodeError) as exc:
+              raise SystemExit("paper_candidate_manifest_json must contain valid JSON") from exc
+          if not isinstance(payload, dict):
+              raise SystemExit("paper_candidate_manifest_json must contain a JSON object")
+
+          lock_hash = hashlib.sha256(Path("uv.lock").read_bytes()).hexdigest()
+          candidate = validate_paper_candidate_manifest(
+              payload,
+              expected_code_hash=os.environ["GITHUB_SHA"],
+              expected_lock_hash=lock_hash,
+          )
+          candidate_path = Path("artifacts/oracle/paper-candidate.json")
+          candidate_path.write_text(
+              json.dumps(candidate.canonical_payload(), sort_keys=True, indent=2, allow_nan=False),
+              encoding="utf-8",
+          )
+          print(
+              json.dumps(
+                  {
+                      "paper_candidate": str(candidate_path),
+                      "strategy_id": candidate.strategy_id,
+                      "genome_hash": candidate.genome_hash,
+                      "code_hash": os.environ["GITHUB_SHA"],
+                  },
+                  sort_keys=True,
+              )
+          )
+          PY
+
+      - name: Render deployment bundle
+        run: |
           uv run python - <<'PY'
           from pathlib import Path
           from mastertrd.oracle import OracleDeploymentSpec, render_oracle_bundle
@@ -62,6 +110,7 @@ jobs:
           )
           bundle = render_oracle_bundle(spec)
           root = Path('artifacts/oracle')
+          root.mkdir(parents=True, exist_ok=True)
           (root / 'bootstrap.sh').write_text(bundle.bootstrap_script, encoding='utf-8')
           (root / 'mastertrd.service').write_text(bundle.systemd_unit, encoding='utf-8')
           (root / 'mastertrd.logrotate').write_text(bundle.logrotate_config, encoding='utf-8')
@@ -78,18 +127,33 @@ jobs:
           printf '%s\n' "$ORACLE_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
 
-      - name: Deploy exact SHA without copying exchange secrets
+      - name: Deploy exact SHA and identity-checked PAPER candidate
         shell: bash
         run: |
           target="${ORACLE_SSH_USER}@${ORACLE_HOST}"
           remote_bootstrap="/tmp/mastertrd-bootstrap-${GITHUB_SHA}.sh"
+          remote_candidate="/tmp/mastertrd-paper-candidate-${GITHUB_SHA}.json"
           scp -i "$HOME/.ssh/oracle_key" -o BatchMode=yes artifacts/oracle/bootstrap.sh "${target}:${remote_bootstrap}"
+          scp -i "$HOME/.ssh/oracle_key" -o BatchMode=yes artifacts/oracle/paper-candidate.json "${target}:${remote_candidate}"
           ssh -i "$HOME/.ssh/oracle_key" -o BatchMode=yes "$target" \
-            "GITHUB_SHA='$GITHUB_SHA' REMOTE_BOOTSTRAP='$remote_bootstrap' bash -s" <<'REMOTE'
+            "GITHUB_SHA='$GITHUB_SHA' REMOTE_BOOTSTRAP='$remote_bootstrap' REMOTE_CANDIDATE='$remote_candidate' bash -s" <<'REMOTE'
           set -euo pipefail
 
+          cleanup() {
+            rm -f "$REMOTE_BOOTSTRAP" "$REMOTE_CANDIDATE"
+          }
+          trap cleanup EXIT
+
+          if sudo test -f /etc/mastertrd/mastertrd.env; then
+            current_mode="$(sudo awk -F= '$1=="MASTERTRD_MODE" {print $2}' /etc/mastertrd/mastertrd.env | tail -n1)"
+            current_live="$(sudo awk -F= '$1=="LIVE_TRADING_ENABLED" {print $2}' /etc/mastertrd/mastertrd.env | tail -n1)"
+            if [[ "${current_mode^^}" == "LIVE" || "${current_live,,}" == "true" ]]; then
+              echo 'Oracle host is configured for LIVE; refusing automated mutation or restart.' >&2
+              exit 1
+            fi
+          fi
+
           sudo bash "$REMOTE_BOOTSTRAP"
-          rm -f "$REMOTE_BOOTSTRAP"
 
           if [[ ! -d /opt/mastertrd/.git ]]; then
             sudo -u mastertrd git clone https://github.com/itxsam57/MasterTrd.git /opt/mastertrd
@@ -108,21 +172,38 @@ jobs:
             sudo -u mastertrd /opt/mastertrd/.uv-tool/bin/python -m pip install --disable-pip-version-check 'uv==0.12.7'
           fi
           sudo -u mastertrd bash -c 'cd /opt/mastertrd && .uv-tool/bin/uv lock --check && .uv-tool/bin/uv sync --locked --all-extras && .uv-tool/bin/uv pip check'
+          test "$(sudo -u mastertrd git -C /opt/mastertrd rev-parse HEAD)" = "$GITHUB_SHA"
 
-          if ! sudo grep -Eq '^ORACLE_ENABLED=true$' /etc/mastertrd/mastertrd.env; then
-            echo 'Host /etc/mastertrd/mastertrd.env does not explicitly contain ORACLE_ENABLED=true.' >&2
-            exit 1
-          fi
-          if ! sudo grep -Eq '^MASTERTRD_EXECUTION_FACTORY=.+$' /etc/mastertrd/mastertrd.env; then
-            echo 'MASTERTRD_EXECUTION_FACTORY is not configured on the host; refusing to start a non-functional execution node.' >&2
-            exit 1
-          fi
+          sudo install -o mastertrd -g mastertrd -m 600 "$REMOTE_CANDIDATE" /var/lib/mastertrd/paper-candidate.json
 
-          mode="$(sudo awk -F= '$1=="MASTERTRD_MODE" {print $2}' /etc/mastertrd/mastertrd.env | tail -n1)"
-          if [[ "$mode" == "LIVE" ]]; then
-            echo 'Exact SHA deployed, but automated LIVE restart is forbidden. Perform the documented owner live-start review.' >&2
-            exit 1
-          fi
+          set_env_value() {
+            local key="$1"
+            local value="$2"
+            local env_file=/etc/mastertrd/mastertrd.env
+            if sudo grep -q "^${key}=" "$env_file"; then
+              sudo sed -i "s|^${key}=.*$|${key}=${value}|" "$env_file"
+            else
+              printf '%s=%s\n' "$key" "$value" | sudo tee -a "$env_file" >/dev/null
+            fi
+          }
+
+          set_env_value MASTERTRD_MODE PAPER
+          set_env_value LIVE_TRADING_ENABLED false
+          set_env_value ORACLE_ENABLED true
+          set_env_value MASTERTRD_CANDIDATE_MANIFEST /var/lib/mastertrd/paper-candidate.json
+          set_env_value MASTERTRD_SESSION_STATE /var/lib/mastertrd/paper-session.json
+          set_env_value MASTERTRD_CODE_HASH "$GITHUB_SHA"
+          set_env_value MASTERTRD_PUBLIC_FEED_FIXTURE ''
+          set_env_value MASTERTRD_PAPER_START_NS ''
+          sudo chown root:root /etc/mastertrd/mastertrd.env
+          sudo chmod 600 /etc/mastertrd/mastertrd.env
+
+          sudo grep -Eq '^MASTERTRD_MODE=PAPER$' /etc/mastertrd/mastertrd.env
+          sudo grep -Eq '^LIVE_TRADING_ENABLED=false$' /etc/mastertrd/mastertrd.env
+          sudo grep -Eq '^ORACLE_ENABLED=true$' /etc/mastertrd/mastertrd.env
+          sudo grep -Fqx 'MASTERTRD_CANDIDATE_MANIFEST=/var/lib/mastertrd/paper-candidate.json' /etc/mastertrd/mastertrd.env
+          sudo grep -Fqx 'MASTERTRD_SESSION_STATE=/var/lib/mastertrd/paper-session.json' /etc/mastertrd/mastertrd.env
+          sudo grep -Fqx "MASTERTRD_CODE_HASH=$GITHUB_SHA" /etc/mastertrd/mastertrd.env
 
           sudo systemctl restart mastertrd.service
           sudo /usr/local/bin/mastertrd-health
