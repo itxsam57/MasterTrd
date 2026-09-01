@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from math import isfinite
+from statistics import fmean
 from typing import Mapping, Sequence
 
 import numpy as np
@@ -12,6 +13,7 @@ from mastertrd.contracts import EvaluationResult, MarketBar
 from mastertrd.execution_policy import PositionState, evaluate_execution_policy
 from mastertrd.execution_signals import (
     SignalDirection,
+    donchian_extrema,
     evaluate_multileg_signal,
 )
 from mastertrd.genome import StrategyGenome
@@ -158,10 +160,203 @@ def _advance_state(position: PositionState, bar: MarketBar) -> PositionState:
     )
 
 
+def _rule_kind(values: Mapping[str, object]) -> str:
+    value = values.get("kind", values.get("type"))
+    return str(value) if value else ""
+
+
+def _can_use_linear_atr_path(genome: StrategyGenome) -> bool:
+    """Admit only valid RSI/Donchian + ATR-bracket contracts to the batch-equivalent path."""
+    if _rule_kind(genome.exit) != "atr_bracket":
+        return False
+    entry_kind = _rule_kind(genome.entry)
+    if entry_kind not in {"rsi_momentum", "donchian_breakout"}:
+        return False
+    try:
+        atr_period = int(genome.exit.get("atr_period", 14))
+        stop_multiple = float(genome.exit["stop_atr"])
+        target_multiple = float(genome.exit["target_atr"])
+        if atr_period <= 0 or stop_multiple <= 0.0 or target_multiple <= 0.0:
+            return False
+        if entry_kind == "rsi_momentum":
+            period = int(genome.entry["period"])
+            float(genome.entry["threshold"])
+            return period > 0
+        return int(genome.entry["window"]) > 0
+    except (KeyError, TypeError, ValueError, OverflowError):
+        # Preserve the original fail-closed validation behavior for malformed
+        # genomes by routing them through the unchanged scalar policy.
+        return False
+
+
+def _rsi_value(avg_gain: float, avg_loss: float) -> float:
+    if avg_loss == 0.0:
+        return 100.0 if avg_gain > 0.0 else 50.0
+    relative = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + relative))
+
+
+def _rsi_directions(
+    genome: StrategyGenome,
+    bars: Sequence[MarketBar],
+) -> tuple[SignalDirection, ...]:
+    period = int(genome.entry["period"])
+    threshold = float(genome.entry["threshold"])
+    closes = [float(bar.close) for bar in bars]
+    directions = [SignalDirection.FLAT] * len(closes)
+    if len(closes) <= period:
+        return tuple(directions)
+
+    gains: list[float] = []
+    losses: list[float] = []
+    for index in range(1, period + 1):
+        delta = closes[index] - closes[index - 1]
+        gains.append(max(delta, 0.0))
+        losses.append(max(-delta, 0.0))
+    avg_gain = fmean(gains)
+    avg_loss = fmean(losses)
+
+    for index in range(period, len(closes)):
+        if index > period:
+            delta = closes[index] - closes[index - 1]
+            gain = max(delta, 0.0)
+            loss = max(-delta, 0.0)
+            avg_gain = ((period - 1) * avg_gain + gain) / period
+            avg_loss = ((period - 1) * avg_loss + loss) / period
+        value = _rsi_value(avg_gain, avg_loss)
+        if value >= threshold:
+            directions[index] = SignalDirection.LONG
+        elif value <= 100.0 - threshold:
+            directions[index] = SignalDirection.SHORT
+    return tuple(directions)
+
+
+def _donchian_directions(
+    genome: StrategyGenome,
+    bars: Sequence[MarketBar],
+) -> tuple[SignalDirection, ...]:
+    window = int(genome.entry["window"])
+    directions = [SignalDirection.FLAT] * len(bars)
+    for index in range(window, len(bars)):
+        upper, lower = donchian_extrema(bars[index - window : index])
+        current = float(bars[index].close)
+        if current > upper:
+            directions[index] = SignalDirection.LONG
+        elif current < lower:
+            directions[index] = SignalDirection.SHORT
+    return tuple(directions)
+
+
+def _atr_prefix_values(
+    bars: Sequence[MarketBar],
+    period: int,
+) -> tuple[float | None, ...]:
+    """Return ATR for every completed prefix using the scalar policy's Wilder recurrence."""
+    values: list[float | None] = [None] * len(bars)
+    if len(bars) <= period:
+        return tuple(values)
+
+    true_ranges: list[float] = []
+    for index in range(1, period + 1):
+        bar = bars[index]
+        previous_close = float(bars[index - 1].close)
+        true_ranges.append(
+            max(
+                float(bar.high) - float(bar.low),
+                abs(float(bar.high) - previous_close),
+                abs(float(bar.low) - previous_close),
+            )
+        )
+    current = fmean(true_ranges)
+    values[period] = current
+
+    for index in range(period + 1, len(bars)):
+        bar = bars[index]
+        previous_close = float(bars[index - 1].close)
+        true_range = max(
+            float(bar.high) - float(bar.low),
+            abs(float(bar.high) - previous_close),
+            abs(float(bar.low) - previous_close),
+        )
+        current = ((period - 1) * current + true_range) / period
+        values[index] = current
+    return tuple(values)
+
+
+def _linear_atr_signals(
+    genome: StrategyGenome,
+    bars: Sequence[MarketBar],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Batch-equivalent RSI/Donchian screening without rebuilding every history prefix."""
+    count = len(bars)
+    entries = np.zeros(count, dtype=bool)
+    exits = np.zeros(count, dtype=bool)
+    short_entries = np.zeros(count, dtype=bool)
+    short_exits = np.zeros(count, dtype=bool)
+    position = _flat_state()
+
+    if _rule_kind(genome.entry) == "rsi_momentum":
+        directions = _rsi_directions(genome, bars)
+    else:
+        directions = _donchian_directions(genome, bars)
+
+    atr_period = int(genome.exit.get("atr_period", 14))
+    atr_values = _atr_prefix_values(bars, atr_period)
+    stop_multiple = float(genome.exit["stop_atr"])
+    target_multiple = float(genome.exit["target_atr"])
+
+    for index in range(count):
+        current = bars[index]
+        if position.direction is not SignalDirection.FLAT:
+            position = _advance_state(position, current)
+
+        if position.direction is SignalDirection.FLAT:
+            direction = directions[index]
+            if direction is SignalDirection.LONG:
+                entries[index] = True
+                position = _opened_state(SignalDirection.LONG, current)
+            elif direction is SignalDirection.SHORT and genome.allow_short:
+                short_entries[index] = True
+                position = _opened_state(SignalDirection.SHORT, current)
+            continue
+
+        previous_atr = atr_values[index - 1] if index > 0 else None
+        if previous_atr is None:
+            continue
+
+        close_position = False
+        if position.direction is SignalDirection.LONG:
+            stop_price = position.entry_price - stop_multiple * previous_atr
+            target_price = position.entry_price + target_multiple * previous_atr
+            if float(current.low) <= stop_price:
+                close_position = True
+            elif float(current.high) >= target_price:
+                close_position = True
+            if close_position:
+                exits[index] = True
+        else:
+            stop_price = position.entry_price + stop_multiple * previous_atr
+            target_price = position.entry_price - target_multiple * previous_atr
+            if float(current.high) >= stop_price:
+                close_position = True
+            elif float(current.low) <= target_price:
+                close_position = True
+            if close_position:
+                short_exits[index] = True
+
+        if close_position:
+            position = _flat_state()
+
+    return entries, exits, short_entries, short_exits
+
+
 def _single_leg_signals(
     genome: StrategyGenome,
     bars: Sequence[MarketBar],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    if _can_use_linear_atr_path(genome):
+        return _linear_atr_signals(genome, bars)
+
     count = len(bars)
     entries = np.zeros(count, dtype=bool)
     exits = np.zeros(count, dtype=bool)
@@ -250,7 +445,7 @@ def screen_genome(
     fees: float,
     slippage: float,
 ) -> EvaluationResult:
-    """Fast VectorBT screening using the same executable policy as execution."""
+    """Fast VectorBT screening using execution-policy-equivalent signals."""
     if fees < 0.0 or slippage < 0.0:
         raise ValueError("fees and slippage cannot be negative")
     aligned = _validate_bars(genome, bars_by_instrument)
@@ -281,7 +476,7 @@ def screen_genome(
         strategy_id=genome.strategy_id,
         genome_hash=genome.genome_hash,
         dataset_hash=_dataset_hash(aligned),
-        code_hash=hashlib.sha256(b"screen_genome:shared-execution-policy:v2").hexdigest(),
+        code_hash=hashlib.sha256(b"screen_genome:execution-policy-equivalent:v3-linear-rsi-donchian").hexdigest(),
         engine_version=str(getattr(vbt, "__version__", "unknown")),
         fees=fees,
         slippage=slippage,
