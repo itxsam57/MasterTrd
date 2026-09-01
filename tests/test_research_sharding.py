@@ -10,13 +10,21 @@ from mastertrd.strategy_universe import strategy_recipe
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW = ROOT / ".github" / "workflows" / "autonomous-research.yml"
+WORKFLOWS = ROOT / ".github" / "workflows"
+WORKFLOW = WORKFLOWS / "autonomous-research.yml"
+RESEARCH_STACK = WORKFLOWS / "research-stack.yml"
 
 
 def _workflow() -> dict:
     payload = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     assert isinstance(payload, dict)
     return payload
+
+
+def _on(workflow: dict) -> dict:
+    value = workflow.get("on", workflow.get(True, {}))
+    assert isinstance(value, dict)
+    return value
 
 
 def test_recipe_shard_plan_preserves_default_scope_and_limits_exact_recipe():
@@ -73,6 +81,17 @@ def test_autonomous_research_matrix_exactly_shards_default_recipe_schedule():
     artifact_name = str(upload_steps[0].get("with", {}).get("name", ""))
     assert "${{ github.sha }}" in artifact_name
     assert "${{ matrix.recipe_id }}" in artifact_name
+
+
+def test_research_stack_owns_sharding_contract():
+    text = RESEARCH_STACK.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(text)
+    assert isinstance(workflow, dict)
+    triggers = _on(workflow)
+    required = "tests/test_research_sharding.py"
+    assert required in set(triggers["push"]["paths"])
+    assert required in set(triggers["pull_request"]["paths"])
+    assert required in text
 
 
 def test_main_uses_requested_recipe_shard(monkeypatch, tmp_path):
