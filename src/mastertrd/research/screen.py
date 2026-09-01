@@ -179,7 +179,9 @@ def _can_use_linear_atr_path(genome: StrategyGenome) -> bool:
         if atr_period <= 0 or stop_multiple <= 0.0 or target_multiple <= 0.0:
             return False
         if entry_kind == "rsi_momentum":
-            return int(genome.entry["period"]) > 0 and bool(float(genome.entry["threshold"]) or True)
+            period = int(genome.entry["period"])
+            float(genome.entry["threshold"])
+            return period > 0
         return int(genome.entry["window"]) > 0
     except (KeyError, TypeError, ValueError, OverflowError):
         # Preserve the original fail-closed validation behavior for malformed
