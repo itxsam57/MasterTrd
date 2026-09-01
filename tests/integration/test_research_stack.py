@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 
+import mastertrd.nautilus_paper as nautilus_paper
 from mastertrd.research.market_stats import cointegration_pvalue, detect_change_points, forecast_volatility
 from mastertrd.research.optimize import optimize_integer_parameter
 from mastertrd.research.screen import moving_average_screen
@@ -54,3 +55,31 @@ def test_garch_volatility_forecast_is_positive_and_finite():
     vol = forecast_volatility(returns)
     assert np.isfinite(vol)
     assert vol > 0
+
+
+def test_public_binance_instrument_provider_uses_market_data_only_endpoint(monkeypatch):
+    import nautilus_trader.adapters.binance.factories as factories
+    import nautilus_trader.adapters.binance.spot.providers as providers
+
+    captured = {}
+    client = object()
+    provider = object()
+
+    def fake_http_client(**kwargs):
+        captured.update(kwargs)
+        return client
+
+    def fake_provider(**kwargs):
+        captured["provider_client"] = kwargs["client"]
+        return provider
+
+    monkeypatch.setattr(factories, "get_cached_binance_http_client", fake_http_client)
+    monkeypatch.setattr(providers, "BinanceSpotInstrumentProvider", fake_provider)
+
+    result = nautilus_paper._build_public_binance_spot_provider()
+
+    assert result is provider
+    assert captured["provider_client"] is client
+    assert captured["base_url"] == "https://data-api.binance.vision"
+    assert captured["api_key"] is None
+    assert captured["api_secret"] is None
