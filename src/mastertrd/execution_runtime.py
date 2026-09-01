@@ -17,6 +17,7 @@ class RuntimeRunReport:
     reconciliation_checks: int
     reconciliation_errors: int
     system_killed: bool
+    session_rotations: int = 0
 
 
 class ExecutionRuntime:
@@ -33,7 +34,11 @@ class ExecutionRuntime:
         stream: MarketStream | None = None,
         finalizer: Callable[[], object] | None = None,
         startup_expected_state: Callable[[], ExecutionState] | None = None,
+        rotation_requested: Callable[[], bool] | None = None,
+        rotate_session: Callable[[int], tuple[PaperSessionJournal, JsonPaperSessionStore]] | None = None,
     ) -> None:
+        if (rotation_requested is None) != (rotate_session is None):
+            raise ValueError("rotation_requested and rotate_session must be configured together")
         self._journal = journal
         self._session_store = session_store
         self._risk_runtime = risk_runtime
@@ -44,6 +49,8 @@ class ExecutionRuntime:
         self._stream = stream
         self._finalizer = finalizer
         self._startup_expected_state = startup_expected_state
+        self._rotation_requested = rotation_requested
+        self._rotate_session = rotate_session
         self._closed = False
         self._startup_reconciled = False
 
@@ -53,6 +60,10 @@ class ExecutionRuntime:
         if "." in instrument:
             return instrument
         return f"{instrument}.{event.data.venue}"
+
+    @staticmethod
+    def _execution_state_is_flat(state: ExecutionState) -> bool:
+        return not state.open_order_ids and all(quantity == 0 for quantity in state.positions.values())
 
     def _refresh_market_risk_state(self, event: MarketStreamEvent) -> None:
         extras = event.data.extras
@@ -124,6 +135,40 @@ class ExecutionRuntime:
             )
         self._session_store.save(self._journal)
 
+    def _rotate_evidence_if_safe(self, *, ended_ns: int) -> bool:
+        if self._rotation_requested is None or self._rotate_session is None:
+            return False
+        if not self._rotation_requested():
+            return False
+        if not self._execution_state_is_flat(self._engine_state()):
+            return False
+
+        previous = self._journal
+        new_journal, new_store = self._rotate_session(int(ended_ns))
+        if not isinstance(new_journal, PaperSessionJournal) or not isinstance(
+            new_store, JsonPaperSessionStore
+        ):
+            raise TypeError("rotate_session must return a paper journal and session store")
+        if new_journal.session_id == previous.session_id:
+            raise RuntimeError("paper evidence rotation must create a new session identity")
+        if new_journal.strategy_id != previous.strategy_id:
+            raise RuntimeError("paper evidence rotation changed strategy identity")
+        if new_journal.genome_hash != previous.genome_hash:
+            raise RuntimeError("paper evidence rotation changed genome identity")
+        if new_journal.code_hash != previous.code_hash:
+            raise RuntimeError("paper evidence rotation changed code identity")
+        if new_journal.finalized_report is not None:
+            raise RuntimeError("paper evidence rotation returned a finalized session")
+
+        self._journal = new_journal
+        self._session_store = new_store
+        # The execution engine remains in-process. The next market event still
+        # receives a fresh reconciliation checkpoint for the new evidence window,
+        # but no stale process-restart snapshot may leak across that boundary.
+        self._startup_expected_state = None
+        self._startup_reconciled = False
+        return True
+
     def run(
         self,
         stream: MarketStream | None = None,
@@ -140,6 +185,7 @@ class ExecutionRuntime:
         reconciliation_checks = 0
         reconciliation_errors = 0
         system_killed = False
+        session_rotations = 0
 
         for event in active_stream:
             if should_stop():
@@ -194,12 +240,16 @@ class ExecutionRuntime:
                 system_killed = True
                 break
 
+            if self._rotate_evidence_if_safe(ended_ns=reconciliation_timestamp):
+                session_rotations += 1
+
         return RuntimeRunReport(
             processed_events=processed_events,
             duplicate_events=duplicate_events,
             reconciliation_checks=reconciliation_checks,
             reconciliation_errors=reconciliation_errors,
             system_killed=system_killed,
+            session_rotations=session_rotations,
         )
 
     def close(self) -> None:
