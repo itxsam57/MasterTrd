@@ -189,9 +189,13 @@ def _read_verified_public_archive(
     interval: str,
     period: str,
 ) -> ArchiveReadResult:
+    raw_symbol = str(symbol).strip().upper()
+    qualified_instrument = str(instrument_id).strip().upper()
+    if qualified_instrument != f"{raw_symbol}.BINANCE":
+        raise ValueError("public archive instrument ID does not match Binance symbol")
     url = binance_kline_url(
         market="spot",
-        symbol=symbol,
+        symbol=raw_symbol,
         interval=interval,
         period=period,
     )
@@ -204,7 +208,7 @@ def _read_verified_public_archive(
     return read_binance_archive(
         archive_path,
         expected_sha256=expected_sha256,
-        symbol=instrument_id,
+        symbol=raw_symbol,
         interval=interval,
     )
 
