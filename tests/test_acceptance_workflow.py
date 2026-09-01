@@ -7,6 +7,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "acceptance.yml"
+SECURITY_WORKFLOW = ROOT / ".github" / "workflows" / "security.yml"
 
 
 def test_acceptance_workflow_earns_receipts_and_writes_full_exact_head_report() -> None:
@@ -58,3 +59,11 @@ def test_acceptance_workflow_earns_receipts_and_writes_full_exact_head_report() 
     assert "LIVE_TRADING_ENABLED=TRUE" not in upper
     assert "MASTERTRD_MODE=LIVE" not in upper
     assert "BINANCE_LIVE" not in upper
+
+
+def test_public_repo_security_workflow_uses_unambiguous_credential_grep() -> None:
+    text = SECURITY_WORKFLOW.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(text)
+    assert isinstance(workflow, dict)
+    assert workflow.get("permissions") == {"contents": "read"}
+    assert "git grep -nEi -e " in text
