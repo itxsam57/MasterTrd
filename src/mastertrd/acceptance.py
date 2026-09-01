@@ -12,6 +12,12 @@ from pathlib import Path
 import platform
 import subprocess
 
+from .capability_matrix import (
+    MANDATORY_V2_CAPABILITIES,
+    CapabilityCheck,
+    build_v2_capability_matrix,
+)
+
 
 MANDATORY_SUITES: tuple[str, ...] = (
     "locked_install",
@@ -25,6 +31,13 @@ MANDATORY_LIVE_EVIDENCE: tuple[str, ...] = (
     "reconciliation_test",
     "kill_switch_test",
     "testnet_smoke",
+)
+
+V2_DATASET_FIXTURES: frozenset[str] = frozenset(
+    {
+        "deterministic_bar_fixture",
+        "real_l2_integrity_fixture",
+    }
 )
 
 
@@ -70,6 +83,7 @@ class AcceptanceReport:
     dataset_fixtures: tuple[str, ...]
     engine_versions: tuple[tuple[str, str], ...]
     probes: tuple[AcceptanceProbe, ...]
+    capability_checks: tuple[CapabilityCheck, ...]
     missing_mandatory_suites: tuple[str, ...]
     failed_mandatory_suites: tuple[str, ...]
     missing_mandatory_capabilities: tuple[str, ...]
@@ -98,6 +112,23 @@ def _lock_hash(repo_root: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _missing_v2_capabilities(
+    capability_checks: tuple[CapabilityCheck, ...],
+) -> tuple[str, ...]:
+    if not capability_checks:
+        return ("v2_capability_matrix",)
+
+    by_capability = {check.capability: check for check in capability_checks}
+    if len(by_capability) != len(capability_checks):
+        return ("v2_capability_matrix",)
+
+    return tuple(
+        capability
+        for capability in MANDATORY_V2_CAPABILITIES
+        if capability not in by_capability or not by_capability[capability].passed
+    )
+
+
 def run_full_acceptance(
     repo_root: Path,
     *,
@@ -106,12 +137,14 @@ def run_full_acceptance(
     dataset_fixtures: Iterable[str],
     engine_versions: Mapping[str, str],
     probes: Iterable[AcceptanceProbe],
+    capability_checks: Iterable[CapabilityCheck] = (),
     promotion_governor_allowed: bool = False,
 ) -> AcceptanceReport:
     root = Path(repo_root)
     static_checks = run_static_acceptance(root)
     suites = tuple(suite_results)
     probe_results = tuple(probes)
+    capability_results = tuple(capability_checks)
     suite_by_name = {item.name: item for item in suites}
     probe_by_name = {item.name: item for item in probe_results}
 
@@ -127,9 +160,14 @@ def run_full_acceptance(
     engine_version_records = tuple(
         sorted((str(name), str(version)) for name, version in engine_versions.items())
     )
-    missing_mandatory_capabilities = (
-        () if dataset_fixture_records else ("dataset_fixture_evidence",)
-    )
+
+    missing_capabilities: list[str] = []
+    if not dataset_fixture_records:
+        missing_capabilities.append("dataset_fixture_evidence")
+    if V2_DATASET_FIXTURES.issubset(set(dataset_fixture_records)):
+        missing_capabilities.extend(_missing_v2_capabilities(capability_results))
+    missing_mandatory_capabilities = tuple(dict.fromkeys(missing_capabilities))
+
     static_passed = all(check.passed for check in static_checks)
     implementation_complete = (
         static_passed
@@ -167,6 +205,7 @@ def run_full_acceptance(
         dataset_fixtures=dataset_fixture_records,
         engine_versions=engine_version_records,
         probes=probe_results,
+        capability_checks=capability_results,
         missing_mandatory_suites=missing_mandatory_suites,
         failed_mandatory_suites=failed_mandatory_suites,
         missing_mandatory_capabilities=missing_mandatory_capabilities,
@@ -224,14 +263,40 @@ def write_acceptance_markdown(output: Path, report: AcceptanceReport) -> Path:
             result = "PASS" if suite.passed else "FAIL"
             lines.append(f"| `{name}` | `{result}` | {_md_cell(suite.detail)} |")
 
-    lines.extend(["", "## Mandatory capability evidence", ""])
+    lines.extend(
+        [
+            "",
+            "## V2 mandatory capability matrix",
+            "",
+            "| Capability | Result | Evidence | Blocker |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
+    capability_by_name = {
+        check.capability: check for check in report.capability_checks
+    }
+    for capability in MANDATORY_V2_CAPABILITIES:
+        check = capability_by_name.get(capability)
+        if check is None:
+            lines.append(
+                f"| `{capability}` | `MISSING` | none | missing capability evidence |"
+            )
+        else:
+            result = "PASS" if check.passed else "FAIL"
+            blocker = check.blocker or "none"
+            evidence = check.evidence or "none"
+            lines.append(
+                f"| `{capability}` | `{result}` | {_md_cell(evidence)} | {_md_cell(blocker)} |"
+            )
+
+    lines.extend(["", "## Mandatory capability blockers", ""])
     if report.missing_mandatory_capabilities:
         lines.extend(
             f"- `{name}`: `MISSING`"
             for name in report.missing_mandatory_capabilities
         )
     else:
-        lines.append("- `dataset_fixture_evidence`: `PASS`")
+        lines.append("- none")
 
     lines.extend(
         [
@@ -337,6 +402,29 @@ def _probe_receipt(
     return AcceptanceProbe(name, status, detail)
 
 
+def _capability_matrix_from_environment() -> tuple[CapabilityCheck, ...]:
+    env_names = {
+        "family_coverage": "MASTERTRD_CAPABILITY_FAMILY_COVERAGE",
+        "executable_strategy_semantics": "MASTERTRD_CAPABILITY_EXECUTABLE_STRATEGY_SEMANTICS",
+        "multileg_options_execution": "MASTERTRD_CAPABILITY_MULTILEG_OPTIONS_EXECUTION",
+        "hft_execution": "MASTERTRD_CAPABILITY_HFT_EXECUTION",
+        "risk_state_ownership": "MASTERTRD_CAPABILITY_RISK_STATE_OWNERSHIP",
+        "persistent_runtime": "MASTERTRD_CAPABILITY_PERSISTENT_RUNTIME",
+        "forward_paper_lifecycle": "MASTERTRD_CAPABILITY_FORWARD_PAPER_LIFECYCLE",
+        "specialist_research_brain": "MASTERTRD_CAPABILITY_SPECIALIST_RESEARCH_BRAIN",
+        "candidate_bound_testnet_interface": "MASTERTRD_CAPABILITY_CANDIDATE_BOUND_TESTNET_INTERFACE",
+        "security": "MASTERTRD_CAPABILITY_SECURITY",
+        "reproducibility": "MASTERTRD_CAPABILITY_REPRODUCIBILITY",
+        "deployment_artifacts": "MASTERTRD_CAPABILITY_DEPLOYMENT_ARTIFACTS",
+    }
+    evidence = {
+        capability: f"verified by receipt {env_name}"
+        for capability, env_name in env_names.items()
+        if os.environ.get(env_name, "").strip().upper() == "PASS"
+    }
+    return build_v2_capability_matrix(evidence)
+
+
 def _installed_engine_versions() -> dict[str, str]:
     versions = {"python": platform.python_version()}
     for package in (
@@ -397,6 +485,7 @@ def _report_from_environment(repo_root: Path) -> AcceptanceReport:
         ),
         engine_versions=_installed_engine_versions(),
         probes=probes,
+        capability_checks=_capability_matrix_from_environment(),
         promotion_governor_allowed=governor_allowed,
     )
 
