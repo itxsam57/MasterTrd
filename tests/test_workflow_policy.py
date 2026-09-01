@@ -162,6 +162,7 @@ def test_scheduled_research_job_is_owned_by_research_stack_not_core_coverage():
         "src/mastertrd/research_job.py",
         ".github/workflows/autonomous-research.yml",
         "tests/test_research_job.py",
+        "tests/test_research_paper_handoff.py",
         "tests/test_workflow_policy.py",
     }
     assert required_paths <= push_paths
@@ -169,6 +170,7 @@ def test_scheduled_research_job_is_owned_by_research_stack_not_core_coverage():
 
     lower = research_text.lower()
     assert "tests/test_research_job.py" in lower
+    assert "tests/test_research_paper_handoff.py" in lower
     assert "tests/test_workflow_policy.py" in lower
 
     core_text, _ = _load("ci.yml")
