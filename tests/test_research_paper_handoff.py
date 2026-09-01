@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import mastertrd.research_job as research_job
+from mastertrd.contracts import StrategyState
 from mastertrd.genome import StrategyGenome
 
 
@@ -88,7 +89,7 @@ def test_research_job_exports_recoverable_public_paper_candidate_manifest(monkey
                 SimpleNamespace(
                     strategy_id=candidate.strategy_id,
                     genome_hash=candidate.genome_hash,
-                    state=SimpleNamespace(value="paper"),
+                    state=StrategyState.PAPER,
                     score=0.12,
                     reason="paper_started",
                 ),
