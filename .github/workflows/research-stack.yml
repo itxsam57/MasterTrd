@@ -4,10 +4,17 @@ on:
   push:
     paths:
       - 'src/mastertrd/research/**'
+      - 'src/mastertrd/research_brain.py'
+      - 'src/mastertrd/research_candidate_generation.py'
       - 'src/mastertrd/research_job.py'
+      - 'src/mastertrd/strategy_universe.py'
       - 'src/mastertrd/memory_duckdb.py'
       - 'tests/integration/**'
       - 'tests/test_research_job.py'
+      - 'tests/test_research_recipe_scheduling.py'
+      - 'tests/test_scheduled_recipe_research.py'
+      - 'tests/test_strategy_recipe_compiler.py'
+      - 'tests/test_strategy_universe.py'
       - 'tests/test_workflow_policy.py'
       - 'pyproject.toml'
       - 'uv.lock'
@@ -16,10 +23,17 @@ on:
   pull_request:
     paths:
       - 'src/mastertrd/research/**'
+      - 'src/mastertrd/research_brain.py'
+      - 'src/mastertrd/research_candidate_generation.py'
       - 'src/mastertrd/research_job.py'
+      - 'src/mastertrd/strategy_universe.py'
       - 'src/mastertrd/memory_duckdb.py'
       - 'tests/integration/**'
       - 'tests/test_research_job.py'
+      - 'tests/test_research_recipe_scheduling.py'
+      - 'tests/test_scheduled_recipe_research.py'
+      - 'tests/test_strategy_recipe_compiler.py'
+      - 'tests/test_strategy_universe.py'
       - 'tests/test_workflow_policy.py'
       - 'pyproject.toml'
       - 'uv.lock'
@@ -31,8 +45,9 @@ permissions:
   contents: read
 
 jobs:
-  # Task 8 owns the scheduled public-data entrypoint in this integration gate;
-  # shared-core coverage stays focused without lowering the 90% threshold.
+  # The dedicated research gate owns the public-data job, ResearchBrain, and
+  # Strategy Universe recipe/compiler/traceability surfaces. Full Stack remains
+  # the cumulative safety net for the entire repository.
   integrated-research:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -51,7 +66,12 @@ jobs:
         run: |
           uv run pytest -q \
             tests/test_research_job.py \
+            tests/test_research_recipe_scheduling.py \
+            tests/test_scheduled_recipe_research.py \
+            tests/test_strategy_recipe_compiler.py \
+            tests/test_strategy_universe.py \
             tests/test_workflow_policy.py \
+            tests/integration/test_strategy_universe_research.py \
             tests/integration/test_research_stack.py \
             tests/integration/test_advanced_research.py \
             tests/integration/test_duckdb_memory.py \
