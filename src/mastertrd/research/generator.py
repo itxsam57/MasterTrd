@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
+from decimal import Decimal, InvalidOperation
 from itertools import combinations
 import random
 from hashlib import sha256
@@ -69,6 +70,17 @@ def _is_spot(instrument: object) -> bool:
 
 def _normalized_levels(values: Collection[object]) -> frozenset[str]:
     return frozenset(str(getattr(value, "value", value)).upper() for value in values)
+
+
+def _validated_trade_size(value: str) -> str:
+    raw = value.strip()
+    try:
+        amount = Decimal(raw)
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("trade_size must be a positive decimal") from exc
+    if not amount.is_finite() or amount <= 0:
+        raise ValueError("trade_size must be a positive decimal")
+    return raw
 
 
 def family_instrument_sets(
@@ -203,12 +215,21 @@ def _rules(family: str, rng: random.Random) -> tuple[dict, dict, dict]:
     return rules[family]
 
 
-def generate_candidate(*, family: str, instruments: Sequence[str], seed: int) -> StrategyGenome:
+def generate_candidate(
+    *,
+    family: str,
+    instruments: Sequence[str],
+    seed: int,
+    trade_size: str | None = None,
+) -> StrategyGenome:
     spec = family_spec(family)
     if not instruments:
         raise ValueError("at least one instrument is required")
     rng = random.Random(seed)
     entry, exit_rule, filters = _rules(family, rng)
+    if trade_size is not None:
+        entry = dict(entry)
+        entry["trade_size"] = _validated_trade_size(trade_size)
     timeframe = rng.choice(_TIMEFRAMES[family])
     raw_id = f"{family}|{','.join(instruments)}|{seed}|{entry}|{exit_rule}|{filters}"
     strategy_id = "S-" + sha256(raw_id.encode()).hexdigest()[:12].upper()
