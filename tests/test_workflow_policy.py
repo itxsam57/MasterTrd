@@ -184,10 +184,13 @@ def test_research_stack_owns_strategy_universe_recipe_changes_and_traceability_t
         "tests/test_strategy_universe.py",
         "tests/test_strategy_recipe_compiler.py",
         "tests/test_research_recipe_scheduling.py",
-        "tests/integration/test_strategy_universe_research.py",
     }
-    assert required_paths <= set(triggers["push"]["paths"])
-    assert required_paths <= set(triggers["pull_request"]["paths"])
+    push_paths = set(triggers["push"]["paths"])
+    pull_paths = set(triggers["pull_request"]["paths"])
+    assert required_paths <= push_paths
+    assert required_paths <= pull_paths
+    assert "tests/integration/**" in push_paths
+    assert "tests/integration/**" in pull_paths
 
     lower = text.lower()
     assert "tests/test_strategy_universe.py" in lower
