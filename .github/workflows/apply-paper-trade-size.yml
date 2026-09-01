@@ -1,0 +1,69 @@
+name: Apply PAPER runtime trade-size fix
+
+on:
+  push:
+    branches: [v2/plan-closure-20260831]
+    paths:
+      - '.github/workflows/apply-paper-trade-size.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v2/plan-closure-20260831
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Apply guarded PAPER trade-size transport
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          paper = Path('src/mastertrd/nautilus_paper.py')
+          text = paper.read_text(encoding='utf-8')
+          old_signature = '''        risk_runtime: RiskRuntime,\n        journal: PaperSessionJournal,\n        instrument,\n    ) -> None:\n'''
+          new_signature = '''        risk_runtime: RiskRuntime,\n        journal: PaperSessionJournal,\n        instrument,\n        trade_size_override: str | None = None,\n    ) -> None:\n'''
+          if text.count(old_signature) != 1:
+              raise SystemExit('PAPER constructor signature anchor drifted')
+          text = text.replace(old_signature, new_signature, 1)
+
+          old_compile = '''        compiled = compile_genome_to_nautilus(\n            candidate,\n            instrument=instrument,\n            risk_runtime=risk_runtime,\n        )\n'''
+          new_compile = '''        compiled = compile_genome_to_nautilus(\n            candidate,\n            instrument=instrument,\n            trade_size_override=trade_size_override,\n            risk_runtime=risk_runtime,\n        )\n'''
+          if text.count(old_compile) != 1:
+              raise SystemExit('PAPER compiler anchor drifted')
+          paper.write_text(text.replace(old_compile, new_compile, 1), encoding='utf-8')
+
+          factory = Path('src/mastertrd/runtime_factory.py')
+          text = factory.read_text(encoding='utf-8')
+          old_inputs = '''    code_hash = _required(environ, "MASTERTRD_CODE_HASH")\n    session_nonce = environ.get("MASTERTRD_SESSION_NONCE", "runtime-paper").strip() or "runtime-paper"\n'''
+          new_inputs = '''    code_hash = _required(environ, "MASTERTRD_CODE_HASH")\n    trade_size_override = environ.get("MASTERTRD_TRADE_SIZE", "").strip() or None\n    session_nonce = environ.get("MASTERTRD_SESSION_NONCE", "runtime-paper").strip() or "runtime-paper"\n'''
+          if text.count(old_inputs) != 1:
+              raise SystemExit('PAPER runtime input anchor drifted')
+          text = text.replace(old_inputs, new_inputs, 1)
+
+          old_call = '''    execution = NautilusStreamingPaperExecution(\n        candidate=candidate,\n        risk_runtime=risk_runtime,\n        journal=session.journal,\n        instrument=instrument,\n    )\n'''
+          new_call = '''    execution = NautilusStreamingPaperExecution(\n        candidate=candidate,\n        risk_runtime=risk_runtime,\n        journal=session.journal,\n        instrument=instrument,\n        trade_size_override=trade_size_override,\n    )\n'''
+          if text.count(old_call) != 1:
+              raise SystemExit('PAPER execution construction anchor drifted')
+          factory.write_text(text.replace(old_call, new_call, 1), encoding='utf-8')
+          PY
+      - name: Verify focused GREEN
+        run: |
+          python -m pip install --disable-pip-version-check 'uv==0.12.8'
+          uv sync --locked --all-extras
+          uv run pytest -q tests/integration/test_runtime_factory.py tests/integration/test_nautilus_paper_sandbox.py tests/test_live_node.py
+      - name: Commit real code and remove one-shot workflow
+        run: |
+          git config user.name 'mastertrd-autopilot'
+          git config user.email 'mastertrd-autopilot@users.noreply.github.com'
+          rm .github/workflows/apply-paper-trade-size.yml
+          git add src/mastertrd/runtime_factory.py src/mastertrd/nautilus_paper.py .github/workflows/apply-paper-trade-size.yml
+          git commit -m 'fix(paper): honor runtime trade-size override'
+          git push origin HEAD:v2/plan-closure-20260831
