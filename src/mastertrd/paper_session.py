@@ -59,6 +59,10 @@ class PaperSessionJournal:
         return self._code_hash
 
     @property
+    def started_ns(self) -> int:
+        return self._started_ns
+
+    @property
     def latest_timestamp_ns(self) -> int:
         latest = self._events[-1].timestamp_ns if self._events else self._started_ns
         if self._execution_state_timestamp_ns is not None:
