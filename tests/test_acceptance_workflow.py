@@ -10,6 +10,13 @@ WORKFLOW = ROOT / ".github" / "workflows" / "acceptance.yml"
 SECURITY_WORKFLOW = ROOT / ".github" / "workflows" / "security.yml"
 
 
+def _assert_fail_closed_credential_grep(text: str) -> None:
+    assert "git grep -nEi -e " in text
+    assert "grep_status=$?" in text
+    assert '"$grep_status" -eq 0' in text
+    assert '"$grep_status" -ne 1' in text
+
+
 def test_acceptance_workflow_earns_receipts_and_writes_full_exact_head_report() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     workflow = yaml.safe_load(text)
@@ -46,7 +53,7 @@ def test_acceptance_workflow_earns_receipts_and_writes_full_exact_head_report() 
     assert "DETECT-SECRETS" in upper
     assert "EXCLUDE-FILES" in upper
     assert ".VENV" in upper
-    assert "git grep -nEi -e " in text
+    _assert_fail_closed_credential_grep(text)
     assert "GIT DIFF --EXIT-CODE" in upper
     assert "GIT REV-PARSE HEAD" in upper
     assert "GITHUB_SHA" in upper
@@ -61,9 +68,9 @@ def test_acceptance_workflow_earns_receipts_and_writes_full_exact_head_report() 
     assert "BINANCE_LIVE" not in upper
 
 
-def test_public_repo_security_workflow_uses_unambiguous_credential_grep() -> None:
+def test_public_repo_security_workflow_uses_fail_closed_credential_grep() -> None:
     text = SECURITY_WORKFLOW.read_text(encoding="utf-8")
     workflow = yaml.safe_load(text)
     assert isinstance(workflow, dict)
     assert workflow.get("permissions") == {"contents": "read"}
-    assert "git grep -nEi -e " in text
+    _assert_fail_closed_credential_grep(text)
