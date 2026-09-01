@@ -255,6 +255,9 @@ def test_oracle_deploy_installs_only_identity_checked_public_paper_candidate():
     text = (ROOT / ".github" / "workflows" / "oracle-deploy.yml").read_text(encoding="utf-8")
     assert "paper_candidate_manifest_json" in text
     assert "validate_paper_candidate_manifest" in text
-    assert "/var/lib/mastertrd/paper-candidate.json" in text
-    assert "/var/lib/mastertrd/paper-session.json" in text
+    assert 'paper_root="/var/lib/mastertrd/paper/$GITHUB_SHA/$PAPER_GENOME_HASH"' in text
+    assert 'paper_candidate="$paper_root/paper-candidate.json"' in text
+    assert 'paper_session="$paper_root/paper-session.json"' in text
+    assert "/var/lib/mastertrd/paper-candidate.json" not in text
+    assert "/var/lib/mastertrd/paper-session.json" not in text
     assert "LIVE_TRADING_ENABLED=false" in text
