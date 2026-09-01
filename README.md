@@ -21,6 +21,14 @@ Process readiness is deliberately separate from LIVE activation. The real `testn
 
 The `Completion Acceptance` workflow produces the canonical exact-head acceptance artifact for every relevant branch change. The checked-in `docs/ACCEPTANCE_REPORT.md` is a provenance snapshot of the last fully verified implementation baseline; it does not replace the exact-head workflow artifact.
 
+## Strategy Universe V1
+
+Strategy Universe V1 adds a versioned catalog of named strategy recipes and research targets without replacing MasterTrd's existing execution semantics. An `EXECUTABLE` recipe compiles deterministically into the shared `StrategyGenome` contract, carries its recipe identity as `style=recipe:<recipe_id>`, and then uses the same ResearchBrain, specialist evidence, Promotion Governor, and NautilusTrader execution boundaries as legacy generated candidates.
+
+The scheduled public-data research job now iterates exact executable crypto BAR recipe IDs and records `recipe_id` in its public artifact. It does not silently substitute a cheaper strategy for unsupported ideas: options recipes remain blocked until qualifying option-chain/Greeks evidence exists; HFT, scalping, order-book and market-making recipes remain blocked until the required real tick/L2/queue/latency evidence exists; provider-specific recipes remain blocked until that provider is explicitly admitted. Multi-leg candidates cannot be validated through the single-instrument Nautilus wrapper.
+
+Provider capability and MasterTrd admission are deliberately separate facts. `docs/MARKET_PROVIDER_MATRIX.md` records the researched market/provider surface and its blockers. Binance remains the only admitted execution provider in Strategy Universe V1; the presence of an Interactive Brokers, Polymarket, Betfair, OKX, Deribit, Hyperliquid, Databento, Tardis, or other Nautilus integration does **not** authorize MasterTrd to trade through it. Future admissions require provider-specific data, paper/test, reconciliation, risk, credential-isolation, and Governor evidence before execution can be enabled.
+
 ## Local development
 
 ```bash
