@@ -60,3 +60,4 @@ def test_oracle_deploy_uses_candidate_and_code_identity_scoped_paper_state():
     assert "$PAPER_GENOME_HASH" in text
     assert "/var/lib/mastertrd/paper/" in text
     assert "LIVE_TRADING_ENABLED=false" in text
+    assert "bash -n artifacts/oracle/bootstrap.sh" in text
