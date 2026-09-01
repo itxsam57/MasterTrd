@@ -62,6 +62,7 @@ def test_acceptance_workflow_earns_receipts_and_writes_full_exact_head_report() 
     assert "--FULL-REPORT --WRITE ARTIFACTS/ACCEPTANCE.JSON" in upper
     assert "MASTERTRD.ACCEPTANCE . --WRITE ARTIFACTS/ACCEPTANCE_REPORT.MD || TRUE" not in upper
     assert "MASTERTRD.ACCEPTANCE . --FULL-REPORT --WRITE ARTIFACTS/ACCEPTANCE.JSON || TRUE" not in upper
+    assert ".github/workflows/security.yml" in text
 
     assert "LIVE_TRADING_ENABLED=TRUE" not in upper
     assert "MASTERTRD_MODE=LIVE" not in upper
