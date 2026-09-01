@@ -38,6 +38,17 @@ def test_oracle_adapter_is_dormant_and_never_embeds_secrets():
     assert "changeme" not in text.lower()
 
 
+def test_oracle_env_template_matches_repository_owned_paper_runtime_contract():
+    text = render_env_template()
+    for name in (
+        "MASTERTRD_CANDIDATE_MANIFEST",
+        "MASTERTRD_SESSION_STATE",
+        "MASTERTRD_CODE_HASH",
+    ):
+        assert f"{name}=" in text
+    assert "MASTERTRD_EXECUTION_FACTORY" not in text
+
+
 def test_systemd_unit_restarts_and_loads_protected_environment():
     unit = render_systemd_unit(spec())
     assert "User=mastertrd" in unit
@@ -48,6 +59,14 @@ def test_systemd_unit_restarts_and_loads_protected_environment():
     assert "ProtectSystem=strict" in unit
     assert "ReadWritePaths=/opt/mastertrd" in unit
     assert "mastertrd.live_node" in unit
+
+
+def test_systemd_and_bootstrap_allow_documented_paper_state_directory():
+    unit = render_systemd_unit(spec())
+    script = render_bootstrap_script(spec())
+    assert "/var/lib/mastertrd" in unit
+    assert "mkdir -p" in script and "/var/lib/mastertrd" in script
+    assert "chown -R mastertrd:mastertrd" in script and "/var/lib/mastertrd" in script
 
 
 def test_bootstrap_targets_arm64_or_amd64_linux_and_installs_health_recovery_hooks():
@@ -100,3 +119,15 @@ def test_oracle_deploy_workflow_is_manual_environment_gated_and_fail_closed():
     assert "MASTERTRD.LIVE_NODE" in upper
     assert "BINANCE_LIVE_API_KEY" not in upper
     assert "BINANCE_LIVE_API_SECRET" not in upper
+
+
+def test_oracle_deploy_checks_current_paper_inputs_not_deleted_factory_knob():
+    text = (ROOT / ".github" / "workflows" / "oracle-deploy.yml").read_text(encoding="utf-8")
+    upper = text.upper()
+    assert "MASTERTRD_EXECUTION_FACTORY" not in upper
+    for name in (
+        "MASTERTRD_CANDIDATE_MANIFEST",
+        "MASTERTRD_SESSION_STATE",
+        "MASTERTRD_CODE_HASH",
+    ):
+        assert name in upper
