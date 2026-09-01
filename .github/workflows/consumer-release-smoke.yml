@@ -1,0 +1,103 @@
+name: Consumer Release Smoke
+
+on:
+  push:
+    branches:
+      - main
+      - v2/plan-closure-20260831
+    paths:
+      - 'src/**'
+      - 'README.md'
+      - 'docs/OPERATIONS.md'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/consumer-release-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  consumer-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install exactly as a fresh operator
+        run: |
+          python -m pip install --disable-pip-version-check 'uv==0.12.8'
+          uv lock --check
+          uv sync --locked --all-extras
+          uv pip check
+      - name: Exercise installed consumer and operator surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/consumer-release-smoke
+          report='artifacts/consumer-release-smoke/results.txt'
+          : > "$report"
+
+          record_failure() {
+            local name="$1"
+            local needle="$2"
+            shift 2
+            set +e
+            local output
+            output=$("$@" 2>&1)
+            local status=$?
+            set -e
+            printf '## %s\nexit=%s\n%s\n\n' "$name" "$status" "$output" >> "$report"
+            if [ "$status" -eq 0 ]; then
+              echo "$name unexpectedly succeeded" >&2
+              return 1
+            fi
+            if ! grep -Fq "$needle" <<<"$output"; then
+              echo "$name did not expose expected operator message: $needle" >&2
+              return 1
+            fi
+          }
+
+          uv run python - <<'PY' >> "$report"
+          import mastertrd
+          from mastertrd.runtime import RuntimeConfig
+          print('installed_import=PASS')
+          print('default_mode=' + RuntimeConfig.from_env({}).mode.value)
+          PY
+
+          record_failure \
+            'live-disabled-default' \
+            'LIVE mode requires LIVE_TRADING_ENABLED=true' \
+            env MASTERTRD_MODE=LIVE LIVE_TRADING_ENABLED=false uv run python -m mastertrd.live_node
+
+          record_failure \
+            'live-flag-outside-live' \
+            'LIVE_TRADING_ENABLED=true is invalid outside LIVE mode' \
+            env MASTERTRD_MODE=PAPER LIVE_TRADING_ENABLED=true uv run python -m mastertrd.live_node
+
+          record_failure \
+            'paper-missing-operator-inputs' \
+            'MASTERTRD_CANDIDATE_MANIFEST is required for persistent execution' \
+            env MASTERTRD_MODE=PAPER LIVE_TRADING_ENABLED=false uv run python -m mastertrd.live_node
+
+          record_failure \
+            'testnet-missing-operator-inputs' \
+            'MASTERTRD_CANDIDATE_MANIFEST is required for persistent execution' \
+            env MASTERTRD_MODE=TESTNET LIVE_TRADING_ENABLED=false uv run python -m mastertrd.live_node
+
+          record_failure \
+            'research-job-missing-code-identity' \
+            'GITHUB_SHA or MASTERTRD_CODE_HASH is required' \
+            env -u GITHUB_SHA -u MASTERTRD_CODE_HASH uv run python -m mastertrd.research_job
+
+          echo 'consumer_smoke=PASS' >> "$report"
+          cat "$report"
+      - name: Upload black-box observations
+        uses: actions/upload-artifact@v4
+        with:
+          name: consumer-release-smoke-${{ github.sha }}
+          path: artifacts/consumer-release-smoke/results.txt
+          if-no-files-found: error
+          retention-days: 14
