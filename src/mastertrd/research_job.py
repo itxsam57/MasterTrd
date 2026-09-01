@@ -11,6 +11,7 @@ from urllib.request import urlopen
 
 from .data.archive import ArchiveReadResult, dataset_hash_for_bars, read_binance_archive
 from .data.binance_public import binance_kline_url
+from .genome import StrategyGenome
 from .memory_duckdb import DuckDbResearchMemory
 from .nautilus_paper import load_public_binance_spot_instrument
 from .research.generator import generate_candidate
@@ -258,6 +259,62 @@ def _dataset_for_timeframe(
     return dataset, tuple(manifests)
 
 
+def _paper_candidate_manifests(
+    *,
+    report,
+    memory: DuckDbResearchMemory,
+    code_hash: str,
+    dataset_hash: str,
+    lock_hash: str,
+    recipe_id: str | None,
+) -> list[dict[str, object]]:
+    paper_finalists = [
+        finalist
+        for finalist in report.finalists
+        if finalist.state.value == "paper"
+    ]
+    if not paper_finalists:
+        return []
+
+    robustness = memory.get_stage(report.run_id, "hidden_robustness_stress")
+    if robustness is None or not isinstance(robustness.artifact, Mapping):
+        raise RuntimeError("queued PAPER candidate is missing robustness provenance")
+    raw_outcomes = robustness.artifact.get("outcomes")
+    if not isinstance(raw_outcomes, list):
+        raise RuntimeError("queued PAPER candidate robustness provenance is invalid")
+
+    candidates_by_hash: dict[str, StrategyGenome] = {}
+    for outcome in raw_outcomes:
+        if not isinstance(outcome, Mapping):
+            continue
+        raw_genome = outcome.get("genome")
+        if not isinstance(raw_genome, Mapping):
+            continue
+        try:
+            candidate = StrategyGenome(**dict(raw_genome))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("queued PAPER candidate genome provenance is invalid") from exc
+        candidates_by_hash[candidate.genome_hash] = candidate
+
+    manifests: list[dict[str, object]] = []
+    for finalist in paper_finalists:
+        candidate = candidates_by_hash.get(finalist.genome_hash)
+        if candidate is None or candidate.strategy_id != finalist.strategy_id:
+            raise RuntimeError("queued PAPER candidate genome could not be recovered")
+        manifests.append(
+            {
+                "candidate": candidate.canonical_payload(),
+                "strategy_id": candidate.strategy_id,
+                "genome_hash": candidate.genome_hash,
+                "code_hash": code_hash,
+                "dataset_hash": dataset_hash,
+                "lock_hash": lock_hash,
+                "recipe_id": recipe_id,
+            }
+        )
+    return manifests
+
+
 def _public_run_payload(
     *,
     family: str,
@@ -266,6 +323,7 @@ def _public_run_payload(
     report,
     manifests,
     recipe_id: str | None = None,
+    paper_candidates=(),
 ) -> dict[str, object]:
     return {
         "family": family,
@@ -278,6 +336,7 @@ def _public_run_payload(
         "paper_queued": report.paper_queued,
         "resumed": report.resumed,
         "manifests": list(manifests),
+        "paper_candidates": list(paper_candidates),
         "finalists": [
             {
                 "strategy_id": item.strategy_id,
@@ -362,6 +421,14 @@ def run_research_job(
                     code_hash=code_hash,
                     lock_hash=lock_hash,
                 )
+                paper_candidates = _paper_candidate_manifests(
+                    report=report,
+                    memory=memory,
+                    code_hash=code_hash,
+                    dataset_hash=dataset.dataset_hash,
+                    lock_hash=lock_hash,
+                    recipe_id=recipe_id,
+                )
                 runs.append(
                     _public_run_payload(
                         family=family,
@@ -370,6 +437,7 @@ def run_research_job(
                         timeframe=timeframe,
                         report=report,
                         manifests=manifests,
+                        paper_candidates=paper_candidates,
                     )
                 )
     finally:
