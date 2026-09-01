@@ -277,6 +277,12 @@ class NautilusStreamingPaperExecution:
     def closed_positions(self) -> int:
         return self._sink.closed_positions
 
+    def bind_journal(self, journal: PaperSessionJournal) -> None:
+        """Rotate evidence ownership while keeping this Nautilus engine alive."""
+        if self._ended:
+            raise RuntimeError("Nautilus PAPER execution bridge is already finalized")
+        self._sink.bind_journal(journal)
+
     def execution_state(self, *, account_id: str) -> ExecutionState:
         """Snapshot the current Nautilus sandbox account/cache for reconciliation."""
         if not account_id:
