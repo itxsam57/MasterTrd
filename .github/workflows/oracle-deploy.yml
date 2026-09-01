@@ -82,6 +82,8 @@ jobs:
               json.dumps(candidate.canonical_payload(), sort_keys=True, indent=2, allow_nan=False),
               encoding="utf-8",
           )
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as env_file:
+              env_file.write(f"PAPER_GENOME_HASH={candidate.genome_hash}\n")
           print(
               json.dumps(
                   {
@@ -136,7 +138,7 @@ jobs:
           scp -i "$HOME/.ssh/oracle_key" -o BatchMode=yes artifacts/oracle/bootstrap.sh "${target}:${remote_bootstrap}"
           scp -i "$HOME/.ssh/oracle_key" -o BatchMode=yes artifacts/oracle/paper-candidate.json "${target}:${remote_candidate}"
           ssh -i "$HOME/.ssh/oracle_key" -o BatchMode=yes "$target" \
-            "GITHUB_SHA='$GITHUB_SHA' REMOTE_BOOTSTRAP='$remote_bootstrap' REMOTE_CANDIDATE='$remote_candidate' bash -s" <<'REMOTE'
+            "GITHUB_SHA='$GITHUB_SHA' PAPER_GENOME_HASH='$PAPER_GENOME_HASH' REMOTE_BOOTSTRAP='$remote_bootstrap' REMOTE_CANDIDATE='$remote_candidate' bash -s" <<'REMOTE'
           set -euo pipefail
 
           cleanup() {
@@ -174,8 +176,17 @@ jobs:
           sudo -u mastertrd bash -c 'cd /opt/mastertrd && .uv-tool/bin/uv lock --check && .uv-tool/bin/uv sync --locked --all-extras && .uv-tool/bin/uv pip check'
           test "$(sudo -u mastertrd git -C /opt/mastertrd rev-parse HEAD)" = "$GITHUB_SHA"
 
-          sudo install -o mastertrd -g mastertrd -m 600 "$REMOTE_CANDIDATE" /var/lib/mastertrd/paper-candidate.json
+          paper_root="/var/lib/mastertrd/paper/$GITHUB_SHA/$PAPER_GENOME_HASH"
+          paper_candidate="$paper_root/paper-candidate.json"
+          paper_session="$paper_root/paper-session.json"
+          paper_archive="$paper_root/paper-reports.json"
+          paper_history="$paper_root/paper-sessions"
+          paper_rotation_request="$paper_root/paper-rotate.request"
+          sudo install -d -o mastertrd -g mastertrd -m 700 "$paper_root" "$paper_history"
+          sudo install -o mastertrd -g mastertrd -m 600 "$REMOTE_CANDIDATE" "$paper_candidate"
 
+          # Legacy pre-identity paths /var/lib/mastertrd/paper-candidate.json and
+          # /var/lib/mastertrd/paper-session.json are deliberately not reused.
           set_env_value() {
             local key="$1"
             local value="$2"
@@ -190,10 +201,15 @@ jobs:
           set_env_value MASTERTRD_MODE PAPER
           set_env_value LIVE_TRADING_ENABLED false
           set_env_value ORACLE_ENABLED true
-          set_env_value MASTERTRD_CANDIDATE_MANIFEST /var/lib/mastertrd/paper-candidate.json
-          set_env_value MASTERTRD_SESSION_STATE /var/lib/mastertrd/paper-session.json
+          set_env_value MASTERTRD_CANDIDATE_MANIFEST "$paper_candidate"
+          set_env_value MASTERTRD_SESSION_STATE "$paper_session"
+          set_env_value MASTERTRD_PAPER_ARCHIVE "$paper_archive"
+          set_env_value MASTERTRD_PAPER_HISTORY_DIR "$paper_history"
+          set_env_value MASTERTRD_PAPER_ROTATION_REQUEST "$paper_rotation_request"
+          set_env_value MASTERTRD_PAPER_ROTATE_AFTER_SECONDS 86400
           set_env_value MASTERTRD_CODE_HASH "$GITHUB_SHA"
           set_env_value MASTERTRD_PUBLIC_FEED_FIXTURE ''
+          set_env_value MASTERTRD_SESSION_NONCE "$GITHUB_SHA:$PAPER_GENOME_HASH"
           set_env_value MASTERTRD_PAPER_START_NS ''
           sudo chown root:root /etc/mastertrd/mastertrd.env
           sudo chmod 600 /etc/mastertrd/mastertrd.env
@@ -201,9 +217,14 @@ jobs:
           sudo grep -Eq '^MASTERTRD_MODE=PAPER$' /etc/mastertrd/mastertrd.env
           sudo grep -Eq '^LIVE_TRADING_ENABLED=false$' /etc/mastertrd/mastertrd.env
           sudo grep -Eq '^ORACLE_ENABLED=true$' /etc/mastertrd/mastertrd.env
-          sudo grep -Fqx 'MASTERTRD_CANDIDATE_MANIFEST=/var/lib/mastertrd/paper-candidate.json' /etc/mastertrd/mastertrd.env
-          sudo grep -Fqx 'MASTERTRD_SESSION_STATE=/var/lib/mastertrd/paper-session.json' /etc/mastertrd/mastertrd.env
+          sudo grep -Fqx "MASTERTRD_CANDIDATE_MANIFEST=$paper_candidate" /etc/mastertrd/mastertrd.env
+          sudo grep -Fqx "MASTERTRD_SESSION_STATE=$paper_session" /etc/mastertrd/mastertrd.env
+          sudo grep -Fqx "MASTERTRD_PAPER_ARCHIVE=$paper_archive" /etc/mastertrd/mastertrd.env
+          sudo grep -Fqx "MASTERTRD_PAPER_HISTORY_DIR=$paper_history" /etc/mastertrd/mastertrd.env
+          sudo grep -Fqx "MASTERTRD_PAPER_ROTATION_REQUEST=$paper_rotation_request" /etc/mastertrd/mastertrd.env
+          sudo grep -Fqx 'MASTERTRD_PAPER_ROTATE_AFTER_SECONDS=86400' /etc/mastertrd/mastertrd.env
           sudo grep -Fqx "MASTERTRD_CODE_HASH=$GITHUB_SHA" /etc/mastertrd/mastertrd.env
+          sudo grep -Fqx "MASTERTRD_SESSION_NONCE=$GITHUB_SHA:$PAPER_GENOME_HASH" /etc/mastertrd/mastertrd.env
 
           sudo systemctl restart mastertrd.service
           sudo /usr/local/bin/mastertrd-health
