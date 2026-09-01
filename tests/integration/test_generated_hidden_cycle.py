@@ -48,6 +48,7 @@ def test_generated_candidate_uses_frozen_hidden_tail_and_regime_reruns_for_hidde
 
     instrument = TestInstrumentProvider.ethusdt_binance()
     candidate = generate_candidate(family="trend", instruments=(instrument.id.value,), seed=42)
+    instrument_id = candidate.instruments[0]
     start = datetime(2026, 2, 1, tzinfo=timezone.utc)
     closes = list(_cycle_closes()) * 5
     all_bars = _bars(candidate, instrument, closes, start=start)
@@ -61,10 +62,10 @@ def test_generated_candidate_uses_frozen_hidden_tail_and_regime_reruns_for_hidde
     step = _step(candidate.timeframe)
     regime_start = start + step * 2000
     regimes = [
-        ("regime-trend-a", _bars(candidate, instrument, _cycle_closes(0.0), start=regime_start)),
-        ("regime-trend-b", _bars(candidate, instrument, _cycle_closes(30.0), start=regime_start + step * 400)),
-        ("regime-trend-c", _bars(candidate, instrument, _cycle_closes(-30.0), start=regime_start + step * 800)),
-        ("regime-trend-d", _bars(candidate, instrument, _cycle_closes(60.0), start=regime_start + step * 1200)),
+        ("regime-trend-a", {instrument_id: _bars(candidate, instrument, _cycle_closes(0.0), start=regime_start)}),
+        ("regime-trend-b", {instrument_id: _bars(candidate, instrument, _cycle_closes(30.0), start=regime_start + step * 400)}),
+        ("regime-trend-c", {instrument_id: _bars(candidate, instrument, _cycle_closes(-30.0), start=regime_start + step * 800)}),
+        ("regime-trend-d", {instrument_id: _bars(candidate, instrument, _cycle_closes(60.0), start=regime_start + step * 1200)}),
     ]
     policy = HiddenGatePolicy(
         min_trades_per_evaluation=1,
@@ -75,8 +76,8 @@ def test_generated_candidate_uses_frozen_hidden_tail_and_regime_reruns_for_hidde
 
     cycle = run_generated_hidden_cycle(
         candidate=candidate,
-        instrument=instrument,
-        hidden_data=hidden,
+        instruments={instrument_id: instrument},
+        hidden_data_by_instrument={instrument_id: hidden},
         manifest=manifest,
         regime_datasets=regimes,
         code_hash="hidden-code-v1",

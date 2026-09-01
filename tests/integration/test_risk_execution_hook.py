@@ -1,8 +1,11 @@
 from mastertrd.genome import StrategyGenome
 from mastertrd.nautilus_backtest import run_binance_spot_strategy_history
+from mastertrd.nautilus_risk_hook import NautilusRiskMixin
 from mastertrd.nautilus_strategy import compile_genome_to_nautilus
-from mastertrd.risk import RiskAction
+from mastertrd.risk import RiskAction, RiskLimits
 from mastertrd.risk_profiles import build_research_backtest_risk_runtime
+from mastertrd.risk_runtime import RiskRuntime
+from mastertrd.risk_state import RiskStateProvider
 
 
 def test_compiled_strategy_records_risk_allow_before_every_simulated_order():
@@ -61,3 +64,85 @@ def test_compiled_strategy_records_risk_allow_before_every_simulated_order():
     assert strategy.risk_runtime.allow_count >= summary.order_count
     assert all(decision.action is RiskAction.ALLOW for decision in strategy.risk_runtime.accepted_decisions)
     assert strategy.risk_runtime.accepted_order_fingerprints
+
+
+def test_nautilus_risk_hook_blocks_from_nonzero_owned_account_state() -> None:
+    provider = RiskStateProvider(clock=lambda: 1_000.0, max_market_age_seconds=5.0)
+    provider.update_account_state(
+        symbol="ETHUSDT.BINANCE",
+        portfolio_id="default",
+        symbol_exposure=19_900.0,
+        portfolio_exposure=19_900.0,
+        daily_pnl=0.0,
+        drawdown=0.0,
+        leverage=1.0,
+        correlated_exposure=0.0,
+    )
+    provider.update_market_state(
+        symbol="ETHUSDT.BINANCE",
+        spread_bps=5.0,
+        realized_volatility=0.05,
+        observed_at=999.0,
+    )
+    provider.update_reconciliation(ok=True, observed_at=999.0)
+    provider.update_venue_state(
+        venue="BINANCE",
+        healthy=True,
+        api_error_rate=0.0,
+        api_latency_ms=20.0,
+    )
+    runtime = RiskRuntime(
+        RiskLimits(
+            max_order_notional=10_000.0,
+            max_symbol_exposure=20_000.0,
+            max_portfolio_exposure=50_000.0,
+            max_daily_loss=2_000.0,
+            max_drawdown=0.25,
+            max_orders_per_minute=30,
+            max_leverage=4.0,
+            max_correlated_exposure=25_000.0,
+            max_spread_bps=30.0,
+            max_realized_volatility=0.10,
+            max_api_error_rate=0.10,
+            max_api_latency_ms=1_500.0,
+            max_reconciliation_age_seconds=60.0,
+        ),
+        state_provider=provider,
+    )
+
+    class VenueId:
+        value = "BINANCE"
+
+    class InstrumentId:
+        value = "ETHUSDT.BINANCE"
+        venue = VenueId()
+
+    class Order:
+        instrument_id = InstrumentId()
+        quantity = 0.10
+        side = "BUY"
+        order_type = "MARKET"
+
+    class OrderSink:
+        def __init__(self) -> None:
+            self.submitted = []
+
+        def submit_order(self, order, *args, **kwargs):
+            self.submitted.append(order)
+            return "submitted"
+
+    class RiskHarness(NautilusRiskMixin, OrderSink):
+        def __init__(self) -> None:
+            OrderSink.__init__(self)
+            self._configure_risk_runtime("risk-hook-owned-state", runtime)
+
+        def _risk_reference_price(self, instrument_id) -> float:
+            return 2_100.0
+
+    harness = RiskHarness()
+    result = harness.submit_order(Order())
+
+    assert result is None
+    assert harness.submitted == []
+    assert runtime.decisions[-1].action is RiskAction.BLOCK_ORDER
+    assert "order risk" in runtime.decisions[-1].reason

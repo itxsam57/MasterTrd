@@ -7,7 +7,7 @@ import hashlib
 import json
 from math import isfinite
 import time
-from typing import Callable
+from typing import Callable, Protocol
 
 from .risk import RiskAction, RiskLimits, RiskSnapshot, evaluate_risk
 
@@ -63,6 +63,10 @@ class OrderIntent:
         return hashlib.sha256(payload).hexdigest()
 
 
+class RiskStateSource(Protocol):
+    def snapshot(self, intent: OrderIntent, reference_price: float) -> RiskSnapshot: ...
+
+
 @dataclass(frozen=True, slots=True)
 class RiskDecision:
     action: RiskAction
@@ -91,9 +95,11 @@ class RiskRuntime:
         limits: RiskLimits,
         *,
         monotonic_clock: Callable[[], float] = time.monotonic,
+        state_provider: RiskStateSource | None = None,
     ) -> None:
         self.limits = limits
         self._clock = monotonic_clock
+        self.state_provider = state_provider
         self.decisions: list[RiskDecision] = []
         self._last_allowed: dict[str, float] = {}
         self._allowed_order_times: deque[float] = deque()
@@ -119,6 +125,54 @@ class RiskRuntime:
     def accepted_order_fingerprints(self) -> tuple[str, ...]:
         return tuple(decision.fingerprint for decision in self.accepted_decisions)
 
+    def snapshot_for_order(self, intent: OrderIntent, reference_price: float) -> RiskSnapshot:
+        if self.state_provider is not None:
+            return self.state_provider.snapshot(intent, reference_price)
+
+        price = float(reference_price)
+        valid_price = isfinite(price) and price > 0.0
+        return RiskSnapshot(
+            order_notional=abs(float(intent.quantity) * price) if valid_price else 0.0,
+            symbol_exposure=0.0,
+            portfolio_exposure=0.0,
+            daily_pnl=0.0,
+            drawdown=0.0,
+            orders_last_minute=0,
+            data_stale=True,
+            reconciliation_ok=False,
+            emergency_stop=True,
+            leverage=0.0,
+            correlated_exposure=0.0,
+            spread_bps=0.0,
+            realized_volatility=0.0,
+            venue_healthy=False,
+            api_error_rate=1.0,
+            api_latency_ms=float("inf"),
+            reconciliation_age_seconds=float("inf"),
+        )
+
+    def update_market_state(
+        self,
+        *,
+        symbol: str,
+        spread_bps: float,
+        realized_volatility: float,
+        observed_at: float,
+    ) -> None:
+        updater = getattr(self.state_provider, "update_market_state", None)
+        if updater is not None:
+            updater(
+                symbol=symbol,
+                spread_bps=spread_bps,
+                realized_volatility=realized_volatility,
+                observed_at=observed_at,
+            )
+
+    def update_reconciliation_state(self, *, ok: bool, observed_at: float) -> None:
+        updater = getattr(self.state_provider, "update_reconciliation", None)
+        if updater is not None:
+            updater(ok=ok, observed_at=observed_at)
+
     def kill(self, scope: KillScope, reason: str, *, key: str | None = None) -> None:
         if not reason:
             raise ValueError("kill reason is required")
@@ -141,11 +195,20 @@ class RiskRuntime:
     ) -> None:
         if not venue:
             raise ValueError("venue is required")
-        self._venue_health[venue] = VenueHealth(
+        health = VenueHealth(
             healthy=bool(healthy),
             error_rate=float(error_rate),
             latency_ms=float(latency_ms),
         )
+        self._venue_health[venue] = health
+        updater = getattr(self.state_provider, "update_venue_state", None)
+        if updater is not None:
+            updater(
+                venue=venue,
+                healthy=health.healthy,
+                api_error_rate=health.error_rate,
+                api_latency_ms=health.latency_ms,
+            )
 
     def update_correlated_exposure(self, *, portfolio_id: str, exposure: float) -> None:
         numeric = float(exposure)

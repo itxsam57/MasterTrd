@@ -4,6 +4,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Mapping
 
 from .genome import StrategyGenome
+from .product_contracts import validate_product_compatibility
 from .risk_runtime import RiskRuntime
 from .strategy_families import family_spec
 
@@ -96,6 +97,52 @@ def _compile_ema_baseline(
     )
 
 
+def compile_hft_genome_to_nautilus(
+    genome: StrategyGenome,
+    *,
+    instruments: Mapping[str, object],
+    trade_size_override: str | None = None,
+    trade_size: str | None = None,
+    risk_runtime: RiskRuntime | None = None,
+):
+    """Compile an HFT family onto its dedicated Nautilus execution boundary."""
+    if trade_size_override is not None and trade_size is not None:
+        raise ValueError("use only one of trade_size_override or trade_size")
+
+    spec = family_spec(genome.family)
+    if not spec.requires_hft_validation:
+        raise ValueError(f"{genome.family} is not an HFT specialist family")
+    if risk_runtime is None:
+        raise ValueError("risk_runtime is required for HFT Nautilus strategy compilation")
+    if spec.min_data_level not in {"TICK", "L2"}:
+        raise ValueError(f"unsupported HFT data level: {spec.min_data_level}")
+    if spec.min_data_level not in genome.data_requirements:
+        raise ValueError(
+            f"{genome.family} requires {spec.min_data_level} market data for execution",
+        )
+
+    validate_product_compatibility(genome, instruments)
+    effective_trade_size = _trade_size(
+        genome,
+        trade_size_override if trade_size_override is not None else trade_size,
+    )
+
+    from .hft_strategy import GeneratedHftStrategy, GeneratedHftStrategyConfig
+
+    config = GeneratedHftStrategyConfig(
+        instrument_ids=tuple(instruments[key].id for key in genome.instruments),
+        trade_size=effective_trade_size,
+        family=genome.family,
+        genome_hash=genome.genome_hash,
+        data_level=spec.min_data_level,
+    )
+    return GeneratedHftStrategy(
+        config=config,
+        genome=genome,
+        risk_runtime=risk_runtime,
+    )
+
+
 def compile_genome_to_nautilus(
     genome: StrategyGenome,
     *,
@@ -116,14 +163,20 @@ def compile_genome_to_nautilus(
     if risk_runtime is None:
         raise ValueError("risk_runtime is required for Nautilus strategy compilation")
 
+    if genome.family in _MULTI_LEG_FAMILIES:
+        if instrument_map is None:
+            raise ValueError("multi-leg compilation requires instrument_map")
+        compatibility_instruments: Mapping[str, object] = instrument_map
+    else:
+        compatibility_instruments = {instrument.id.value: instrument}
+    validate_product_compatibility(genome, compatibility_instruments)
+
     effective_trade_size = _trade_size(
         genome,
         trade_size_override if trade_size_override is not None else trade_size,
     )
 
     if genome.family == "trend":
-        if tuple(genome.instruments) != (instrument.id.value,):
-            raise ValueError("genome instrument must exactly match the Nautilus instrument")
         return _compile_ema_baseline(
             genome,
             instrument=instrument,
@@ -132,13 +185,7 @@ def compile_genome_to_nautilus(
         )
 
     if genome.family in _MULTI_LEG_FAMILIES:
-        if len(genome.instruments) < 2:
-            raise ValueError(f"{genome.family} requires at least two instruments")
-        if instrument_map is None:
-            raise ValueError("multi-leg compilation requires instrument_map")
-        missing = [key for key in genome.instruments if key not in instrument_map]
-        if missing:
-            raise ValueError(f"instrument_map missing: {', '.join(missing)}")
+        assert instrument_map is not None
 
         from .nautilus_multileg_strategy import (
             GeneratedMultiLegStrategy,
@@ -159,12 +206,7 @@ def compile_genome_to_nautilus(
             risk_runtime=risk_runtime,
         )
 
-    if tuple(genome.instruments) != (instrument.id.value,):
-        raise ValueError("genome instrument must exactly match the Nautilus instrument")
-
     if genome.family == "options":
-        if genome.filters.get("defined_risk_only") is not True:
-            raise ValueError("options compilation requires defined_risk_only")
         from .nautilus_options_strategy import GeneratedOptionsStrategy, GeneratedOptionsStrategyConfig
 
         config = GeneratedOptionsStrategyConfig(

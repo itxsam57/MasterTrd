@@ -1,11 +1,11 @@
 # MasterTrd Acceptance Report
 
-This is the **checked-in provenance snapshot** of the latest fully verified implementation baseline. A file committed to git cannot truthfully contain the SHA of the commit that contains itself, so the **exact-head workflow artifact** produced by `Completion Acceptance` remains canonical for the current branch head. This snapshot records the hardened implementation baseline from source commit `a76cdf85b4c1fadfd97d4ddec2267b4775f6bf1e` and acceptance run `33387500743`.
+This is a **checked-in provenance snapshot** of a verified implementation baseline. A file committed to git cannot truthfully contain the SHA of the commit that contains itself, so the **exact-head workflow artifact** produced by `Completion Acceptance` remains canonical for the current branch head. This snapshot records the hardened implementation baseline from source commit `a76cdf85b4c1fadfd97d4ddec2267b4775f6bf1e` and acceptance run `33387500743`.
 
 - Source commit SHA: `a76cdf85b4c1fadfd97d4ddec2267b4775f6bf1e`
 - Lock SHA-256: `ab8f78f5f42cec2fdd92fd0e0c94836ad37204f9e668bb47a7d718b7a4ecc9b7`
 - Acceptance artifact digest: `sha256:00d3d6e033002dfca4974952a66db7a5217cb78233077e111f68f11a57406298`
-- Implementation status: `COMPLETE`
+- Implementation status: `PROCESS_READY`
 - LIVE eligible: `false`
 - Promotion Governor approved: `false`
 - Cumulative tests: `332 passed`
@@ -33,8 +33,8 @@ This is the **checked-in provenance snapshot** of the latest fully verified impl
 - TESTNET execution remains inside the authoritative NautilusTrader engine; no parallel direct-REST execution path was introduced.
 - Binance instrument loading is now targeted through Nautilus `InstrumentProviderConfig(load_ids=...)`, avoiding an empty instrument cache while keeping `load_all=false`.
 - The smoke probe creates one bounded Binance Spot TESTNET post-only BUY resting away from the top of book, sizes it against the venue minimum-notional/step/minimum-quantity rules, requires venue acceptance, and cancels outstanding orders during shutdown.
-- The manual `Testnet Smoke` workflow now invokes the real production runner and uploads `artifacts/testnet_smoke.json` as exact-SHA evidence.
-- The workflow continues to refuse non-TESTNET runtime, missing credentials, and any credential marked withdrawal-capable.
+- The manual `Testnet Smoke` workflow invokes the real production runner and uploads the exact-SHA smoke record plus `artifacts/testnet_candidate_bundle.json`, which binds risk, reconciliation, kill-switch, and smoke evidence to the dispatched candidate identity.
+- The workflow refuses non-TESTNET runtime and any credential marked withdrawal-capable. Missing credentials are preserved as `CREDENTIALS_UNAVAILABLE` / `BLOCKED_OWNER_INPUT` evidence and never converted into PASS.
 - Regression coverage now prevents the workflow from silently reverting to credential-only preflight.
 
 ## Existing execution-risk hardening retained
@@ -79,6 +79,6 @@ This is the **checked-in provenance snapshot** of the latest fully verified impl
 
 ## Safety conclusion
 
-LIVE remains disabled by default. Implementation completion does not activate LIVE trading. The code-side TESTNET execution gap is closed; a real TESTNET venue receipt, coherent live-evidence bundle, Promotion Governor approval, and deliberate owner-controlled LIVE configuration are still required before any LIVE activation.
+LIVE remains disabled by default. Process readiness does not activate LIVE trading. The code-side TESTNET execution gap is closed; a real TESTNET venue receipt, coherent live-evidence bundle, Promotion Governor approval, and deliberate owner-controlled LIVE configuration are still required before any LIVE activation.
 
 For the newest commit, use the `mastertrd-acceptance-<SHA>` artifact from the `Completion Acceptance` workflow. That generated artifact is the exact-head source of truth; this checked-in snapshot is provenance for the verified implementation baseline above.

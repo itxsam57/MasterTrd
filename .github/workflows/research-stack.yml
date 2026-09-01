@@ -4,18 +4,26 @@ on:
   push:
     paths:
       - 'src/mastertrd/research/**'
+      - 'src/mastertrd/research_job.py'
       - 'src/mastertrd/memory_duckdb.py'
       - 'tests/integration/**'
+      - 'tests/test_research_job.py'
+      - 'tests/test_workflow_policy.py'
       - 'pyproject.toml'
       - 'uv.lock'
+      - '.github/workflows/autonomous-research.yml'
       - '.github/workflows/research-stack.yml'
   pull_request:
     paths:
       - 'src/mastertrd/research/**'
+      - 'src/mastertrd/research_job.py'
       - 'src/mastertrd/memory_duckdb.py'
       - 'tests/integration/**'
+      - 'tests/test_research_job.py'
+      - 'tests/test_workflow_policy.py'
       - 'pyproject.toml'
       - 'uv.lock'
+      - '.github/workflows/autonomous-research.yml'
       - '.github/workflows/research-stack.yml'
   workflow_dispatch:
 
@@ -23,6 +31,8 @@ permissions:
   contents: read
 
 jobs:
+  # Task 8 owns the scheduled public-data entrypoint in this integration gate;
+  # shared-core coverage stays focused without lowering the 90% threshold.
   integrated-research:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -40,6 +50,8 @@ jobs:
       - name: Run research integration tests
         run: |
           uv run pytest -q \
+            tests/test_research_job.py \
+            tests/test_workflow_policy.py \
             tests/integration/test_research_stack.py \
             tests/integration/test_advanced_research.py \
             tests/integration/test_duckdb_memory.py \

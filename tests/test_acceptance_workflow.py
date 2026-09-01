@@ -7,6 +7,14 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "acceptance.yml"
+SECURITY_WORKFLOW = ROOT / ".github" / "workflows" / "security.yml"
+
+
+def _assert_fail_closed_credential_grep(text: str) -> None:
+    assert "git grep -nEi -e " in text
+    assert "grep_status=$?" in text
+    assert '"$grep_status" -eq 0' in text
+    assert '"$grep_status" -ne 1' in text
 
 
 def test_acceptance_workflow_earns_receipts_and_writes_full_exact_head_report() -> None:
@@ -25,16 +33,45 @@ def test_acceptance_workflow_earns_receipts_and_writes_full_exact_head_report() 
     assert "MASTERTRD_ACCEPTANCE_KILL_SWITCH_TEST=PASS" in upper
     assert "MASTERTRD_ACCEPTANCE_TESTNET_SMOKE: BLOCKED_OWNER_INPUT" in upper
 
+    for receipt in (
+        "MASTERTRD_CAPABILITY_FAMILY_COVERAGE=PASS",
+        "MASTERTRD_CAPABILITY_EXECUTABLE_STRATEGY_SEMANTICS=PASS",
+        "MASTERTRD_CAPABILITY_MULTILEG_OPTIONS_EXECUTION=PASS",
+        "MASTERTRD_CAPABILITY_HFT_EXECUTION=PASS",
+        "MASTERTRD_CAPABILITY_RISK_STATE_OWNERSHIP=PASS",
+        "MASTERTRD_CAPABILITY_PERSISTENT_RUNTIME=PASS",
+        "MASTERTRD_CAPABILITY_FORWARD_PAPER_LIFECYCLE=PASS",
+        "MASTERTRD_CAPABILITY_SPECIALIST_RESEARCH_BRAIN=PASS",
+        "MASTERTRD_CAPABILITY_CANDIDATE_BOUND_TESTNET_INTERFACE=PASS",
+        "MASTERTRD_CAPABILITY_SECURITY=PASS",
+        "MASTERTRD_CAPABILITY_REPRODUCIBILITY=PASS",
+        "MASTERTRD_CAPABILITY_DEPLOYMENT_ARTIFACTS=PASS",
+    ):
+        assert receipt in upper
+
     assert "PIP-AUDIT" in upper
     assert "DETECT-SECRETS" in upper
     assert "EXCLUDE-FILES" in upper
     assert ".VENV" in upper
+    _assert_fail_closed_credential_grep(text)
     assert "GIT DIFF --EXIT-CODE" in upper
     assert "GIT REV-PARSE HEAD" in upper
     assert "GITHUB_SHA" in upper
     assert "ARTIFACTS/ACCEPTANCE_REPORT.MD" in upper
     assert "ARTIFACTS/ACCEPTANCE.JSON" in upper
+    assert "--FULL-REPORT --WRITE ARTIFACTS/ACCEPTANCE.JSON" in upper
+    assert "MASTERTRD.ACCEPTANCE . --WRITE ARTIFACTS/ACCEPTANCE_REPORT.MD || TRUE" not in upper
+    assert "MASTERTRD.ACCEPTANCE . --FULL-REPORT --WRITE ARTIFACTS/ACCEPTANCE.JSON || TRUE" not in upper
+    assert ".github/workflows/security.yml" in text
 
     assert "LIVE_TRADING_ENABLED=TRUE" not in upper
     assert "MASTERTRD_MODE=LIVE" not in upper
     assert "BINANCE_LIVE" not in upper
+
+
+def test_public_repo_security_workflow_uses_fail_closed_credential_grep() -> None:
+    text = SECURITY_WORKFLOW.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(text)
+    assert isinstance(workflow, dict)
+    assert workflow.get("permissions") == {"contents": "read"}
+    _assert_fail_closed_credential_grep(text)

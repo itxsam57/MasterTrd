@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import asdict, dataclass, field, replace
 import hashlib
 import json
@@ -20,12 +21,17 @@ from .nautilus_data import market_bars_to_nautilus
 from .nautilus_evaluation import run_binance_spot_evaluation
 from .paper_cycle import start_generated_paper_cycle
 from .research.evolve import evolve_genomes
-from .research.generator import generate_candidate
 from .research.optimize import optimize_genome
 from .research.regimes import discover_regimes
 from .research.screen import screen_genome
+from .research_candidate_generation import (
+    ResearchCandidateBatch,
+    ResearchGenerationBlocker,
+    generate_research_candidates,
+)
 from .robustness import RobustnessPolicy
 from .robustness_cycle import run_generated_robustness_cycle
+from .specialist_orchestrator import SpecialistInputs, run_specialist_gate
 from .validation import ValidationEvidence, extra_evidence_for_target, nautilus_backtest_evidence
 
 
@@ -145,6 +151,7 @@ class ResearchDataset:
     dataset_hash: str
     bars_by_instrument: Mapping[str, Sequence[MarketBar]]
     nautilus_instruments: Mapping[str, Any]
+    available_data_levels: Mapping[str, Collection[object]] | None = None
 
     def __post_init__(self) -> None:
         if not self.dataset_hash:
@@ -164,6 +171,22 @@ class ResearchDataset:
                 if previous is not None and bar.timestamp <= previous:
                     raise ValueError(f"market bars are not strictly ordered for {key}")
                 previous = bar.timestamp
+
+        if self.available_data_levels is None:
+            normalized_levels = {
+                key: frozenset({"BAR"})
+                for key in self.bars_by_instrument
+            }
+        else:
+            normalized_levels: dict[str, frozenset[str]] = {}
+            for key, values in self.available_data_levels.items():
+                if key not in self.nautilus_instruments:
+                    raise ValueError(f"missing Nautilus instrument for data levels {key}")
+                normalized_levels[key] = frozenset(
+                    str(getattr(value, "value", value)).upper()
+                    for value in values
+                )
+        object.__setattr__(self, "available_data_levels", normalized_levels)
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +226,21 @@ def _genome_from_payload(payload: Mapping[str, Any]) -> StrategyGenome:
         risk=dict(payload.get("risk", {})),
         data_requirements=tuple(str(item) for item in payload.get("data_requirements", ("BAR",))),
         allow_short=bool(payload.get("allow_short", False)),
+    )
+
+
+def _validation_evidence_from_payload(payload: Mapping[str, Any]) -> ValidationEvidence:
+    return ValidationEvidence(
+        strategy_id=str(payload["strategy_id"]),
+        genome_hash=str(payload["genome_hash"]),
+        evidence_type=str(payload["evidence_type"]),
+        dataset_hash=str(payload["dataset_hash"]),
+        code_hash=str(payload["code_hash"]),
+        engine=str(payload["engine"]),
+        engine_version=str(payload["engine_version"]),
+        passed=bool(payload["passed"]),
+        metrics={str(key): float(value) for key, value in dict(payload.get("metrics", {})).items()},
+        supporting_only=bool(payload.get("supporting_only", False)),
     )
 
 
@@ -259,6 +297,53 @@ def _screen_evidence(
         },
     )
 
+
+def evaluate_research_specialist_candidate(
+    candidate: StrategyGenome,
+    *,
+    score: float,
+    inputs: SpecialistInputs,
+) -> dict[str, Any]:
+    """Run the real specialist gate and persist its candidate-bound evidence payload."""
+    result = run_specialist_gate(candidate, inputs)
+    return {
+        "genome": _genome_payload(candidate),
+        "passed": bool(result.passed),
+        "score": float(score),
+        "reason": result.reason,
+        "evidence": [asdict(record) for record in result.evidence],
+        "missing_evidence": sorted(result.missing_evidence),
+        "failed_evidence": sorted(result.failed_evidence),
+    }
+
+
+
+def run_research_specialist_stage(
+    validated_outcomes: Sequence[Mapping[str, Any]],
+    *,
+    specialist_inputs_by_genome_hash: Mapping[str, SpecialistInputs],
+) -> dict[str, Any]:
+    """Route validated candidates through their candidate-bound specialist inputs."""
+    outcomes: list[dict[str, Any]] = []
+    for item in validated_outcomes:
+        if not bool(item["passed"]):
+            outcomes.append(dict(item))
+            continue
+        candidate = _genome_from_payload(item["genome"])
+        inputs = specialist_inputs_by_genome_hash.get(
+            candidate.genome_hash,
+            SpecialistInputs(),
+        )
+        outcome = evaluate_research_specialist_candidate(
+            candidate,
+            score=float(item["score"]),
+            inputs=inputs,
+        )
+        genome_payload = dict(outcome["genome"])
+        genome_payload["genome_hash"] = candidate.genome_hash
+        outcome["genome"] = genome_payload
+        outcomes.append(outcome)
+    return {"outcomes": outcomes}
 
 def _parameter_space(genome: StrategyGenome) -> dict[str, object]:
     space: dict[str, object] = {}
@@ -351,6 +436,7 @@ def run_research_brain(
     *,
     code_hash: str,
     lock_hash: str,
+    specialist_inputs_by_genome_hash: Mapping[str, SpecialistInputs] | None = None,
 ) -> ResearchBrainReport:
     """Run the approved autonomous research cycle without bypassing the Governor.
 
@@ -360,6 +446,7 @@ def run_research_brain(
     """
     if not code_hash or not lock_hash:
         raise ValueError("code_hash and lock_hash are required")
+    specialist_inputs_by_genome_hash = dict(specialist_inputs_by_genome_hash or {})
     run_id = _run_id(config, dataset, code_hash=code_hash, lock_hash=lock_hash)
     completed = memory.get_stage(run_id, RESEARCH_STAGES[-1])
     if completed is not None:
@@ -405,13 +492,11 @@ def run_research_brain(
     _stage(memory, run_id, "regime_discovery", regimes_stage)
 
     def generate_stage() -> Mapping[str, Any]:
-        genomes = [
-            generate_candidate(family=family, instruments=(instrument,), seed=seed)
-            for family in config.families
-            for instrument in config.instruments
-            for seed in range(config.seed_start, config.seed_stop)
-        ]
-        return {"genomes": [_genome_payload(genome) for genome in genomes]}
+        batch = generate_research_candidates(config, dataset)
+        return {
+            "genomes": [_genome_payload(genome) for genome in batch.candidates],
+            "blockers": [asdict(blocker) for blocker in batch.blockers],
+        }
 
     generated_artifact, _ = _stage(memory, run_id, "generation_mutation", generate_stage)
     generated = tuple(_genome_from_payload(item) for item in generated_artifact["genomes"])
@@ -603,32 +688,10 @@ def run_research_brain(
     validation_artifact, _ = _stage(memory, run_id, "nautilus_validation", validation_stage)
 
     def specialist_stage() -> Mapping[str, Any]:
-        outcomes = []
-        for item in validation_artifact["outcomes"]:
-            genome = _genome_from_payload(item["genome"])
-            if not bool(item["passed"]):
-                outcomes.append(dict(item))
-                continue
-            extra = extra_evidence_for_target(genome, StrategyState.ROBUST)
-            if extra:
-                outcomes.append(
-                    {
-                        "genome": _genome_payload(genome),
-                        "passed": False,
-                        "score": float(item["score"]),
-                        "reason": "specialist_evidence_required:" + ",".join(sorted(extra)),
-                    }
-                )
-            else:
-                outcomes.append(
-                    {
-                        "genome": _genome_payload(genome),
-                        "passed": True,
-                        "score": float(item["score"]),
-                        "reason": "standard_execution_path",
-                    }
-                )
-        return {"outcomes": outcomes}
+        return run_research_specialist_stage(
+            validation_artifact["outcomes"],
+            specialist_inputs_by_genome_hash=specialist_inputs_by_genome_hash,
+        )
 
     specialist_artifact, _ = _stage(memory, run_id, "specialist_tests", specialist_stage)
 
@@ -663,6 +726,10 @@ def run_research_brain(
                 )
                 continue
             try:
+                specialist_evidence = tuple(
+                    _validation_evidence_from_payload(record)
+                    for record in item.get("evidence", ())
+                )
                 bars = _instrument_bars(dataset, key)
                 research, hidden, manifest = chronological_holdout(
                     bars,
@@ -684,17 +751,17 @@ def run_research_brain(
 
                 robust = run_generated_robustness_cycle(
                     candidate=genome,
-                    instrument=instrument,
-                    data=converted[0],
+                    instruments={key: instrument},
+                    data_by_instrument={key: converted[0]},
                     dataset_hash=_slice_hash(run_id, key, "robust-base", windows[0]),
-                    fold_datasets=((_slice_hash(run_id, key, "fold", windows[1]), converted[1]),),
-                    cpcv_datasets=((_slice_hash(run_id, key, "cpcv", windows[2]), converted[2]),),
-                    monte_carlo_datasets=((_slice_hash(run_id, key, "mc", windows[3]), converted[3]),),
+                    fold_datasets=((_slice_hash(run_id, key, "fold", windows[1]), {key: converted[1]}),),
+                    cpcv_datasets=((_slice_hash(run_id, key, "cpcv", windows[2]), {key: converted[2]}),),
+                    monte_carlo_datasets=((_slice_hash(run_id, key, "mc", windows[3]), {key: converted[3]}),),
                     asset_transfer_datasets=((
                         transfer_genome,
-                        transfer_instrument,
+                        {transfer_key: transfer_instrument},
                         _slice_hash(run_id, transfer_key, "transfer", transfer_bars),
-                        transfer_events,
+                        {transfer_key: transfer_events},
                     ),),
                     code_hash=code_hash,
                     trade_size=config.trade_size,
@@ -704,6 +771,7 @@ def run_research_brain(
                     stressed_fees=config.stressed_fees,
                     stressed_slippage=config.stressed_slippage,
                     starting_balances=config.starting_balances,
+                    specialist_evidence=specialist_evidence,
                 )
                 if not robust.promotion.allowed:
                     raise RuntimeError("robustness promotion denied:" + ",".join(sorted(robust.promotion.missing_evidence)))
@@ -711,13 +779,13 @@ def run_research_brain(
                 hidden_events = market_bars_to_nautilus(hidden, instrument=instrument)
                 hidden_cycle = run_generated_hidden_cycle(
                     candidate=genome,
-                    instrument=instrument,
-                    hidden_data=hidden_events,
+                    instruments={key: instrument},
+                    hidden_data_by_instrument={key: hidden_events},
                     manifest=manifest,
                     regime_datasets=(
-                        (_slice_hash(run_id, key, "regime-a", windows[1]), converted[1]),
-                        (_slice_hash(run_id, key, "regime-b", windows[2]), converted[2]),
-                        (_slice_hash(run_id, key, "regime-c", windows[3]), converted[3]),
+                        (_slice_hash(run_id, key, "regime-a", windows[1]), {key: converted[1]}),
+                        (_slice_hash(run_id, key, "regime-b", windows[2]), {key: converted[2]}),
+                        (_slice_hash(run_id, key, "regime-c", windows[3]), {key: converted[3]}),
                     ),
                     code_hash=code_hash,
                     trade_size=config.trade_size,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from importlib.metadata import version
 from math import isfinite, prod
 from statistics import mean, stdev
@@ -7,8 +8,8 @@ from typing import Iterable, Sequence
 
 from .contracts import EvaluationResult
 from .genome import StrategyGenome
-from .nautilus_backtest import _build_binance_spot_engine
 from .nautilus_strategy import compile_genome_to_nautilus
+from .product_contracts import validate_product_compatibility
 from .risk_profiles import build_research_backtest_risk_runtime
 from .risk_runtime import RiskRuntime
 
@@ -54,11 +55,95 @@ def _return_metrics(values: Iterable[float]) -> tuple[float, float, float, float
     )
 
 
-def run_binance_spot_evaluation(
+def _event_instrument_id(event: object) -> str:
+    instrument_id = getattr(event, "instrument_id", None)
+    if instrument_id is None:
+        bar_type = getattr(event, "bar_type", None)
+        instrument_id = getattr(bar_type, "instrument_id", None)
+    value = getattr(instrument_id, "value", None)
+    if not isinstance(value, str) or not value:
+        raise ValueError("historical event is missing a concrete Nautilus instrument id")
+    return value
+
+
+def _normalize_evaluation_inputs(
+    genome: StrategyGenome,
+    instruments: Mapping[str, object],
+    data_by_instrument: Mapping[str, Iterable[object]],
+) -> tuple[dict[str, object], dict[str, list[object]]]:
+    validate_product_compatibility(genome, instruments)
+    if not isinstance(data_by_instrument, Mapping):
+        raise ValueError("data_by_instrument mapping is required")
+
+    expected = tuple(genome.instruments)
+    expected_set = set(expected)
+    supplied_set = set(data_by_instrument)
+    missing = [instrument_id for instrument_id in expected if instrument_id not in supplied_set]
+    if missing:
+        raise ValueError(f"missing historical data for: {', '.join(missing)}")
+    extras = sorted(supplied_set - expected_set)
+    if extras:
+        raise ValueError(f"unexpected historical data for: {', '.join(extras)}")
+
+    ordered_instruments = {instrument_id: instruments[instrument_id] for instrument_id in expected}
+    normalized_data: dict[str, list[object]] = {}
+    for instrument_id in expected:
+        events = list(data_by_instrument[instrument_id])
+        if not events:
+            raise ValueError(f"historical data is required for {instrument_id}")
+        for event in events:
+            observed = _event_instrument_id(event)
+            if observed != instrument_id:
+                raise ValueError(
+                    f"historical data instrument mismatch for {instrument_id}: {observed}",
+                )
+        normalized_data[instrument_id] = events
+    return ordered_instruments, normalized_data
+
+
+def _build_evaluation_engine(
+    *,
+    instruments: Mapping[str, object],
+    starting_balances: Sequence[str],
+):
+    if not starting_balances:
+        raise ValueError("at least one starting balance is required")
+
+    venue_names = {instrument.id.venue.value for instrument in instruments.values()}
+    if len(venue_names) != 1:
+        raise ValueError(
+            "generalized bar evaluation requires one venue; cross-venue candidates require the specialist HFT path",
+        )
+    venue_name = next(iter(venue_names))
+
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig
+    from nautilus_trader.model.enums import AccountType, OmsType
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.instruments import CurrencyPair
+    from nautilus_trader.model.objects import Money
+
+    all_spot = all(isinstance(instrument, CurrencyPair) for instrument in instruments.values())
+    account_type = AccountType.CASH if all_spot else AccountType.MARGIN
+
+    engine = BacktestEngine(config=BacktestEngineConfig())
+    engine.add_venue(
+        venue=Venue(venue_name),
+        oms_type=OmsType.NETTING,
+        account_type=account_type,
+        base_currency=None,
+        starting_balances=[Money.from_str(value) for value in starting_balances],
+    )
+    for instrument in instruments.values():
+        engine.add_instrument(instrument)
+    return engine
+
+
+def run_nautilus_evaluation(
     *,
     genome: StrategyGenome,
-    instrument,
-    data: Iterable[object],
+    instruments: Mapping[str, object],
+    data_by_instrument: Mapping[str, Iterable[object]],
     dataset_hash: str,
     code_hash: str,
     fees: float = 0.0,
@@ -74,36 +159,33 @@ def run_binance_spot_evaluation(
     if fees < 0.0 or slippage < 0.0:
         raise ValueError("fees and slippage cannot be negative")
 
-    events = list(data)
-    if not events:
-        raise ValueError("historical data is required")
+    ordered_instruments, normalized_data = _normalize_evaluation_inputs(
+        genome,
+        instruments,
+        data_by_instrument,
+    )
 
-    # This function is an explicitly historical backtest boundary. It may use the
-    # named simulation profile when callers do not request a stricter research
-    # runtime; the compiler itself never creates or guesses a risk dependency.
     evaluation_risk = risk_runtime or build_research_backtest_risk_runtime()
+    primary = ordered_instruments[genome.instruments[0]]
     strategy = compile_genome_to_nautilus(
         genome,
-        instrument=instrument,
+        instrument=primary,
+        instrument_map=ordered_instruments if len(ordered_instruments) > 1 else None,
         trade_size_override=trade_size_override,
         risk_runtime=evaluation_risk,
     )
-    engine = _build_binance_spot_engine(
-        instrument=instrument,
+    engine = _build_evaluation_engine(
+        instruments=ordered_instruments,
         starting_balances=starting_balances,
     )
     try:
-        engine.add_data(events)
+        # Stable Nautilus low-level backtesting treats each add_data call as an
+        # independently ordered list stream and merges all streams chronologically.
+        for instrument_id in genome.instruments:
+            engine.add_data(normalized_data[instrument_id])
         engine.add_strategy(strategy)
         engine.run()
 
-        # Stable NautilusTrader 1.231 exposes completed position state through the
-        # cache, while BacktestResult does not expose the newer returns_series API.
-        # position.realized_return already contains Nautilus's native simulated
-        # instrument commissions. ``fees`` and ``slippage`` are additional,
-        # deterministic research-stress fractions applied per completed round trip;
-        # this makes robustness reruns materially harsher without pretending they
-        # changed the historical market path or the strategy's trade decisions.
         closed_positions = engine.cache.positions_closed()
         raw_returns = [float(position.realized_return) for position in closed_positions]
         stress_drag = float(fees) + float(slippage)
@@ -134,3 +216,32 @@ def run_binance_spot_evaluation(
         )
     finally:
         engine.dispose()
+
+
+def run_binance_spot_evaluation(
+    *,
+    genome: StrategyGenome,
+    instrument,
+    data: Iterable[object],
+    dataset_hash: str,
+    code_hash: str,
+    fees: float = 0.0,
+    slippage: float = 0.0,
+    starting_balances: Sequence[str] = ("100000 USDT",),
+    trade_size_override: str | None = None,
+    risk_runtime: RiskRuntime | None = None,
+) -> EvaluationResult:
+    """Backward-compatible single-instrument wrapper over the generalized evaluator."""
+    instrument_id = instrument.id.value
+    return run_nautilus_evaluation(
+        genome=genome,
+        instruments={instrument_id: instrument},
+        data_by_instrument={instrument_id: data},
+        dataset_hash=dataset_hash,
+        code_hash=code_hash,
+        fees=fees,
+        slippage=slippage,
+        starting_balances=starting_balances,
+        trade_size_override=trade_size_override,
+        risk_runtime=risk_runtime,
+    )

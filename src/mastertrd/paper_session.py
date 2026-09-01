@@ -10,6 +10,7 @@ from typing import Literal
 
 from .paper_evidence import PaperStartReceipt
 from .paper_forward import PaperForwardReport
+from .reconciliation import ExecutionState
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +37,10 @@ class PaperSessionJournal:
         self._started_ns = int(started_ns)
         self._events: list[_PaperSessionEvent] = []
         self._event_ids: set[str] = set()
+        self._execution_state: ExecutionState | None = None
+        self._execution_state_timestamp_ns: int | None = None
         self._finalized = False
+        self._final_report: PaperForwardReport | None = None
 
     @property
     def session_id(self) -> str:
@@ -56,9 +60,20 @@ class PaperSessionJournal:
 
     @property
     def latest_timestamp_ns(self) -> int:
-        if self._events:
-            return self._events[-1].timestamp_ns
-        return self._started_ns
+        latest = self._events[-1].timestamp_ns if self._events else self._started_ns
+        if self._execution_state_timestamp_ns is not None:
+            latest = max(latest, self._execution_state_timestamp_ns)
+        return latest
+
+    @property
+    def execution_state_checkpoint(self) -> ExecutionState | None:
+        """Return the last integrity-covered execution state recorded for restart recovery."""
+        return self._execution_state
+
+    @property
+    def finalized_report(self) -> PaperForwardReport | None:
+        """Return the immutable persisted final report, if this session is closed."""
+        return self._final_report
 
     def has_event(self, event_id: str) -> bool:
         return event_id in self._event_ids
@@ -89,14 +104,69 @@ class PaperSessionJournal:
     def record_reconciliation(self, check_id: str, *, ok: bool, timestamp_ns: int) -> None:
         self._append(_PaperSessionEvent("reconciliation", check_id, int(timestamp_ns), bool(ok)))
 
+    def record_execution_state(self, state: ExecutionState, *, timestamp_ns: int) -> None:
+        """Atomically checkpoint expected execution state for a future process restart."""
+        if self._finalized:
+            raise ValueError("paper session is already finalized")
+        if not isinstance(state, ExecutionState):
+            raise TypeError("state must be an ExecutionState")
+        timestamp = int(timestamp_ns)
+        if timestamp < self._started_ns:
+            raise ValueError("execution state cannot occur before session start")
+        if timestamp < self.latest_timestamp_ns:
+            raise ValueError("execution state checkpoints must be monotonic")
+        self._execution_state = state
+        self._execution_state_timestamp_ns = timestamp
+
+    def _execution_state_payload(self) -> dict[str, object] | None:
+        if self._execution_state is None:
+            return None
+        if self._execution_state_timestamp_ns is None:
+            raise RuntimeError("paper execution checkpoint timestamp is missing")
+        return {
+            "timestamp_ns": self._execution_state_timestamp_ns,
+            "account_id": self._execution_state.account_id,
+            "positions": {
+                key: str(value) for key, value in sorted(self._execution_state.positions.items())
+            },
+            "open_order_ids": sorted(self._execution_state.open_order_ids),
+            "balances": {
+                key: str(value) for key, value in sorted(self._execution_state.balances.items())
+            },
+        }
+
     def _persistence_payload(self) -> dict[str, object]:
         return {
             "receipt": asdict(self._receipt),
             "code_hash": self._code_hash,
             "started_ns": self._started_ns,
             "events": [asdict(event) for event in self._events],
+            "execution_state": self._execution_state_payload(),
             "finalized": self._finalized,
+            "final_report": None if self._final_report is None else asdict(self._final_report),
         }
+
+    @staticmethod
+    def _validate_restored_report(
+        report: PaperForwardReport,
+        *,
+        receipt: PaperStartReceipt,
+        code_hash: str,
+    ) -> None:
+        expected = (
+            (report.strategy_id, receipt.strategy_id, "strategy_id"),
+            (report.genome_hash, receipt.genome_hash, "genome_hash"),
+            (report.session_id, receipt.session_id, "session_id"),
+            (report.venue, receipt.venue, "venue"),
+            (report.engine, receipt.engine, "engine"),
+            (report.engine_version, receipt.engine_version, "engine_version"),
+            (report.code_hash, code_hash, "code_hash"),
+        )
+        for actual, required, field in expected:
+            if actual != required:
+                raise ValueError(f"paper session final report {field} mismatch")
+        if not report.provenance_verified or not report.session_event_hash:
+            raise ValueError("paper session final report provenance is invalid")
 
     @classmethod
     def _restore(cls, payload: dict[str, object]) -> "PaperSessionJournal":
@@ -108,7 +178,9 @@ class PaperSessionJournal:
             code_hash = str(payload["code_hash"])
             started_ns = int(payload["started_ns"])
             events = payload["events"]
+            execution_state_raw = payload.get("execution_state")
             finalized = bool(payload.get("finalized", False))
+            final_report_raw = payload.get("final_report")
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("paper session state is invalid") from exc
         if not isinstance(events, list):
@@ -137,7 +209,49 @@ class PaperSessionJournal:
                 journal.record_reconciliation(event_id, ok=value, timestamp_ns=timestamp_ns)
             else:
                 raise ValueError("paper session state is invalid")
-        journal._finalized = finalized
+
+        if execution_state_raw is not None:
+            if not isinstance(execution_state_raw, dict):
+                raise ValueError("paper session execution state is invalid")
+            try:
+                checkpoint_timestamp = int(execution_state_raw["timestamp_ns"])
+                account_id = str(execution_state_raw["account_id"])
+                positions = execution_state_raw["positions"]
+                open_order_ids = execution_state_raw["open_order_ids"]
+                balances = execution_state_raw["balances"]
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("paper session execution state is invalid") from exc
+            if (
+                checkpoint_timestamp < started_ns
+                or not isinstance(positions, dict)
+                or not isinstance(open_order_ids, list)
+                or not isinstance(balances, dict)
+            ):
+                raise ValueError("paper session execution state is invalid")
+            try:
+                restored_state = ExecutionState(
+                    account_id=account_id,
+                    positions=positions,
+                    open_order_ids=frozenset(str(value) for value in open_order_ids),
+                    balances=balances,
+                )
+            except (TypeError, ValueError) as exc:
+                raise ValueError("paper session execution state is invalid") from exc
+            journal._execution_state = restored_state
+            journal._execution_state_timestamp_ns = checkpoint_timestamp
+
+        if finalized:
+            if not isinstance(final_report_raw, dict):
+                raise ValueError("paper session finalized state is missing final report")
+            try:
+                final_report = PaperForwardReport(**final_report_raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("paper session final report is invalid") from exc
+            cls._validate_restored_report(final_report, receipt=receipt, code_hash=code_hash)
+            journal._final_report = final_report
+            journal._finalized = True
+        elif final_report_raw is not None:
+            raise ValueError("paper session non-finalized state cannot contain final report")
         return journal
 
     def finalize(self, *, ended_ns: int) -> PaperForwardReport:
@@ -146,7 +260,7 @@ class PaperSessionJournal:
         ended_ns = int(ended_ns)
         if ended_ns < self._started_ns:
             raise ValueError("ended_ns cannot be before session start")
-        if self._events and ended_ns < self._events[-1].timestamp_ns:
+        if ended_ns < self.latest_timestamp_ns:
             raise ValueError("ended_ns cannot be before the latest session event")
 
         trade_returns = [float(event.value) for event in self._events if event.kind == "closed_trade"]
@@ -175,13 +289,13 @@ class PaperSessionJournal:
                 }
                 for event in self._events
             ],
+            "execution_state": self._execution_state_payload(),
         }
         session_event_hash = hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
 
-        self._finalized = True
-        return PaperForwardReport(
+        report = PaperForwardReport(
             strategy_id=self._receipt.strategy_id,
             genome_hash=self._receipt.genome_hash,
             session_id=self._receipt.session_id,
@@ -199,6 +313,9 @@ class PaperSessionJournal:
             session_event_hash=session_event_hash,
             provenance_verified=True,
         )
+        self._final_report = report
+        self._finalized = True
+        return report
 
 
 class JsonPaperSessionStore:

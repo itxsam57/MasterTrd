@@ -1,0 +1,194 @@
+name: Consumer Release Smoke
+
+on:
+  push:
+    branches:
+      - main
+      - v2/plan-closure-20260831
+    paths:
+      - 'src/**'
+      - 'README.md'
+      - 'docs/**'
+      - '.env.example'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/consumer-release-smoke.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'README.md'
+      - 'docs/**'
+      - '.env.example'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/consumer-release-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  consumer-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install exactly as a fresh operator
+        run: |
+          python -m pip install --disable-pip-version-check 'uv==0.12.8'
+          uv lock --check
+          uv sync --locked --all-extras
+          uv pip check
+      - name: Exercise installed consumer and operator surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/consumer-release-smoke
+          report='artifacts/consumer-release-smoke/results.txt'
+          : > "$report"
+
+          record_failure() {
+            local name="$1"
+            local needle="$2"
+            shift 2
+            set +e
+            local output
+            output=$("$@" 2>&1)
+            local status=$?
+            set -e
+            printf '## %s\nexit=%s\n%s\n\n' "$name" "$status" "$output" >> "$report"
+            if [ "$status" -eq 0 ]; then
+              echo "$name unexpectedly succeeded" >&2
+              return 1
+            fi
+            if ! grep -Fq "$needle" <<<"$output"; then
+              echo "$name did not expose expected operator message: $needle" >&2
+              return 1
+            fi
+          }
+
+          uv run python - <<'PY' >> "$report"
+          import mastertrd
+          from mastertrd.runtime import RuntimeConfig
+          print('installed_import=PASS')
+          print('default_mode=' + RuntimeConfig.from_env({}).mode.value)
+          PY
+
+          record_failure \
+            'live-disabled-default' \
+            'LIVE mode requires LIVE_TRADING_ENABLED=true' \
+            env MASTERTRD_MODE=LIVE LIVE_TRADING_ENABLED=false uv run python -m mastertrd.live_node
+
+          record_failure \
+            'live-flag-outside-live' \
+            'LIVE_TRADING_ENABLED=true is invalid outside LIVE mode' \
+            env MASTERTRD_MODE=PAPER LIVE_TRADING_ENABLED=true uv run python -m mastertrd.live_node
+
+          record_failure \
+            'paper-missing-operator-inputs' \
+            'MASTERTRD_CANDIDATE_MANIFEST is required for persistent execution' \
+            env MASTERTRD_MODE=PAPER LIVE_TRADING_ENABLED=false uv run python -m mastertrd.live_node
+
+          record_failure \
+            'testnet-missing-operator-inputs' \
+            'MASTERTRD_CANDIDATE_MANIFEST is required for persistent execution' \
+            env MASTERTRD_MODE=TESTNET LIVE_TRADING_ENABLED=false uv run python -m mastertrd.live_node
+
+          record_failure \
+            'research-job-missing-code-identity' \
+            'GITHUB_SHA or MASTERTRD_CODE_HASH is required' \
+            env -u GITHUB_SHA -u MASTERTRD_CODE_HASH uv run python -m mastertrd.research_job
+
+          uv run python - <<'PY'
+          import json
+          from pathlib import Path
+          from mastertrd.research.generator import generate_candidate
+
+          root = Path('artifacts/consumer-release-smoke')
+          candidate = generate_candidate(
+              family='trend',
+              instruments=('BTCUSDT.BINANCE',),
+              seed=42,
+              trade_size='0.01000',
+          )
+          (root / 'candidate.json').write_text(
+              json.dumps(candidate.canonical_payload(), sort_keys=True),
+              encoding='utf-8',
+          )
+          interval_ms = {
+              '1m': 60_000,
+              '3m': 180_000,
+              '5m': 300_000,
+              '15m': 900_000,
+              '30m': 1_800_000,
+              '1h': 3_600_000,
+              '2h': 7_200_000,
+              '4h': 14_400_000,
+              '6h': 21_600_000,
+              '8h': 28_800_000,
+              '12h': 43_200_000,
+              '1d': 86_400_000,
+          }[candidate.timeframe]
+          with (root / 'feed.jsonl').open('w', encoding='utf-8') as handle:
+              for index in range(96):
+                  base = 60_000.0 + index * 25.0
+                  payload = {
+                      'event_id': f'consumer-bar-{index}',
+                      'venue': 'BINANCE',
+                      'instrument': 'BTCUSDT.BINANCE',
+                      'timeframe': candidate.timeframe,
+                      'timestamp_ms': (index + 1) * interval_ms,
+                      'open': base,
+                      'high': base + 30.0,
+                      'low': base - 20.0,
+                      'close': base + 10.0,
+                      'volume': 10.0,
+                      'spread_bps': 2.0,
+                      'realized_volatility': 0.01,
+                  }
+                  handle.write(json.dumps(payload, sort_keys=True) + '\n')
+          print('paper_candidate_timeframe=' + candidate.timeframe)
+          PY
+
+          set +e
+          paper_output=$(
+            env \
+              MASTERTRD_MODE=PAPER \
+              LIVE_TRADING_ENABLED=false \
+              MASTERTRD_CANDIDATE_MANIFEST="$PWD/artifacts/consumer-release-smoke/candidate.json" \
+              MASTERTRD_SESSION_STATE="$PWD/artifacts/consumer-release-smoke/paper-session.json" \
+              MASTERTRD_CODE_HASH="$GITHUB_SHA" \
+              MASTERTRD_PUBLIC_FEED_FIXTURE="$PWD/artifacts/consumer-release-smoke/feed.jsonl" \
+              MASTERTRD_PAPER_START_NS=1 \
+              uv run python -m mastertrd.live_node 2>&1
+          )
+          paper_status=$?
+          set -e
+          printf '## deterministic-paper-boot\nexit=%s\n%s\n\n' "$paper_status" "$paper_output" >> "$report"
+          if [ "$paper_status" -ne 0 ]; then
+            echo 'deterministic PAPER operator path failed' >&2
+            printf '%s\n' "$paper_output" >&2
+            exit 1
+          fi
+          test -s artifacts/consumer-release-smoke/paper-session.json
+          uv run python - <<'PY' >> "$report"
+          import json
+          from pathlib import Path
+          payload = json.loads(Path('artifacts/consumer-release-smoke/paper-session.json').read_text(encoding='utf-8'))
+          print('paper_session_persisted=PASS')
+          print('paper_session_top_level_keys=' + ','.join(sorted(payload)))
+          PY
+
+          echo 'consumer_smoke=PASS' >> "$report"
+          cat "$report"
+      - name: Upload black-box observations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: consumer-release-smoke-${{ github.sha }}
+          path: artifacts/consumer-release-smoke/results.txt
+          if-no-files-found: error
+          retention-days: 14

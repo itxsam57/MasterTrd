@@ -23,6 +23,12 @@ def test_hft_family_declares_non_bar_data_requirement():
     assert "L2" in genome.data_requirements
 
 
+def test_generated_scalping_exit_declares_bounded_timeout():
+    genome = generate_candidate(family="scalping", instruments=("BTCUSDT",), seed=9)
+    assert genome.exit["type"] == "ticks_or_timeout"
+    assert int(genome.exit["max_ticks"]) > 0
+
+
 def test_regular_swing_candidate_stays_bar_based():
     genome = generate_candidate(family="swing", instruments=("BTCUSDT",), seed=9)
     assert genome.data_requirements == ("BAR",)

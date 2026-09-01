@@ -22,9 +22,15 @@ class NautilusStrategyReplaySummary:
     fill_count: int
 
 
-def _build_binance_spot_engine(*, instrument, starting_balances: Sequence[str]):
-    if instrument is None:
-        raise ValueError("instrument is required")
+def _build_binance_spot_engine_for_instruments(
+    *,
+    instruments: Sequence[object],
+    starting_balances: Sequence[str],
+):
+    if not instruments:
+        raise ValueError("at least one instrument is required")
+    if any(instrument is None for instrument in instruments):
+        raise ValueError("instruments cannot contain None")
     if not starting_balances:
         raise ValueError("at least one starting balance is required")
 
@@ -42,8 +48,18 @@ def _build_binance_spot_engine(*, instrument, starting_balances: Sequence[str]):
         base_currency=None,
         starting_balances=[Money.from_str(value) for value in starting_balances],
     )
-    engine.add_instrument(instrument)
+    for instrument in instruments:
+        engine.add_instrument(instrument)
     return engine
+
+
+def _build_binance_spot_engine(*, instrument, starting_balances: Sequence[str]):
+    if instrument is None:
+        raise ValueError("instrument is required")
+    return _build_binance_spot_engine_for_instruments(
+        instruments=(instrument,),
+        starting_balances=starting_balances,
+    )
 
 
 def run_binance_spot_history(

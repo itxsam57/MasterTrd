@@ -2,6 +2,11 @@ name: Testnet Smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      candidate_manifest_json:
+        description: Public-safe TestnetCandidateManifest JSON for the exact champion checkout
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -14,6 +19,8 @@ jobs:
     env:
       MASTERTRD_MODE: TESTNET
       MASTERTRD_TESTNET_EVIDENCE_PATH: artifacts/testnet_smoke.json
+      MASTERTRD_TESTNET_CANDIDATE_MANIFEST: artifacts/testnet_candidate.json
+      MASTERTRD_TESTNET_BUNDLE_PATH: artifacts/testnet_candidate_bundle.json
       BINANCE_TESTNET_API_KEY: ${{ secrets.BINANCE_TESTNET_API_KEY }}
       BINANCE_TESTNET_API_SECRET: ${{ secrets.BINANCE_TESTNET_API_SECRET }}
       BINANCE_TESTNET_ACCOUNT_ID: ${{ secrets.BINANCE_TESTNET_ACCOUNT_ID }}
@@ -30,21 +37,44 @@ jobs:
             echo 'Refusing TESTNET credential marked as withdrawal-capable.' >&2
             exit 1
           fi
-      - name: Require TESTNET credentials
-        shell: bash
-        run: |
-          for name in BINANCE_TESTNET_API_KEY BINANCE_TESTNET_API_SECRET BINANCE_TESTNET_ACCOUNT_ID; do
-            if [ -z "${!name:-}" ]; then
-              echo "Missing required TESTNET credential: ${name}" >&2
-              exit 1
-            fi
-          done
       - name: Install locked stack
         run: |
           python -m pip install --disable-pip-version-check 'uv==0.12.7'
           uv lock --check
           uv sync --locked --all-extras
           uv pip check
+      - name: Materialize and validate champion candidate manifest
+        env:
+          MASTERTRD_TESTNET_CANDIDATE_JSON: ${{ inputs.candidate_manifest_json }}
+        run: |
+          uv run python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from mastertrd.testnet_candidate import TestnetCandidateManifest
+
+          raw = os.environ.get('MASTERTRD_TESTNET_CANDIDATE_JSON', '').strip()
+          if not raw:
+              raise SystemExit('candidate_manifest_json is required')
+          try:
+              payload = json.loads(raw)
+          except json.JSONDecodeError as exc:
+              raise SystemExit(f'invalid candidate_manifest_json: {exc}') from exc
+          if not isinstance(payload, dict):
+              raise SystemExit('candidate_manifest_json must contain a JSON object')
+          manifest = TestnetCandidateManifest.from_public_payload(payload)
+          checkout_sha = os.environ['GITHUB_SHA']
+          if manifest.code_hash != checkout_sha:
+              raise SystemExit('candidate manifest code_hash does not match the dispatched checkout')
+          path = Path(os.environ['MASTERTRD_TESTNET_CANDIDATE_MANIFEST'])
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_text(
+              json.dumps(manifest.to_public_payload(), sort_keys=True, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          print(f'candidate manifest validated for {manifest.strategy_id} {manifest.genome_hash}')
+          PY
       - name: Prove TESTNET-only runtime and credential preflight
         run: |
           uv run python - <<'PY'
@@ -58,13 +88,17 @@ jobs:
           runtime = RuntimeConfig.from_env(dict(os.environ))
           if runtime.mode is not RuntimeMode.TESTNET:
               raise SystemExit('workflow is not in TESTNET mode')
-          credentials = load_binance_credentials(RuntimeMode.TESTNET, os.environ)
-          if credentials is None:
-              raise SystemExit('TESTNET credentials were not loaded')
-          readiness = preflight_node(runtime, os.environ)
-          if readiness is not NodeReadiness.EXCHANGE_READY:
-              raise SystemExit(f'unexpected readiness: {readiness}')
-          print('TESTNET credential/runtime preflight: OK')
+          try:
+              credentials = load_binance_credentials(RuntimeMode.TESTNET, os.environ)
+          except ValueError:
+              print('TESTNET credentials unavailable: candidate runner will emit BLOCKED_OWNER_INPUT evidence')
+          else:
+              if credentials is None:
+                  raise SystemExit('TESTNET credentials were not loaded')
+              readiness = preflight_node(runtime, os.environ)
+              if readiness is not NodeReadiness.EXCHANGE_READY:
+                  raise SystemExit(f'unexpected readiness: {readiness}')
+              print('TESTNET credential/runtime preflight: OK')
           PY
       - name: Run fail-closed TESTNET safety suite
         run: |
@@ -72,17 +106,76 @@ jobs:
             tests/test_live_evidence.py \
             tests/test_live_readiness.py \
             tests/test_testnet_smoke_runner.py \
+            tests/test_testnet_workflow_owner_blocker.py \
             tests/test_workflow_policy.py \
+            tests/integration/test_candidate_testnet_bundle.py \
+            tests/integration/test_candidate_testnet_runner.py \
             tests/integration/test_nautilus_binance_adapter.py \
             tests/integration/test_kill_switch_evidence.py \
             tests/integration/test_reconciliation_evidence.py
       - name: Submit bounded Nautilus TESTNET smoke order
         run: uv run python -m mastertrd.testnet_smoke
+      - name: Build candidate-bound TESTNET evidence bundle
+        if: always()
+        run: |
+          uv run python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from mastertrd.contracts import RuntimeMode
+          from mastertrd.live_evidence import LiveEvidenceStatus, LiveValidationEvidence
+          from mastertrd.testnet_candidate import (
+              TestnetCandidateManifest,
+              build_candidate_testnet_evidence_bundle,
+          )
+
+          manifest_path = Path(os.environ['MASTERTRD_TESTNET_CANDIDATE_MANIFEST'])
+          smoke_path = Path(os.environ['MASTERTRD_TESTNET_EVIDENCE_PATH'])
+          bundle_path = Path(os.environ['MASTERTRD_TESTNET_BUNDLE_PATH'])
+          if not manifest_path.is_file():
+              raise SystemExit('candidate manifest artifact is unavailable')
+          if not smoke_path.is_file():
+              raise SystemExit('candidate TESTNET smoke evidence is unavailable')
+
+          manifest_payload = json.loads(manifest_path.read_text(encoding='utf-8'))
+          smoke_payload = json.loads(smoke_path.read_text(encoding='utf-8'))
+          manifest = TestnetCandidateManifest.from_public_payload(manifest_payload)
+          smoke = LiveValidationEvidence(
+              strategy_id=str(smoke_payload['strategy_id']),
+              genome_hash=str(smoke_payload['genome_hash']),
+              evidence_type=str(smoke_payload['evidence_type']),
+              dataset_hash=str(smoke_payload['dataset_hash']),
+              code_hash=str(smoke_payload['code_hash']),
+              engine=str(smoke_payload['engine']),
+              engine_version=str(smoke_payload['engine_version']),
+              passed=bool(smoke_payload['passed']),
+              metrics={str(key): float(value) for key, value in dict(smoke_payload.get('metrics', {})).items()},
+              supporting_only=bool(smoke_payload.get('supporting_only', False)),
+              status=LiveEvidenceStatus(str(smoke_payload['status'])),
+          )
+          bundle = build_candidate_testnet_evidence_bundle(
+              manifest,
+              smoke_evidence=smoke,
+              runtime_mode=RuntimeMode.TESTNET,
+          )
+          if smoke.status is LiveEvidenceStatus.CREDENTIALS_UNAVAILABLE and bundle.blocker != 'BLOCKED_OWNER_INPUT':
+              raise SystemExit('owner credential blocker was not preserved')
+          bundle_path.parent.mkdir(parents=True, exist_ok=True)
+          bundle_path.write_text(
+              json.dumps(bundle.to_public_payload(), sort_keys=True, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          print(f'candidate TESTNET bundle eligible={bundle.eligible} blocker={bundle.blocker}')
+          PY
       - name: Upload exact-SHA TESTNET evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: mastertrd-testnet-smoke-${{ github.sha }}
-          path: artifacts/testnet_smoke.json
+          path: |
+            artifacts/testnet_candidate.json
+            artifacts/testnet_smoke.json
+            artifacts/testnet_candidate_bundle.json
           if-no-files-found: warn
           retention-days: 14

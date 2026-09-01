@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .risk import RiskLimits
 from .risk_runtime import RiskRuntime
+from .risk_state import SimulationRiskStateProvider
 
 
 def build_research_backtest_risk_runtime() -> RiskRuntime:
@@ -29,5 +30,6 @@ def build_research_backtest_risk_runtime() -> RiskRuntime:
             max_api_error_rate=1.0,
             max_api_latency_ms=1_000_000_000.0,
             max_reconciliation_age_seconds=1_000_000_000.0,
-        )
+        ),
+        state_provider=SimulationRiskStateProvider(),
     )

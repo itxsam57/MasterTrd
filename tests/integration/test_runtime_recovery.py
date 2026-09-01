@@ -4,6 +4,7 @@ from mastertrd.paper_session import JsonPaperSessionStore, PaperSessionJournal
 from mastertrd.reconciliation import ExecutionState, Reconciler
 from mastertrd.risk import RiskAction, RiskLimits, RiskSnapshot
 from mastertrd.risk_runtime import OrderIntent, RiskRuntime
+from mastertrd.risk_state import RiskStateProvider
 from mastertrd.streaming import MarketStream
 
 
@@ -23,6 +24,22 @@ def bar(event_id: str, offset_ms: int) -> dict[str, object]:
         "low": 49_900,
         "close": 50_050,
         "volume": 5,
+    }
+
+
+def tick(event_id: str, offset_ms: int) -> dict[str, object]:
+    return {
+        "event_id": event_id,
+        "venue": "BINANCE",
+        "instrument": "BTCUSDT",
+        "timestamp_ms": START_MS + offset_ms,
+        "bid": 50_000.0,
+        "ask": 50_010.0,
+        "bid_size": 2.0,
+        "ask_size": 2.5,
+        "last": 50_005.0,
+        "last_size": 0.5,
+        "realized_volatility": 0.03,
     }
 
 
@@ -102,7 +119,7 @@ def test_restart_restores_session_identity_and_replays_market_events_idempotentl
     assert store.load().has_event("market-e2") is True
 
 
-def test_reconciliation_mismatch_kills_system_before_next_market_event(tmp_path):
+def test_reconciliation_mismatch_kills_system_before_first_market_event(tmp_path):
     store = JsonPaperSessionStore(tmp_path / "paper-session.json")
     journal = PaperSessionJournal(receipt(), code_hash="code-v1", started_ns=START_NS)
     store.save(journal)
@@ -124,7 +141,9 @@ def test_reconciliation_mismatch_kills_system_before_next_market_event(tmp_path)
 
     assert report.system_killed is True
     assert report.reconciliation_errors == 1
-    assert dispatched == ["market-e1"]
+    assert report.reconciliation_checks == 1
+    assert report.processed_events == 0
+    assert dispatched == []
 
     decision = risk.check_order(
         OrderIntent(
@@ -146,3 +165,62 @@ def test_reconciliation_mismatch_kills_system_before_next_market_event(tmp_path)
     )
     assert decision.action is RiskAction.KILL_SYSTEM
     assert "reconciliation" in decision.reason.lower()
+
+
+def test_execution_runtime_refreshes_owned_market_reconciliation_and_api_state(tmp_path):
+    now_seconds = (START_MS + 1_000) / 1_000.0
+    provider = RiskStateProvider(clock=lambda: now_seconds, max_market_age_seconds=5.0)
+    provider.update_account_state(
+        symbol="BTCUSDT.BINANCE",
+        portfolio_id="default",
+        symbol_exposure=1_000.0,
+        portfolio_exposure=2_000.0,
+        daily_pnl=25.0,
+        drawdown=0.01,
+        leverage=1.2,
+        correlated_exposure=500.0,
+    )
+    risk = RiskRuntime(limits(), state_provider=provider)
+    risk.update_api_health(
+        venue="BINANCE",
+        healthy=True,
+        error_rate=0.01,
+        latency_ms=25.0,
+    )
+
+    store = JsonPaperSessionStore(tmp_path / "paper-session.json")
+    journal = PaperSessionJournal(receipt(), code_hash="code-v1", started_ns=START_NS)
+    store.save(journal)
+    stable_state = state()
+    runtime = ExecutionRuntime(
+        journal=journal,
+        session_store=store,
+        risk_runtime=risk,
+        reconciler=Reconciler(),
+        engine_state=lambda: stable_state,
+        venue_state=lambda: stable_state,
+        dispatch=lambda event: None,
+    )
+
+    runtime.run(MarketStream([tick("market-t1", 0)]))
+    snapshot = risk.snapshot_for_order(
+        OrderIntent(
+            strategy_id="S-recovery",
+            symbol="BTCUSDT.BINANCE",
+            venue="BINANCE",
+            side="BUY",
+            quantity=0.01,
+            order_type="MARKET",
+        ),
+        reference_price=50_005.0,
+    )
+
+    expected_spread_bps = (10.0 / 50_005.0) * 10_000.0
+    assert snapshot.data_stale is False
+    assert snapshot.spread_bps == expected_spread_bps
+    assert snapshot.realized_volatility == 0.03
+    assert snapshot.reconciliation_ok is True
+    assert snapshot.reconciliation_age_seconds == 1.0
+    assert snapshot.venue_healthy is True
+    assert snapshot.api_error_rate == 0.01
+    assert snapshot.api_latency_ms == 25.0

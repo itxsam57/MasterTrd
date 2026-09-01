@@ -21,7 +21,7 @@ class SignalDecision:
     direction: SignalDirection
     reason: str
     score: float = 0.0
-    legs: Mapping[str, int] = field(default_factory=dict)
+    legs: Mapping[str, float] = field(default_factory=dict)
 
 
 def _entry_kind(genome: StrategyGenome) -> str:
@@ -89,7 +89,16 @@ def atr(bars: Sequence[MarketBar], period: int) -> float:
     return current
 
 
-def _zscore(value: float, history: Sequence[float]) -> float:
+def donchian_extrema(bars: Sequence[MarketBar]) -> tuple[float, float]:
+    if not bars:
+        raise ValueError("Donchian extrema require market bars")
+    return (
+        max(float(bar.high) for bar in bars),
+        min(float(bar.low) for bar in bars),
+    )
+
+
+def zscore(value: float, history: Sequence[float]) -> float:
     if len(history) < 2:
         raise ValueError("z-score history requires at least two values")
     mean = fmean(float(item) for item in history)
@@ -139,8 +148,7 @@ def evaluate_bar_signal(genome: StrategyGenome, bars: Sequence[MarketBar]) -> Si
         if window <= 0 or len(bars) <= window:
             return _flat("donchian_warmup")
         prior = bars[-window - 1 : -1]
-        upper = max(float(bar.high) for bar in prior)
-        lower = min(float(bar.low) for bar in prior)
+        upper, lower = donchian_extrema(prior)
         current = float(bars[-1].close)
         if current > upper:
             return SignalDecision(SignalDirection.LONG, "donchian_breakout", current - upper)
@@ -153,7 +161,7 @@ def evaluate_bar_signal(genome: StrategyGenome, bars: Sequence[MarketBar]) -> Si
         threshold = float(genome.entry["z"])
         if window < 2 or len(closes) <= window:
             return _flat("zscore_warmup")
-        value = _zscore(closes[-1], closes[-window - 1 : -1])
+        value = zscore(closes[-1], closes[-window - 1 : -1])
         if value <= -threshold:
             return SignalDecision(SignalDirection.LONG, "zscore_reversion", -value)
         if value >= threshold:
@@ -244,20 +252,20 @@ def evaluate_multileg_signal(
         if count <= window:
             return _flat("spread_warmup")
         spreads = [float(left[-count + index].close) - float(right[-count + index].close) for index in range(count)]
-        value = _zscore(spreads[-1], spreads[-window - 1 : -1])
+        value = zscore(spreads[-1], spreads[-window - 1 : -1])
         if value >= threshold:
             return SignalDecision(
                 SignalDirection.SHORT,
                 "cointegration_spread",
                 value,
-                legs={left_id: -1, right_id: 1},
+                legs={left_id: -1.0, right_id: 1.0},
             )
         if value <= -threshold:
             return SignalDecision(
                 SignalDirection.LONG,
                 "cointegration_spread",
                 -value,
-                legs={left_id: 1, right_id: -1},
+                legs={left_id: 1.0, right_id: -1.0},
             )
         return _flat("spread_neutral")
 
@@ -271,7 +279,7 @@ def evaluate_multileg_signal(
         edge_value = float(edge)
         if abs(edge_value) < minimum:
             return _flat("funding_edge_too_small")
-        sign = -1 if edge_value > 0 else 1
+        sign = -1.0 if edge_value > 0 else 1.0
         direction = SignalDirection.SHORT if sign < 0 else SignalDirection.LONG
         return SignalDecision(direction, "funding_basis", abs(edge_value), {left_id: sign, right_id: -sign})
 
@@ -284,9 +292,14 @@ def evaluate_multileg_signal(
         edge = left_close - ratio * right_close
         if edge == 0.0:
             return _flat("hedged_basis_balanced")
-        sign = -1 if edge > 0.0 else 1
+        sign = -1.0 if edge > 0.0 else 1.0
         direction = SignalDirection.SHORT if sign < 0 else SignalDirection.LONG
-        return SignalDecision(direction, "hedged_basis", abs(edge), {left_id: sign, right_id: -sign})
+        return SignalDecision(
+            direction,
+            "hedged_basis",
+            abs(edge),
+            {left_id: sign, right_id: -sign * ratio},
+        )
 
     if kind == "strategy_rotation":
         lookback = int(genome.entry["lookback"])
@@ -303,7 +316,7 @@ def evaluate_multileg_signal(
         winner = max(scores, key=scores.get)
         if scores[winner] <= 0.0:
             return _flat("rotation_no_positive_asset")
-        legs = {instrument: int(instrument == winner) for instrument in genome.instruments}
+        legs = {instrument: float(instrument == winner) for instrument in genome.instruments}
         return SignalDecision(SignalDirection.LONG, "strategy_rotation", scores[winner], legs)
 
     raise ValueError(f"unsupported multi-leg entry kind: {kind}")

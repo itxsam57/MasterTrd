@@ -153,7 +153,7 @@ def test_blocked_testnet_probe_is_owner_input_not_pass(tmp_path: Path) -> None:
         ),
     )
 
-    assert report.implementation_status is AcceptanceStatus.COMPLETE
+    assert report.implementation_status is AcceptanceStatus.PROCESS_READY
     assert report.live_eligible is False
     assert report.owner_input_blockers == ("testnet_smoke",)
     probe = next(item for item in report.probes if item.name == "testnet_smoke")

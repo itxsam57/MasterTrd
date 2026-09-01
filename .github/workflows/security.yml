@@ -25,9 +25,17 @@ jobs:
       - name: Fail on high-risk committed credential material
         shell: bash
         run: |
-          if git grep -nEi '(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|aws_secret_access_key[[:space:]]*=[[:space:]]*["'"'][^"'"']{8,}["'"']|api[_-]?secret[[:space:]]*=[[:space:]]*["'"'][^"'"']{16,}["'"']|seed phrase[[:space:]]*=[[:space:]]*["'"'][^"'"']+["'"'])' -- 'src/**' ':!*.example' ':!MASTER_PLAN.md'; then
+          set +e
+          git grep -nEi -e "(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|aws_secret_access_key[[:space:]]*=[[:space:]]*[\"'][^\"']{8,}[\"']|api[_-]?secret[[:space:]]*=[[:space:]]*[\"'][^\"']{16,}[\"']|seed phrase[[:space:]]*=[[:space:]]*[\"'][^\"']+[\"'])" -- 'src/**' ':!*.example' ':!MASTER_PLAN.md'
+          grep_status=$?
+          set -e
+          if [ "$grep_status" -eq 0 ]; then
             echo 'Potential committed credential material detected'
             exit 1
+          fi
+          if [ "$grep_status" -ne 1 ]; then
+            echo "Credential grep failed with status $grep_status"
+            exit "$grep_status"
           fi
       - name: Dependency audit
         run: |

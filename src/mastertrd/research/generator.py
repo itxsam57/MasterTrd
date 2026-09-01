@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Collection, Mapping, Sequence
+from decimal import Decimal, InvalidOperation
+from itertools import combinations
 import random
 from hashlib import sha256
-from typing import Sequence
 
 from mastertrd.genome import StrategyGenome
 from mastertrd.strategy_families import DataLevel, family_spec
@@ -29,6 +31,149 @@ _TIMEFRAMES = {
 }
 
 
+def _instrument_id(instrument: object) -> str:
+    instrument_id = getattr(instrument, "id", None)
+    value = getattr(instrument_id, "value", None)
+    if not isinstance(value, str) or not value:
+        raise ValueError("instrument metadata requires a concrete instrument id")
+    return value
+
+
+def _venue(instrument: object) -> str:
+    instrument_id = getattr(instrument, "id", None)
+    venue = getattr(instrument_id, "venue", None)
+    value = getattr(venue, "value", None)
+    if not isinstance(value, str) or not value:
+        raise ValueError("instrument metadata requires a concrete venue")
+    return value
+
+
+def _raw_symbol(instrument: object) -> str:
+    raw_symbol = getattr(instrument, "raw_symbol", None)
+    value = getattr(raw_symbol, "value", None)
+    if isinstance(value, str) and value:
+        return value
+    return _instrument_id(instrument).split(".", 1)[0]
+
+
+def _is_option(instrument: object) -> bool:
+    from nautilus_trader.model.instruments import CryptoOption, OptionContract
+
+    return isinstance(instrument, (OptionContract, CryptoOption))
+
+
+def _is_spot(instrument: object) -> bool:
+    from nautilus_trader.model.instruments import CurrencyPair
+
+    return isinstance(instrument, CurrencyPair)
+
+
+def _normalized_levels(values: Collection[object]) -> frozenset[str]:
+    return frozenset(str(getattr(value, "value", value)).upper() for value in values)
+
+
+def _validated_trade_size(value: str) -> str:
+    raw = value.strip()
+    try:
+        amount = Decimal(raw)
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("trade_size must be a positive decimal") from exc
+    if not amount.is_finite() or amount <= 0:
+        raise ValueError("trade_size must be a positive decimal")
+    return raw
+
+
+def family_instrument_sets(
+    family: str,
+    instruments: Mapping[str, object],
+    *,
+    available_data_levels: Mapping[str, Collection[object]],
+) -> tuple[tuple[str, ...], ...]:
+    """Return deterministic product/data-compatible instrument universes for a family.
+
+    This is a construction boundary only. It never substitutes a cheaper data level
+    for the family minimum and it never treats an option as a non-option product.
+    Cross-venue arbitrage requires two different venues; basis/neutral pairs require
+    a same-venue spot/derivative pair for the same raw market symbol.
+    """
+
+    spec = family_spec(family)
+    ordered_ids = tuple(instruments)
+    for key in ordered_ids:
+        actual = _instrument_id(instruments[key])
+        if key != actual:
+            raise ValueError(f"instrument metadata key mismatch: expected {key}, got {actual}")
+
+    required_level = spec.min_data_level.value
+    eligible = tuple(
+        instrument_id
+        for instrument_id in ordered_ids
+        if required_level
+        in _normalized_levels(available_data_levels.get(instrument_id, ()))
+    )
+
+    if spec.requires_option_product:
+        return tuple(
+            (instrument_id,)
+            for instrument_id in eligible
+            if _is_option(instruments[instrument_id])
+        )
+
+    non_options = tuple(
+        instrument_id
+        for instrument_id in eligible
+        if not _is_option(instruments[instrument_id])
+    )
+
+    if spec.max_instruments == 1:
+        return tuple((instrument_id,) for instrument_id in non_options)
+
+    if family == "cross_venue_arb":
+        return tuple(
+            (left, right)
+            for left, right in combinations(non_options, 2)
+            if _venue(instruments[left]) != _venue(instruments[right])
+        )
+
+    if family in {"funding_basis", "delta_neutral"}:
+        pairs: list[tuple[str, str]] = []
+        for left, right in combinations(non_options, 2):
+            left_instrument = instruments[left]
+            right_instrument = instruments[right]
+            if _venue(left_instrument) != _venue(right_instrument):
+                continue
+            if _raw_symbol(left_instrument) != _raw_symbol(right_instrument):
+                continue
+            if _is_spot(left_instrument) == _is_spot(right_instrument):
+                continue
+            pairs.append((left, right) if _is_spot(left_instrument) else (right, left))
+        return tuple(pairs)
+
+    if family == "portfolio":
+        by_venue: dict[str, list[str]] = {}
+        for instrument_id in non_options:
+            by_venue.setdefault(_venue(instruments[instrument_id]), []).append(instrument_id)
+        return tuple(
+            tuple(group)
+            for group in by_venue.values()
+            if len(group) >= spec.min_instruments
+        )
+
+    if spec.min_instruments == 2 and spec.max_instruments == 2:
+        return tuple(
+            (left, right)
+            for left, right in combinations(non_options, 2)
+            if _venue(instruments[left]) == _venue(instruments[right])
+        )
+
+    return tuple(
+        items
+        for size in range(spec.min_instruments, len(non_options) + 1)
+        for items in combinations(non_options, size)
+        if spec.max_instruments is None or size <= spec.max_instruments
+    )
+
+
 def _rules(family: str, rng: random.Random) -> tuple[dict, dict, dict]:
     fast = rng.randint(5, 24)
     slow = rng.randint(max(fast + 5, 20), 120)
@@ -52,7 +197,16 @@ def _rules(family: str, rng: random.Random) -> tuple[dict, dict, dict]:
         "delta_neutral": ({"type": "hedged_basis", "hedge_ratio": round(rng.uniform(0.9, 1.1), 3)}, {"type": "rebalance", "drift_bps": rng.randint(10, 100)}, {"delta_target": 0.0}),
         "options": ({"type": "volatility_signal", "iv_rv_ratio": round(rng.uniform(0.7, 1.5), 2)}, {"type": "greeks_or_time_exit", "max_days": rng.randint(1, 30)}, {"defined_risk_only": True}),
         "portfolio": ({"type": "strategy_rotation", "lookback": rng.randint(20, 120)}, {"type": "rebalance", "periods": rng.randint(1, 20)}, {"volatility_target": round(rng.uniform(0.08, 0.25), 3)}),
-        "scalping": ({"type": "micro_momentum", "ticks": rng.randint(5, 80)}, {"type": "ticks_or_timeout", "stop_ticks": rng.randint(2, 15), "target_ticks": rng.randint(2, 25)}, {"spread_max_ticks": rng.randint(1, 5)}),
+        "scalping": (
+            {"type": "micro_momentum", "ticks": rng.randint(5, 80)},
+            {
+                "type": "ticks_or_timeout",
+                "stop_ticks": rng.randint(2, 15),
+                "target_ticks": rng.randint(2, 25),
+                "max_ticks": rng.randint(20, 200),
+            },
+            {"spread_max_ticks": rng.randint(1, 5)},
+        ),
         "grid": ({"type": "dynamic_grid", "levels": rng.randint(3, 20), "spacing_bps": rng.randint(2, 50)}, {"type": "inventory_exit", "max_inventory": round(rng.uniform(0.1, 1.0), 2)}, {"volatility_adjusted": True}),
         "market_making": ({"type": "inventory_skew_mm", "half_spread_bps": rng.randint(1, 30)}, {"type": "inventory_flatten", "max_inventory": round(rng.uniform(0.1, 1.0), 2)}, {"queue_aware": True}),
         "order_book": ({"type": "order_book_imbalance", "levels": rng.randint(1, 20), "threshold": round(rng.uniform(0.05, 0.6), 3)}, {"type": "imbalance_reversal_or_ticks", "ticks": rng.randint(2, 20)}, {"queue_aware": True}),
@@ -61,12 +215,21 @@ def _rules(family: str, rng: random.Random) -> tuple[dict, dict, dict]:
     return rules[family]
 
 
-def generate_candidate(*, family: str, instruments: Sequence[str], seed: int) -> StrategyGenome:
+def generate_candidate(
+    *,
+    family: str,
+    instruments: Sequence[str],
+    seed: int,
+    trade_size: str | None = None,
+) -> StrategyGenome:
     spec = family_spec(family)
     if not instruments:
         raise ValueError("at least one instrument is required")
     rng = random.Random(seed)
     entry, exit_rule, filters = _rules(family, rng)
+    if trade_size is not None:
+        entry = dict(entry)
+        entry["trade_size"] = _validated_trade_size(trade_size)
     timeframe = rng.choice(_TIMEFRAMES[family])
     raw_id = f"{family}|{','.join(instruments)}|{seed}|{entry}|{exit_rule}|{filters}"
     strategy_id = "S-" + sha256(raw_id.encode()).hexdigest()[:12].upper()

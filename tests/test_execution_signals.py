@@ -79,3 +79,24 @@ def test_stat_arb_multileg_signal_responds_to_spread_extreme() -> None:
         },
     )
     assert decision.direction is SignalDirection.SHORT
+
+
+def test_hedged_basis_signal_preserves_configured_hedge_ratio() -> None:
+    instruments = ("ETHUSDT.BINANCE", "BTCUSDT.BINANCE")
+    ratio = 1.25
+    genome = _genome(
+        "delta_neutral",
+        {"type": "hedged_basis", "hedge_ratio": ratio},
+        instruments=instruments,
+    )
+    decision = evaluate_multileg_signal(
+        genome,
+        {
+            instruments[0]: _bars([150.0], instrument=instruments[0]),
+            instruments[1]: _bars([100.0], instrument=instruments[1]),
+        },
+    )
+
+    assert decision.direction is SignalDirection.SHORT
+    assert decision.legs[instruments[0]] == -1.0
+    assert decision.legs[instruments[1]] == ratio

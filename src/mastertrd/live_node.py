@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from enum import StrEnum
-from importlib import import_module
 import os
 import signal
 import time
@@ -12,6 +11,7 @@ from typing import Any
 from .contracts import RuntimeMode
 from .credentials import load_binance_credentials
 from .runtime import RuntimeConfig
+from .runtime_factory import build_execution_runtime
 
 
 class NodeReadiness(StrEnum):
@@ -36,31 +36,6 @@ def preflight_node(runtime: RuntimeConfig, environ: Mapping[str, str]) -> NodeRe
     return NodeReadiness.EXCHANGE_READY
 
 
-def load_execution_runtime_factory(
-    environ: Mapping[str, str],
-) -> Callable[[RuntimeConfig, Mapping[str, str]], Any]:
-    target = environ.get("MASTERTRD_EXECUTION_FACTORY", "").strip()
-    if not target:
-        raise RuntimeError(
-            "MASTERTRD_EXECUTION_FACTORY must be configured for production execution"
-        )
-
-    module_name, separator, function_name = target.partition(":")
-    if (
-        separator != ":"
-        or not module_name.strip()
-        or not function_name.strip()
-        or ":" in function_name
-    ):
-        raise ValueError("MASTERTRD_EXECUTION_FACTORY must use module:function format")
-
-    module = import_module(module_name.strip())
-    factory = getattr(module, function_name.strip(), None)
-    if not callable(factory):
-        raise TypeError("MASTERTRD_EXECUTION_FACTORY must reference a callable factory")
-    return factory
-
-
 def run_node(
     runtime: RuntimeConfig,
     environ: Mapping[str, str],
@@ -74,11 +49,16 @@ def run_node(
     readiness = preflight_node(runtime, environ)
     if execution_runtime is not None:
         heartbeat(readiness)
-        execution_runtime.run(stop_requested=stop_requested)
+        try:
+            execution_runtime.run(stop_requested=stop_requested)
+        finally:
+            close = getattr(execution_runtime, "close", None)
+            if callable(close):
+                close()
         return readiness
 
     # Backward-compatible observability-only loop for injected/test callers.
-    # Production main() fails closed unless a concrete runtime factory is configured.
+    # Production main() uses the repository-owned runtime factory.
     while not stop_requested():
         heartbeat(readiness)
         sleep(interval_seconds)
@@ -119,13 +99,12 @@ def run_service(
 
 
 def main() -> None:
-    execution_runtime_factory = load_execution_runtime_factory(os.environ)
     run_service(
         os.environ,
         register_signal=signal.signal,
         sleep=time.sleep,
         heartbeat=lambda state: print(f"MasterTrd heartbeat: {state}", flush=True),
-        execution_runtime_factory=execution_runtime_factory,
+        execution_runtime_factory=build_execution_runtime,
     )
 
 

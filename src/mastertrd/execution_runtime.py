@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from math import isfinite
 
 from .paper_session import JsonPaperSessionStore, PaperSessionJournal
-from .reconciliation import ExecutionState, Reconciler
+from .reconciliation import ExecutionState, Reconciler, ReconciliationResult
 from .risk_runtime import KillScope, RiskRuntime
 from .streaming import MarketStream, MarketStreamEvent
 
@@ -30,6 +31,8 @@ class ExecutionRuntime:
         venue_state: Callable[[], ExecutionState],
         dispatch: Callable[[MarketStreamEvent], object],
         stream: MarketStream | None = None,
+        finalizer: Callable[[], object] | None = None,
+        startup_expected_state: Callable[[], ExecutionState] | None = None,
     ) -> None:
         self._journal = journal
         self._session_store = session_store
@@ -39,6 +42,87 @@ class ExecutionRuntime:
         self._venue_state = venue_state
         self._dispatch = dispatch
         self._stream = stream
+        self._finalizer = finalizer
+        self._startup_expected_state = startup_expected_state
+        self._closed = False
+        self._startup_reconciled = False
+
+    @staticmethod
+    def _risk_symbol(event: MarketStreamEvent) -> str:
+        instrument = event.data.instrument
+        if "." in instrument:
+            return instrument
+        return f"{instrument}.{event.data.venue}"
+
+    def _refresh_market_risk_state(self, event: MarketStreamEvent) -> None:
+        extras = event.data.extras
+        volatility_raw = extras.get("realized_volatility")
+        if volatility_raw is None:
+            return
+        try:
+            realized_volatility = float(volatility_raw)
+        except (TypeError, ValueError):
+            return
+        if not isfinite(realized_volatility) or realized_volatility < 0.0:
+            return
+
+        if event.kind == "tick":
+            tick = event.tick
+            midpoint = (float(tick.bid) + float(tick.ask)) / 2.0
+            if midpoint <= 0.0:
+                return
+            spread_bps = ((float(tick.ask) - float(tick.bid)) / midpoint) * 10_000.0
+        else:
+            spread_raw = extras.get("spread_bps")
+            if spread_raw is None:
+                return
+            try:
+                spread_bps = float(spread_raw)
+            except (TypeError, ValueError):
+                return
+            if not isfinite(spread_bps) or spread_bps < 0.0:
+                return
+
+        self._risk_runtime.update_market_state(
+            symbol=self._risk_symbol(event),
+            spread_bps=spread_bps,
+            realized_volatility=realized_volatility,
+            observed_at=event.timestamp_ns / 1_000_000_000.0,
+        )
+
+    def _reconcile(self, *, startup: bool = False) -> ReconciliationResult:
+        expected_state = (
+            self._startup_expected_state
+            if startup and self._startup_expected_state is not None
+            else self._venue_state
+        )
+        return self._reconciler.reconcile(
+            self._engine_state(),
+            expected_state(),
+        )
+
+    def _record_reconciliation(
+        self,
+        *,
+        reconciliation: ReconciliationResult,
+        reconciliation_id: str,
+        timestamp_ns: int,
+    ) -> None:
+        self._risk_runtime.update_reconciliation_state(
+            ok=reconciliation.ok,
+            observed_at=timestamp_ns / 1_000_000_000.0,
+        )
+        self._journal.record_reconciliation(
+            reconciliation_id,
+            ok=reconciliation.ok,
+            timestamp_ns=timestamp_ns,
+        )
+        if reconciliation.ok:
+            self._journal.record_execution_state(
+                self._engine_state(),
+                timestamp_ns=timestamp_ns,
+            )
+        self._session_store.save(self._journal)
 
     def run(
         self,
@@ -64,30 +148,46 @@ class ExecutionRuntime:
                 duplicate_events += 1
                 continue
 
+            if not self._startup_reconciled:
+                startup_reconciliation = self._reconcile(startup=True)
+                reconciliation_checks += 1
+                if not startup_reconciliation.ok:
+                    reconciliation_errors += 1
+                startup_timestamp = max(event.timestamp_ns, self._journal.latest_timestamp_ns)
+                self._record_reconciliation(
+                    reconciliation=startup_reconciliation,
+                    reconciliation_id=f"reconcile:startup:{event.event_id}",
+                    timestamp_ns=startup_timestamp,
+                )
+                if not startup_reconciliation.ok:
+                    self._risk_runtime.kill(KillScope.SYSTEM, startup_reconciliation.summary)
+                    system_killed = True
+                    break
+                self._startup_reconciled = True
+
             # Persist identity before dispatch. A crash may suppress this event on
             # restart, but it can never cause the same market event to submit twice.
             self._journal.record_market_event(event.event_id, timestamp_ns=event.timestamp_ns)
             self._session_store.save(self._journal)
 
+            # Fresh market state must exist before a strategy can submit against
+            # this event. Missing or malformed required metrics remain absent and
+            # therefore fail closed in RiskStateProvider.
+            self._refresh_market_risk_state(event)
             self._dispatch(event)
             processed_events += 1
 
-            reconciliation = self._reconciler.reconcile(
-                self._engine_state(),
-                self._venue_state(),
-            )
+            reconciliation = self._reconcile()
             reconciliation_checks += 1
             if not reconciliation.ok:
                 reconciliation_errors += 1
 
-            reconciliation_id = f"reconcile:{event.event_id}"
             reconciliation_timestamp = max(event.timestamp_ns, self._journal.latest_timestamp_ns)
-            self._journal.record_reconciliation(
-                reconciliation_id,
-                ok=reconciliation.ok,
+            self._record_reconciliation(
+                reconciliation=reconciliation,
+                reconciliation_id=f"reconcile:{event.event_id}",
                 timestamp_ns=reconciliation_timestamp,
             )
-            self._session_store.save(self._journal)
 
             if not reconciliation.ok:
                 self._risk_runtime.kill(KillScope.SYSTEM, reconciliation.summary)
@@ -101,3 +201,11 @@ class ExecutionRuntime:
             reconciliation_errors=reconciliation_errors,
             system_killed=system_killed,
         )
+
+    def close(self) -> None:
+        """Finalize owned execution resources exactly once."""
+        if self._closed:
+            return
+        if self._finalizer is not None:
+            self._finalizer()
+        self._closed = True
