@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+
+from .genome import StrategyGenome
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +37,56 @@ class OracleDeploymentBundle:
     bootstrap_script: str
 
 
+def _required_manifest_string(payload: Mapping[str, object], name: str) -> str:
+    value = payload.get(name)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} is required")
+    return value.strip()
+
+
+def validate_paper_candidate_manifest(
+    payload: Mapping[str, object],
+    *,
+    expected_code_hash: str,
+    expected_lock_hash: str,
+) -> StrategyGenome:
+    """Validate a public-safe ResearchJob PAPER handoff for Oracle execution."""
+    if not expected_code_hash:
+        raise ValueError("expected_code_hash is required")
+    if not expected_lock_hash:
+        raise ValueError("expected_lock_hash is required")
+
+    raw_candidate = payload.get("candidate")
+    if not isinstance(raw_candidate, Mapping):
+        raise ValueError("candidate is required")
+    try:
+        candidate = StrategyGenome(**dict(raw_candidate))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("candidate is invalid") from exc
+
+    strategy_id = _required_manifest_string(payload, "strategy_id")
+    genome_hash = _required_manifest_string(payload, "genome_hash")
+    code_hash = _required_manifest_string(payload, "code_hash")
+    _required_manifest_string(payload, "dataset_hash")
+    lock_hash = _required_manifest_string(payload, "lock_hash")
+
+    if strategy_id != candidate.strategy_id:
+        raise ValueError("strategy_id does not match candidate")
+    if genome_hash != candidate.genome_hash:
+        raise ValueError("genome_hash does not match candidate")
+    if code_hash != expected_code_hash:
+        raise ValueError("code_hash does not match deployed source")
+    if lock_hash != expected_lock_hash:
+        raise ValueError("lock_hash does not match deployed dependency lock")
+    if len(candidate.instruments) != 1:
+        raise ValueError("Oracle PAPER runtime currently requires one instrument")
+
+    instrument = str(candidate.instruments[0]).strip().upper()
+    if not instrument.endswith(".BINANCE"):
+        raise ValueError("Oracle PAPER runtime currently requires a BINANCE instrument")
+    return candidate
+
+
 def render_env_template() -> str:
     return """# MasterTrd host environment template
 # Keep secrets out of git. Populate credential values only on the target host
@@ -41,7 +94,12 @@ def render_env_template() -> str:
 MASTERTRD_MODE=PAPER
 LIVE_TRADING_ENABLED=false
 ORACLE_ENABLED=false
-MASTERTRD_EXECUTION_FACTORY=
+MASTERTRD_CANDIDATE_MANIFEST=/var/lib/mastertrd/paper-candidate.json
+MASTERTRD_SESSION_STATE=/var/lib/mastertrd/paper-session.json
+MASTERTRD_CODE_HASH=
+MASTERTRD_PUBLIC_FEED_FIXTURE=
+MASTERTRD_SESSION_NONCE=
+MASTERTRD_PAPER_START_NS=
 BINANCE_DEMO_API_KEY=
 BINANCE_DEMO_API_SECRET=
 BINANCE_DEMO_ACCOUNT_ID=
@@ -79,7 +137,7 @@ ProtectSystem=strict
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-ReadWritePaths={spec.app_dir} /var/log/mastertrd
+ReadWritePaths={spec.app_dir} /var/lib/mastertrd /var/log/mastertrd
 StandardOutput=journal
 StandardError=journal
 
@@ -137,8 +195,8 @@ apt-get update
 apt-get install -y python3 python3-venv git curl logrotate ca-certificates
 
 id -u {spec.service_user} >/dev/null 2>&1 || useradd --system --home {spec.app_dir} --shell /usr/sbin/nologin {spec.service_user}
-mkdir -p {spec.app_dir} /etc/mastertrd /var/log/mastertrd
-chown -R {spec.service_user}:{spec.service_user} {spec.app_dir} /var/log/mastertrd
+mkdir -p {spec.app_dir} /etc/mastertrd /var/lib/mastertrd /var/log/mastertrd
+chown -R {spec.service_user}:{spec.service_user} {spec.app_dir} /var/lib/mastertrd /var/log/mastertrd
 
 if [[ ! -f {spec.env_file} ]]; then
 cat > {spec.env_file} <<'MASTERTRD_ENV'
@@ -166,8 +224,8 @@ systemctl daemon-reload
 systemctl enable mastertrd.service
 
 echo "Oracle adapter installed with safe defaults."
-echo "The host environment file is preserved on repeat runs; repository deployment never overwrites secrets."
-echo "Set ORACLE_ENABLED=true on the host only after PAPER/DEMO validation, then start explicitly."
+echo "The host environment file is preserved on repeat runs; repository deployment never overwrites credentials."
+echo "Use the identity-checked Oracle Deploy workflow to configure and start PAPER."
 '''
 
 
