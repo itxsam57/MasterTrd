@@ -185,8 +185,6 @@ jobs:
           sudo install -d -o mastertrd -g mastertrd -m 700 "$paper_root" "$paper_history"
           sudo install -o mastertrd -g mastertrd -m 600 "$REMOTE_CANDIDATE" "$paper_candidate"
 
-          # Legacy pre-identity paths /var/lib/mastertrd/paper-candidate.json and
-          # /var/lib/mastertrd/paper-session.json are deliberately not reused.
           set_env_value() {
             local key="$1"
             local value="$2"
