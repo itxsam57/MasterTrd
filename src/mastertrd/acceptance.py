@@ -122,11 +122,17 @@ def run_full_acceptance(
         for name in MANDATORY_SUITES
         if name in suite_by_name and not suite_by_name[name].passed
     )
+    dataset_fixture_records = tuple(str(item) for item in dataset_fixtures)
+    engine_version_records = tuple(
+        sorted((str(name), str(version)) for name, version in engine_versions.items())
+    )
+    capability_evidence_present = bool(dataset_fixture_records)
     static_passed = all(check.passed for check in static_checks)
     implementation_complete = (
         static_passed
         and not missing_mandatory_suites
         and not failed_mandatory_suites
+        and capability_evidence_present
     )
 
     missing_live_evidence = tuple(
@@ -155,10 +161,8 @@ def run_full_acceptance(
         ),
         live_eligible=live_eligible,
         suites=suites,
-        dataset_fixtures=tuple(str(item) for item in dataset_fixtures),
-        engine_versions=tuple(
-            sorted((str(name), str(version)) for name, version in engine_versions.items())
-        ),
+        dataset_fixtures=dataset_fixture_records,
+        engine_versions=engine_version_records,
         probes=probe_results,
         missing_mandatory_suites=missing_mandatory_suites,
         failed_mandatory_suites=failed_mandatory_suites,
