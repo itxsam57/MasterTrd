@@ -23,3 +23,4 @@ def test_generic_green_suites_cannot_hide_missing_mandatory_capabilities(tmp_pat
     )
 
     assert report.implementation_status is AcceptanceStatus.FAILED
+    assert report.missing_mandatory_capabilities == ("dataset_fixture_evidence",)
