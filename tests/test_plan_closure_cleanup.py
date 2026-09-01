@@ -89,3 +89,14 @@ def test_scheduled_research_and_testnet_paths_are_repository_owned_and_fail_clos
     assert "candidate_manifest_json" in testnet_workflow
     assert "BLOCKED_OWNER_INPUT" in testnet_workflow
     assert "testnet_candidate_bundle.json" in testnet_workflow
+
+
+def test_v2_plan_checklist_is_closed_when_code_owned_capabilities_are_process_ready() -> None:
+    plan = (
+        ROOT / "docs" / "superpowers" / "plans" / "2026-08-31-mastertrd-v2-plan-closure.md"
+    ).read_text(encoding="utf-8")
+
+    assert "- [ ]" not in plan
+    assert "Implementation status: `PROCESS_READY`" in plan
+    assert "`testnet_smoke` remains `BLOCKED_OWNER_INPUT`" in plan
+    assert "Completion Acceptance" in plan
