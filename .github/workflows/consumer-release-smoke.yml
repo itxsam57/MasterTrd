@@ -8,7 +8,16 @@ on:
     paths:
       - 'src/**'
       - 'README.md'
-      - 'docs/OPERATIONS.md'
+      - 'docs/**'
+      - '.env.example'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/consumer-release-smoke.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'README.md'
+      - 'docs/**'
       - '.env.example'
       - 'pyproject.toml'
       - 'uv.lock'
@@ -160,6 +169,7 @@ jobs:
           printf '## deterministic-paper-boot\nexit=%s\n%s\n\n' "$paper_status" "$paper_output" >> "$report"
           if [ "$paper_status" -ne 0 ]; then
             echo 'deterministic PAPER operator path failed' >&2
+            printf '%s\n' "$paper_output" >&2
             exit 1
           fi
           test -s artifacts/consumer-release-smoke/paper-session.json
@@ -174,6 +184,7 @@ jobs:
           echo 'consumer_smoke=PASS' >> "$report"
           cat "$report"
       - name: Upload black-box observations
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: consumer-release-smoke-${{ github.sha }}
