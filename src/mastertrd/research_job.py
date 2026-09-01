@@ -15,7 +15,8 @@ from .memory_duckdb import DuckDbResearchMemory
 from .nautilus_paper import load_public_binance_spot_instrument
 from .research.generator import generate_candidate
 from .research_brain import ResearchBrainConfig, ResearchDataset, run_research_brain
-from .strategy_families import FAMILIES
+from .strategy_families import DataLevel, FAMILIES, family_spec
+from .strategy_universe import AssetClass, RecipeReadiness, recipes_for, strategy_recipe
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +34,7 @@ class ResearchJobPlan:
     seed_start: int
     seed_stop: int
     archive_months: int = 2
+    runnable_recipe_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.requested_families or not self.runnable_families:
@@ -45,6 +47,44 @@ class ResearchJobPlan:
             raise ValueError("seed_stop must be greater than seed_start")
         if self.archive_months < 2:
             raise ValueError("archive_months must be at least two")
+        if len(set(self.runnable_recipe_ids)) != len(self.runnable_recipe_ids):
+            raise ValueError("runnable_recipe_ids must be unique")
+        for recipe_id in self.runnable_recipe_ids:
+            recipe = strategy_recipe(recipe_id)
+            if recipe.readiness is not RecipeReadiness.EXECUTABLE:
+                raise ValueError("scheduled recipe must be executable")
+            if recipe.family not in self.runnable_families:
+                raise ValueError("scheduled recipe family must be runnable")
+            if AssetClass.CRYPTO not in recipe.asset_classes:
+                raise ValueError("scheduled public recipe must support crypto")
+            if family_spec(recipe.family).min_data_level is not DataLevel.BAR:
+                raise ValueError("scheduled public recipe must use BAR data")
+
+
+def _default_runnable_recipe_ids(runnable_families: tuple[str, ...]) -> tuple[str, ...]:
+    """Select a bounded deterministic breadth of exact public-data recipes.
+
+    Strategy Universe may contain many more executable recipes. The scheduled job
+    intentionally takes two per runnable family so autonomous research broadens
+    beyond family-only randomness without turning every hourly run into an
+    unbounded compute fan-out.
+    """
+    selected: list[str] = []
+    eligible = recipes_for(
+        asset_class=AssetClass.CRYPTO,
+        readiness=RecipeReadiness.EXECUTABLE,
+    )
+    for family in runnable_families:
+        family_ids = [
+            recipe.recipe_id
+            for recipe in eligible
+            if recipe.family == family
+            and family_spec(recipe.family).min_data_level is DataLevel.BAR
+        ]
+        if len(family_ids) < 2:
+            raise RuntimeError(f"scheduled research requires at least two executable crypto BAR recipes for {family}")
+        selected.extend(family_ids[:2])
+    return tuple(selected)
 
 
 def default_research_job_plan() -> ResearchJobPlan:
@@ -83,6 +123,7 @@ def default_research_job_plan() -> ResearchJobPlan:
         seed_start=40,
         seed_stop=43,
         archive_months=2,
+        runnable_recipe_ids=_default_runnable_recipe_ids(runnable),
     )
 
 
@@ -217,9 +258,18 @@ def _dataset_for_timeframe(
     return dataset, tuple(manifests)
 
 
-def _public_run_payload(*, family: str, seed: int, timeframe: str, report, manifests) -> dict[str, object]:
+def _public_run_payload(
+    *,
+    family: str,
+    seed: int,
+    timeframe: str,
+    report,
+    manifests,
+    recipe_id: str | None = None,
+) -> dict[str, object]:
     return {
         "family": family,
+        "recipe_id": recipe_id,
         "seed": seed,
         "timeframe": timeframe,
         "run_id": report.run_id,
@@ -260,14 +310,23 @@ def run_research_job(
     dataset_cache: dict[str, tuple[ResearchDataset, tuple[dict[str, object], ...]]] = {}
     runs: list[dict[str, object]] = []
 
+    if plan.runnable_recipe_ids:
+        schedule = tuple(
+            (strategy_recipe(recipe_id).family, recipe_id)
+            for recipe_id in plan.runnable_recipe_ids
+        )
+    else:
+        schedule = tuple((family, None) for family in plan.runnable_families)
+
     memory = DuckDbResearchMemory(artifact_dir / "research.duckdb")
     try:
-        for family in plan.runnable_families:
+        for family, recipe_id in schedule:
             for seed in range(plan.seed_start, plan.seed_stop):
                 preview = generate_candidate(
                     family=family,
                     instruments=(plan.instruments[0],),
                     seed=seed,
+                    recipe_id=recipe_id,
                 )
                 timeframe = preview.timeframe
                 if timeframe not in dataset_cache:
@@ -294,6 +353,7 @@ def run_research_job(
                     validation_window=50,
                     trade_size="0.01000",
                     starting_balances=("10 ETH", "10 BTC", "100000 USDT"),
+                    recipe_ids=(recipe_id,) if recipe_id is not None else (),
                 )
                 report = run_research_brain(
                     config,
@@ -305,6 +365,7 @@ def run_research_job(
                 runs.append(
                     _public_run_payload(
                         family=family,
+                        recipe_id=recipe_id,
                         seed=seed,
                         timeframe=timeframe,
                         report=report,
@@ -323,6 +384,7 @@ def run_research_job(
         "plan": {
             "requested_families": list(plan.requested_families),
             "runnable_families": list(plan.runnable_families),
+            "runnable_recipe_ids": list(plan.runnable_recipe_ids),
             "blocked_families": [asdict(item) for item in plan.blocked_families],
             "instruments": list(plan.instruments),
             "seed_start": plan.seed_start,
