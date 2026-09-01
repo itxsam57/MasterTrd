@@ -119,6 +119,7 @@ jobs:
           (root / 'mastertrd-health').write_text(bundle.health_script, encoding='utf-8')
           PY
           chmod 700 artifacts/oracle/bootstrap.sh
+          bash -n artifacts/oracle/bootstrap.sh
 
       - name: Configure pinned SSH trust
         shell: bash
