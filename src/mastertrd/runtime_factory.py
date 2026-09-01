@@ -250,6 +250,12 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
                 archive=archive,
                 history_dir=history_dir,
             )
+            # Consume the request before replacing the official current state.
+            # If the process dies after this point, restart recovery still sees
+            # the finalized current session and advances it automatically. This
+            # prevents a stale request from immediately rotating the fresh window.
+            if rotation_request_path is not None:
+                rotation_request_path.unlink(missing_ok=True)
             session = _open_replacement_paper_session(
                 candidate,
                 session_path=session_path,
@@ -258,8 +264,6 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
                 session_nonce=_next_paper_session_nonce(base_session_nonce, archive),
             )
             resume = False
-            if rotation_request_path is not None:
-                rotation_request_path.unlink(missing_ok=True)
     else:
         started_ns = _configured_new_paper_start_ns(environ)
         session_nonce = base_session_nonce
@@ -355,6 +359,10 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
                 archive=archive,
                 history_dir=history_dir,
             )
+            # Once finalization and archival are durable, the request has been
+            # fulfilled. Remove it before state replacement so a crash cannot
+            # carry the old request into the next evidence window.
+            rotation_request_path.unlink(missing_ok=True)
             replacement = _open_replacement_paper_session(
                 candidate,
                 session_path=session_path,
@@ -367,7 +375,6 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
             execution.bind_journal(replacement.journal)
             journal_ref["journal"] = replacement.journal
             account_id_ref["value"] = f"paper:{replacement.journal.session_id}"
-            rotation_request_path.unlink(missing_ok=True)
             return replacement.journal, replacement.store
 
     return ExecutionRuntime(
