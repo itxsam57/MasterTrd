@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Mapping
 from urllib.request import urlopen
 
+from .contracts import StrategyState
 from .data.archive import ArchiveReadResult, dataset_hash_for_bars, read_binance_archive
 from .data.binance_public import binance_kline_url
 from .genome import StrategyGenome
@@ -293,7 +294,7 @@ def _paper_candidate_manifests(
     paper_finalists = [
         finalist
         for finalist in report.finalists
-        if finalist.state.value == "paper"
+        if finalist.state == StrategyState.PAPER
     ]
     if not paper_finalists:
         return []
