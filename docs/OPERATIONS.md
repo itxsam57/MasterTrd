@@ -54,6 +54,20 @@ $env:ORACLE_ENABLED = "false"
 
 `python -m mastertrd.live_node` uses the repository-owned `build_execution_runtime` factory. PAPER needs no exchange execution credential; DEMO/TESTNET/LIVE still fail closed on their mode-specific credential and safety gates.
 
+### Required persistent-runtime inputs
+
+The mode flags alone are not enough to start the persistent execution process. Before invoking `python -m mastertrd.live_node`, provide an approved StrategyGenome JSON file through `MASTERTRD_CANDIDATE_MANIFEST`. The manifest is the exact candidate the runtime is allowed to execute; do not point this variable at a generic system-smoke or unrelated candidate.
+
+PAPER additionally requires:
+
+- `MASTERTRD_SESSION_STATE`: writable JSON state path used for crash-safe PAPER journaling/recovery.
+- `MASTERTRD_CODE_HASH`: exact source identity bound into the PAPER session.
+- optional `MASTERTRD_PUBLIC_FEED_FIXTURE`, `MASTERTRD_SESSION_NONCE`, and `MASTERTRD_PAPER_START_NS` for deterministic/offline replay.
+
+DEMO, TESTNET, and LIVE additionally require `MASTERTRD_BINANCE_PRODUCT` set explicitly to `SPOT`, `USD_M`, or `COIN_M`, plus that mode's `BINANCE_<MODE>_*` credentials. No mode silently selects a product or falls back to another credential namespace.
+
+The checked-in `.env.example` lists these names but is not automatically loaded by Python; export them into the process environment or supply them through the service/GitHub Environment. Empty placeholders intentionally fail closed.
+
 ## Linux production node
 
 The canonical persistent node is a Linux host (Oracle free-tier adapter supported on arm64/aarch64 and amd64/x86_64). The deployment bundle renders:
@@ -86,6 +100,9 @@ Set:
 ```text
 MASTERTRD_MODE=PAPER
 LIVE_TRADING_ENABLED=false
+MASTERTRD_CANDIDATE_MANIFEST=/absolute/path/to/approved-candidate.json
+MASTERTRD_SESSION_STATE=/var/lib/mastertrd/paper-session.json
+MASTERTRD_CODE_HASH=<exact-deployed-git-sha>
 ```
 
 PAPER never requires exchange execution credentials. Use it for persistent runtime recovery, journaling, reconciliation logic, and forward-paper evidence. `mastertrd.live_node` constructs the canonical repository-owned PAPER runtime directly.
@@ -97,6 +114,8 @@ Set:
 ```text
 MASTERTRD_MODE=DEMO
 LIVE_TRADING_ENABLED=false
+MASTERTRD_CANDIDATE_MANIFEST=/absolute/path/to/approved-candidate.json
+MASTERTRD_BINANCE_PRODUCT=SPOT
 ```
 
 Populate only the `BINANCE_DEMO_*` credential set. Verify node preflight, exchange connectivity, reconciliation, and kill behavior. DEMO evidence cannot substitute for required TESTNET evidence when the Promotion Governor requires TESTNET.
@@ -108,6 +127,8 @@ Set:
 ```text
 MASTERTRD_MODE=TESTNET
 LIVE_TRADING_ENABLED=false
+MASTERTRD_CANDIDATE_MANIFEST=/absolute/path/to/approved-candidate.json
+MASTERTRD_BINANCE_PRODUCT=SPOT
 ```
 
 Populate only `BINANCE_TESTNET_API_KEY`, `BINANCE_TESTNET_API_SECRET`, and `BINANCE_TESTNET_ACCOUNT_ID`. The key must have no withdrawal permission. Run the manual **Testnet Smoke** workflow after the `testnet` GitHub Environment is configured.
@@ -131,6 +152,8 @@ Then set on the host, deliberately:
 MASTERTRD_MODE=LIVE
 LIVE_TRADING_ENABLED=true
 ORACLE_ENABLED=true
+MASTERTRD_CANDIDATE_MANIFEST=/absolute/path/to/governor-approved-live-candidate.json
+MASTERTRD_BINANCE_PRODUCT=SPOT
 ```
 
 The Oracle Deploy workflow will deploy an exact SHA but will **not** restart a LIVE service. After the owner review, start or restart it from the host:
