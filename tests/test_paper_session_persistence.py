@@ -44,6 +44,27 @@ def test_paper_session_survives_restart_without_losing_event_identity(tmp_path):
     assert report.completed is True
 
 
+def test_finalized_paper_session_persists_exact_nanosecond_end_boundary(tmp_path):
+    started = 10_000 * NANOSECOND + 17
+    ended = started + NANOSECOND + 234_567_890
+    path = tmp_path / "paper-session.json"
+    store = JsonPaperSessionStore(path)
+    journal = PaperSessionJournal(receipt(), code_hash="code-v1", started_ns=started)
+    journal.record_reconciliation(
+        "recon-exact-end",
+        ok=True,
+        timestamp_ns=started + 500_000_000,
+    )
+
+    journal.finalize(ended_ns=ended)
+    store.save(journal)
+    restored = store.load()
+
+    assert restored.finalized_report is not None
+    assert restored.ended_ns == ended
+    assert restored.finalized_report.duration_seconds == 1
+
+
 def test_corrupt_or_tampered_paper_session_state_fails_closed(tmp_path):
     path = tmp_path / "paper-session.json"
     store = JsonPaperSessionStore(path)
