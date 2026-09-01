@@ -234,6 +234,18 @@ def write_acceptance_json(
     return path
 
 
+def write_full_acceptance_json(output: Path, report: AcceptanceReport) -> Path:
+    """Write the complete receipt-backed V2 acceptance report as JSON."""
+
+    path = Path(output)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(asdict(report), indent=2, sort_keys=False) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def _md_cell(value: object) -> str:
     return str(value).replace("|", "\\|").replace("\n", " ")
 
@@ -494,10 +506,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run MasterTrd plan-closure acceptance checks")
     parser.add_argument("repo_root", nargs="?", default=".")
     parser.add_argument("--write", default="artifacts/acceptance.json")
+    parser.add_argument(
+        "--full-report",
+        action="store_true",
+        help="write the complete receipt-backed V2 acceptance report",
+    )
     args = parser.parse_args(argv)
 
     root = Path(args.repo_root)
     output = Path(args.write)
+    if args.full_report:
+        report = _report_from_environment(root)
+        if output.suffix.lower() in {".md", ".markdown"}:
+            write_acceptance_markdown(output, report)
+        else:
+            write_full_acceptance_json(output, report)
+        return 0 if report.implementation_status is AcceptanceStatus.PROCESS_READY else 1
+
     if output.suffix.lower() in {".md", ".markdown"}:
         report = _report_from_environment(root)
         write_acceptance_markdown(output, report)
