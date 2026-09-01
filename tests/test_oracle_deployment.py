@@ -1,7 +1,10 @@
 from pathlib import Path
 
+import pytest
 import yaml
 
+import mastertrd.oracle as oracle_module
+from mastertrd.genome import StrategyGenome
 from mastertrd.oracle import (
     OracleDeploymentSpec,
     render_bootstrap_script,
@@ -22,6 +25,27 @@ def spec() -> OracleDeploymentSpec:
         module="mastertrd.live_node",
         env_file="/etc/mastertrd/mastertrd.env",
     )
+
+
+def paper_candidate_manifest(*, code_hash: str = "code-v1", lock_hash: str = "lock-v1") -> dict[str, object]:
+    candidate = StrategyGenome(
+        strategy_id="R-oracle-paper",
+        family="trend",
+        style="day",
+        instruments=("BTCUSDT.BINANCE",),
+        timeframe="5m",
+        entry={"kind": "ema_cross", "fast_period": 8, "slow_period": 21, "trade_size": "0.01"},
+        exit={"kind": "cross_reverse"},
+    )
+    return {
+        "candidate": candidate.canonical_payload(),
+        "strategy_id": candidate.strategy_id,
+        "genome_hash": candidate.genome_hash,
+        "code_hash": code_hash,
+        "dataset_hash": "dataset-v1",
+        "lock_hash": lock_hash,
+        "recipe_id": "ema-cross-balanced",
+    }
 
 
 def test_oracle_adapter_is_dormant_and_never_embeds_secrets():
@@ -47,6 +71,47 @@ def test_oracle_env_template_matches_repository_owned_paper_runtime_contract():
     ):
         assert f"{name}=" in text
     assert "MASTERTRD_EXECUTION_FACTORY" not in text
+
+
+def test_oracle_paper_candidate_manifest_is_identity_bound_to_exact_source():
+    assert hasattr(oracle_module, "validate_paper_candidate_manifest")
+    validator = oracle_module.validate_paper_candidate_manifest
+    manifest = paper_candidate_manifest()
+
+    candidate = validator(
+        manifest,
+        expected_code_hash="code-v1",
+        expected_lock_hash="lock-v1",
+    )
+    assert candidate.strategy_id == "R-oracle-paper"
+    assert candidate.genome_hash == manifest["genome_hash"]
+
+    with pytest.raises(ValueError, match="code_hash"):
+        validator(manifest, expected_code_hash="wrong-code", expected_lock_hash="lock-v1")
+    with pytest.raises(ValueError, match="lock_hash"):
+        validator(manifest, expected_code_hash="code-v1", expected_lock_hash="wrong-lock")
+
+    wrong_identity = dict(manifest)
+    wrong_identity["genome_hash"] = "0" * 64
+    with pytest.raises(ValueError, match="genome_hash"):
+        validator(wrong_identity, expected_code_hash="code-v1", expected_lock_hash="lock-v1")
+
+
+def test_oracle_paper_candidate_manifest_rejects_multi_instrument_runtime_candidate():
+    assert hasattr(oracle_module, "validate_paper_candidate_manifest")
+    manifest = paper_candidate_manifest()
+    raw_candidate = dict(manifest["candidate"])
+    raw_candidate["instruments"] = ["BTCUSDT.BINANCE", "ETHUSDT.BINANCE"]
+    candidate = StrategyGenome(**raw_candidate)
+    manifest["candidate"] = candidate.canonical_payload()
+    manifest["genome_hash"] = candidate.genome_hash
+
+    with pytest.raises(ValueError, match="one instrument"):
+        oracle_module.validate_paper_candidate_manifest(
+            manifest,
+            expected_code_hash="code-v1",
+            expected_lock_hash="lock-v1",
+        )
 
 
 def test_systemd_unit_restarts_and_loads_protected_environment():
@@ -101,6 +166,8 @@ def test_oracle_deploy_workflow_is_manual_environment_gated_and_fail_closed():
     workflow = yaml.safe_load(text)
     triggers = workflow.get("on", workflow.get(True, {}))
     assert set(triggers) == {"workflow_dispatch"}
+    dispatch = triggers["workflow_dispatch"]
+    assert dispatch["inputs"]["paper_candidate_manifest_json"]["required"] is True
     assert workflow.get("permissions") == {"contents": "read"}
     jobs = workflow["jobs"]
     assert len(jobs) == 1
@@ -131,3 +198,12 @@ def test_oracle_deploy_checks_current_paper_inputs_not_deleted_factory_knob():
         "MASTERTRD_CODE_HASH",
     ):
         assert name in upper
+
+
+def test_oracle_deploy_installs_only_identity_checked_public_paper_candidate():
+    text = (ROOT / ".github" / "workflows" / "oracle-deploy.yml").read_text(encoding="utf-8")
+    assert "paper_candidate_manifest_json" in text
+    assert "validate_paper_candidate_manifest" in text
+    assert "/var/lib/mastertrd/paper-candidate.json" in text
+    assert "/var/lib/mastertrd/paper-session.json" in text
+    assert "LIVE_TRADING_ENABLED=false" in text
