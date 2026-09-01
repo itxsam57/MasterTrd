@@ -5,7 +5,8 @@ This runbook covers local development and the persistent Linux execution node. I
 ## Safety invariants
 
 - `LIVE_TRADING_ENABLED=false` is the default and must remain false for RESEARCH, BACKTEST, PAPER, DEMO, and TESTNET work.
-- `ORACLE_ENABLED=false` is the default. Oracle deployment is permitted only when both the GitHub Environment variable and `/etc/mastertrd/mastertrd.env` explicitly contain `ORACLE_ENABLED=true`.
+- `ORACLE_ENABLED=false` is the repository default. An Oracle deployment runs only when the protected GitHub Environment `oracle` explicitly has `ORACLE_ENABLED=true`; the deploy workflow configures `ORACLE_ENABLED=true` on the host only as part of an identity-checked PAPER deployment.
+- Oracle Deploy refuses automated host mutation or restart when the existing host is configured with `MASTERTRD_MODE=LIVE` or `LIVE_TRADING_ENABLED=true`.
 - Exchange API keys must never have withdrawal permission.
 - Exchange credentials, account state, balances, positions, and private payloads are never committed to git.
 - NautilusTrader remains the authoritative execution engine.
@@ -24,7 +25,7 @@ The repository is deployable without embedding any secret, but an actual Oracle 
 - Secret `ORACLE_SSH_KEY`: private SSH key used only by the deployment job.
 - Secret `ORACLE_KNOWN_HOSTS`: pinned OpenSSH known-hosts entry for that VM. Do not replace this with disabled host verification.
 
-The host itself requires `/etc/mastertrd/mastertrd.env`, owned by root and not stored in git. Set only the credentials required for the runtime mode being used. Relevant names are:
+The host keeps `/etc/mastertrd/mastertrd.env`, owned by root and never stored in git. Oracle Deploy updates only the non-secret PAPER runtime values it owns (`MASTERTRD_MODE`, `LIVE_TRADING_ENABLED`, `ORACLE_ENABLED`, the PAPER candidate/session paths, exact code hash, and deterministic PAPER controls). Existing exchange credential entries are preserved. Configure exchange credentials only when a later runtime mode actually requires them:
 
 - DEMO: `BINANCE_DEMO_API_KEY`, `BINANCE_DEMO_API_SECRET`, `BINANCE_DEMO_ACCOUNT_ID`.
 - TESTNET: `BINANCE_TESTNET_API_KEY`, `BINANCE_TESTNET_API_SECRET`, `BINANCE_TESTNET_ACCOUNT_ID`.
@@ -74,38 +75,44 @@ The canonical persistent node is a Linux host (Oracle free-tier adapter supporte
 
 - systemd unit `/etc/systemd/system/mastertrd.service` running `python -m mastertrd.live_node`;
 - external environment file `/etc/mastertrd/mastertrd.env`;
+- persistent PAPER state directory `/var/lib/mastertrd`;
 - health command `/usr/local/bin/mastertrd-health`;
 - logrotate policy `/etc/logrotate.d/mastertrd`;
 - bootstrap script with restart-on-failure and OS/architecture checks.
 
-The service uses `Restart=on-failure`, `NoNewPrivileges=true`, a restrictive umask, systemd filesystem protections, and journal output. Repository deployment never overwrites an existing host environment file.
+The service uses `Restart=on-failure`, `NoNewPrivileges=true`, a restrictive umask, systemd filesystem protections, journal output, and an explicit writable path for `/var/lib/mastertrd`. The bootstrap preserves an existing host environment file and its exchange credentials; Oracle Deploy changes only the validated non-secret PAPER keys described above.
 
-### Initial Oracle setup
+### Initial Oracle PAPER setup
 
-1. Create the GitHub Environment `oracle` and add the exact owner inputs above.
-2. Keep its `ORACLE_ENABLED` variable false until the VM address, SSH key, and pinned known-host entry are verified.
-3. On the VM, create/edit `/etc/mastertrd/mastertrd.env`. Start from the generated template, then set only the runtime flags and mode-specific credentials required for the chosen non-LIVE mode.
-4. Run and validate PAPER or DEMO first.
-5. Set the host file to `ORACLE_ENABLED=true` only after the preceding checks are complete.
-6. Set GitHub Environment variable `ORACLE_ENABLED=true` and manually dispatch **Oracle Deploy**. There is no schedule, push, or automatic LIVE deployment trigger.
+1. Create the protected GitHub Environment `oracle` and add the exact transport inputs listed under **Owner inputs**.
+2. Keep the Environment variable `ORACLE_ENABLED=false` until the VM address, SSH key, and pinned known-host entry are verified.
+3. Run **Autonomous Research** on the exact source SHA intended for deployment. Use only a genuine public-safe `PAPER` finalist manifest emitted by that exact run. The handoff contains strategy/genome/code/dataset/lock/recipe provenance but no exchange credential.
+4. Set the Environment variable `ORACLE_ENABLED=true` and manually dispatch **Oracle Deploy**, passing that exact manifest as `paper_candidate_manifest_json`. There is no scheduled or push-triggered Oracle deployment.
+5. Oracle Deploy recomputes the current `uv.lock` hash and rejects stale or mismatched strategy, genome, code, or dependency-lock identities. In particular, the manifest's `code_hash` must equal the workflow's exact `GITHUB_SHA`.
+6. If validation succeeds, the workflow installs only the canonical StrategyGenome payload at `/var/lib/mastertrd/paper-candidate.json`, configures `/var/lib/mastertrd/paper-session.json`, binds `MASTERTRD_CODE_HASH` to the deployed SHA, forces `MASTERTRD_MODE=PAPER` and `LIVE_TRADING_ENABLED=false`, then starts the service and runs `mastertrd-health`.
+7. Verify `mastertrd-health`, service status, and journal logs. Keep the node in PAPER while accumulating real forward evidence.
 
-The deploy workflow checks out the exact GitHub SHA, verifies `uv.lock`, installs from the lock, uses pinned SSH host trust, deploys the exact SHA, preserves the external host environment file, and runs `mastertrd-health` after a non-LIVE restart. It refuses an automated restart when `MASTERTRD_MODE=LIVE`.
+Oracle Deploy checks out the exact GitHub SHA, verifies `uv.lock`, installs from the lock, uses pinned SSH host trust, refuses a dirty tracked checkout, verifies the exact remote SHA, and never copies exchange credentials. If the existing host environment is LIVE-enabled, the workflow fails closed before automated mutation or restart.
+
+A PAPER manifest is SHA-bound. After any code merge that changes the deployable source SHA, do not reuse an older research manifest merely to make deployment pass. Run research on the new exact SHA and use a newly identity-bound PAPER finalist.
 
 ## Runtime modes
 
 ### PAPER
 
-Set:
+For Oracle Deploy, the workflow configures these values after identity validation:
 
 ```text
 MASTERTRD_MODE=PAPER
 LIVE_TRADING_ENABLED=false
-MASTERTRD_CANDIDATE_MANIFEST=/absolute/path/to/approved-candidate.json
+MASTERTRD_CANDIDATE_MANIFEST=/var/lib/mastertrd/paper-candidate.json
 MASTERTRD_SESSION_STATE=/var/lib/mastertrd/paper-session.json
 MASTERTRD_CODE_HASH=<exact-deployed-git-sha>
 ```
 
-PAPER never requires exchange execution credentials. Use it for persistent runtime recovery, journaling, reconciliation logic, and forward-paper evidence. `mastertrd.live_node` constructs the canonical repository-owned PAPER runtime directly.
+For a non-Oracle local PAPER process, equivalent absolute writable paths may be supplied manually.
+
+PAPER never requires exchange execution credentials. Use it for persistent runtime recovery, journaling, reconciliation logic, and forward-paper evidence. `mastertrd.live_node` constructs the canonical repository-owned PAPER runtime directly and consumes real Binance public market data unless an explicit deterministic fixture is configured.
 
 ### DEMO
 
@@ -156,7 +163,7 @@ MASTERTRD_CANDIDATE_MANIFEST=/absolute/path/to/governor-approved-live-candidate.
 MASTERTRD_BINANCE_PRODUCT=SPOT
 ```
 
-The Oracle Deploy workflow will deploy an exact SHA but will **not** restart a LIVE service. After the owner review, start or restart it from the host:
+**Oracle Deploy is not the LIVE deployment/start mechanism.** When the existing host is configured as LIVE or `LIVE_TRADING_ENABLED=true`, the workflow refuses automated mutation and restart. After the separate owner review, deploy/start LIVE only through the documented owner-controlled host procedure. To start or restart an already reviewed LIVE checkout from the host:
 
 ```bash
 sudo systemctl restart mastertrd.service
