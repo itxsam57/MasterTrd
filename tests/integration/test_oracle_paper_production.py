@@ -127,7 +127,7 @@ def test_paper_factory_recovers_finalized_current_session_before_starting_a_new_
     assert JsonPaperSessionStore(history_path).load().finalized_report == stranded_report
 
 
-def test_rotation_request_waits_for_authoritative_flat_execution_state():
+def test_rotation_request_waits_for_authoritative_flat_execution_state(tmp_path):
     receipt = PaperStartReceipt(
         strategy_id="paper-flat-boundary",
         genome_hash="a" * 64,
@@ -138,7 +138,7 @@ def test_rotation_request_waits_for_authoritative_flat_execution_state():
         connected=True,
     )
     journal = PaperSessionJournal(receipt, code_hash="code-flat", started_ns=START_NS)
-    store = JsonPaperSessionStore("/tmp/mastertrd-test-flat-session.json")
+    store = JsonPaperSessionStore(tmp_path / "flat-session.json")
     state = {
         "value": ExecutionState(
             account_id="paper:paper-flat-session",
