@@ -160,6 +160,7 @@ jobs:
               MASTERTRD_CANDIDATE_MANIFEST="$PWD/artifacts/consumer-release-smoke/candidate.json" \
               MASTERTRD_SESSION_STATE="$PWD/artifacts/consumer-release-smoke/paper-session.json" \
               MASTERTRD_CODE_HASH="$GITHUB_SHA" \
+              MASTERTRD_TRADE_SIZE='0.01000' \
               MASTERTRD_PUBLIC_FEED_FIXTURE="$PWD/artifacts/consumer-release-smoke/feed.jsonl" \
               MASTERTRD_PAPER_START_NS=1 \
               uv run python -m mastertrd.live_node 2>&1
