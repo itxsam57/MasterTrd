@@ -144,11 +144,12 @@ def fixture_binance_spot_instrument(instrument_id: str):
 
 
 def _build_public_binance_spot_provider():
-    """Build Nautilus's credential-free LIVE spot instrument provider.
+    """Build Nautilus's credential-free spot instrument provider for research.
 
-    Binance exchange-info is public. Explicit ``None`` credentials ensure this
-    path cannot accidentally authenticate or depend on account secrets while it
-    loads the venue's current price/size precision and trading filters.
+    The Binance market-data-only endpoint exposes public exchange information
+    without account credentials and avoids coupling public research metadata to
+    the geo-restricted trading API. Nautilus still owns instrument parsing and
+    validation of price/size precision and trading filters.
     """
 
     from nautilus_trader.adapters.binance.common.enums import BinanceAccountType
@@ -165,6 +166,7 @@ def _build_public_binance_spot_provider():
         account_type=account_type,
         api_key=None,
         api_secret=None,
+        base_url="https://data-api.binance.vision",
         environment=environment,
     )
     return BinanceSpotInstrumentProvider(
