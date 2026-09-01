@@ -32,6 +32,30 @@ def test_operations_runbook_covers_every_runtime_and_emergency_path():
     assert "mastertrd-health" in text
 
 
+def test_operations_runbook_describes_identity_bound_oracle_paper_handoff():
+    text = (ROOT / "docs" / "OPERATIONS.md").read_text(encoding="utf-8")
+    for value in (
+        "paper_candidate_manifest_json",
+        "/var/lib/mastertrd/paper-candidate.json",
+        "/var/lib/mastertrd/paper-session.json",
+        "MASTERTRD_CODE_HASH",
+        "Autonomous Research",
+        "GITHUB_SHA",
+    ):
+        assert value in text
+    assert "MASTERTRD_EXECUTION_FACTORY" not in text
+    assert "do not reuse an older research manifest" in text.lower()
+
+
+def test_operations_runbook_keeps_oracle_live_activation_owner_controlled():
+    text = (ROOT / "docs" / "OPERATIONS.md").read_text(encoding="utf-8")
+    lower = text.lower()
+    assert "oracle deploy is not the live deployment/start mechanism" in lower
+    assert "refuses automated host mutation or restart" in lower
+    assert "LIVE_TRADING_ENABLED=false" in text
+    assert "LIVE_TRADING_ENABLED=true" in text
+
+
 def test_operations_runbook_keeps_vercel_out_of_persistent_execution():
     text = (ROOT / "docs" / "OPERATIONS.md").read_text(encoding="utf-8").lower()
     assert "vercel" in text
