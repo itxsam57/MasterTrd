@@ -64,6 +64,7 @@ class ResearchBrainConfig:
     evolution_population: int
     validation_budget: int
     paper_queue_cap: int
+    recipe_ids: tuple[str, ...] = ()
     hidden_fraction: float = 0.20
     trade_size: str = "0.01000"
     starting_balances: tuple[str, ...] = ("100000 USDT",)
@@ -113,6 +114,17 @@ class ResearchBrainConfig:
     def __post_init__(self) -> None:
         if not self.families or not self.instruments:
             raise ValueError("research families and instruments are required")
+        if len(set(self.recipe_ids)) != len(self.recipe_ids):
+            raise ValueError("recipe_ids must be unique")
+        if self.recipe_ids:
+            from .strategy_universe import RecipeReadiness, strategy_recipe
+
+            for recipe_id in self.recipe_ids:
+                recipe = strategy_recipe(recipe_id)
+                if recipe.family not in self.families:
+                    raise ValueError("recipe family must be configured")
+                if recipe.readiness is not RecipeReadiness.EXECUTABLE:
+                    raise ValueError("research recipe must be executable")
         if self.seed_stop <= self.seed_start:
             raise ValueError("seed_stop must be greater than seed_start")
         if self.optimization_trials <= 0:
@@ -317,7 +329,6 @@ def evaluate_research_specialist_candidate(
     }
 
 
-
 def run_research_specialist_stage(
     validated_outcomes: Sequence[Mapping[str, Any]],
     *,
@@ -344,6 +355,7 @@ def run_research_specialist_stage(
         outcome["genome"] = genome_payload
         outcomes.append(outcome)
     return {"outcomes": outcomes}
+
 
 def _parameter_space(genome: StrategyGenome) -> dict[str, object]:
     space: dict[str, object] = {}
