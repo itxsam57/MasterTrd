@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from mastertrd.acceptance import (
@@ -11,6 +12,7 @@ from mastertrd.acceptance import (
     run_full_acceptance,
     write_acceptance_markdown,
 )
+from mastertrd.capability_matrix import MANDATORY_V2_CAPABILITIES, CapabilityCheck
 
 
 def _repo_fixture(tmp_path: Path) -> Path:
@@ -28,7 +30,41 @@ def _suites() -> tuple[AcceptanceSuiteResult, ...]:
     )
 
 
-def test_markdown_report_records_identity_status_and_owner_blocker(tmp_path: Path) -> None:
+def _capability_checks() -> tuple[CapabilityCheck, ...]:
+    return tuple(
+        CapabilityCheck(capability, True, f"verified:{capability}", None)
+        for capability in MANDATORY_V2_CAPABILITIES
+    )
+
+
+def _set_full_acceptance_receipts(monkeypatch) -> None:
+    monkeypatch.setenv("MASTERTRD_ACCEPTANCE_LOCKED_INSTALL", "PASS")
+    monkeypatch.setenv("MASTERTRD_ACCEPTANCE_CUMULATIVE_TESTS_AND_COVERAGE", "PASS")
+    monkeypatch.setenv("MASTERTRD_ACCEPTANCE_PUBLIC_REPO_SAFETY", "PASS")
+    monkeypatch.setenv("MASTERTRD_ACCEPTANCE_CLEAN_CHECKOUT", "PASS")
+    monkeypatch.setenv("MASTERTRD_ACCEPTANCE_RISK_REVIEW", "PASS")
+    monkeypatch.setenv("MASTERTRD_ACCEPTANCE_RECONCILIATION_TEST", "PASS")
+    monkeypatch.setenv("MASTERTRD_ACCEPTANCE_KILL_SWITCH_TEST", "PASS")
+    monkeypatch.setenv("MASTERTRD_ACCEPTANCE_TESTNET_SMOKE", "BLOCKED_OWNER_INPUT")
+    for env_name in (
+        "MASTERTRD_CAPABILITY_FAMILY_COVERAGE",
+        "MASTERTRD_CAPABILITY_EXECUTABLE_STRATEGY_SEMANTICS",
+        "MASTERTRD_CAPABILITY_MULTILEG_OPTIONS_EXECUTION",
+        "MASTERTRD_CAPABILITY_HFT_EXECUTION",
+        "MASTERTRD_CAPABILITY_RISK_STATE_OWNERSHIP",
+        "MASTERTRD_CAPABILITY_PERSISTENT_RUNTIME",
+        "MASTERTRD_CAPABILITY_FORWARD_PAPER_LIFECYCLE",
+        "MASTERTRD_CAPABILITY_SPECIALIST_RESEARCH_BRAIN",
+        "MASTERTRD_CAPABILITY_CANDIDATE_BOUND_TESTNET_INTERFACE",
+        "MASTERTRD_CAPABILITY_SECURITY",
+        "MASTERTRD_CAPABILITY_REPRODUCIBILITY",
+        "MASTERTRD_CAPABILITY_DEPLOYMENT_ARTIFACTS",
+    ):
+        monkeypatch.setenv(env_name, "PASS")
+    monkeypatch.delenv("MASTERTRD_PROMOTION_GOVERNOR_ALLOWED", raising=False)
+
+
+def test_markdown_report_records_identity_status_matrix_and_owner_blocker(tmp_path: Path) -> None:
     root = _repo_fixture(tmp_path)
     probes = (
         AcceptanceProbe("risk_review", ProbeStatus.PASS, "passed"),
@@ -47,6 +83,7 @@ def test_markdown_report_records_identity_status_and_owner_blocker(tmp_path: Pat
         dataset_fixtures=("deterministic_bar_fixture", "real_l2_integrity_fixture"),
         engine_versions={"python": "3.13", "nautilus-trader": "1.231.0"},
         probes=probes,
+        capability_checks=_capability_checks(),
         promotion_governor_allowed=False,
     )
     output = tmp_path / "ACCEPTANCE_REPORT.md"
@@ -60,6 +97,9 @@ def test_markdown_report_records_identity_status_and_owner_blocker(tmp_path: Pat
     assert f"`{report.lock_hash}`" in text
     assert "Implementation status: `PROCESS_READY`" in text
     assert "LIVE eligible: `false`" in text
+    assert "V2 mandatory capability matrix" in text
+    assert "family_coverage" in text
+    assert "verified:family_coverage" in text
     assert "testnet_smoke" in text
     assert "BLOCKED_OWNER_INPUT" in text
     assert "LIVE remains disabled" in text
@@ -72,15 +112,7 @@ def test_markdown_cli_uses_verified_receipts_and_never_promotes_blocked_testnet(
     root = _repo_fixture(tmp_path)
     output = tmp_path / "ACCEPTANCE_REPORT.md"
     monkeypatch.setenv("GITHUB_SHA", "b" * 40)
-    monkeypatch.setenv("MASTERTRD_ACCEPTANCE_LOCKED_INSTALL", "PASS")
-    monkeypatch.setenv("MASTERTRD_ACCEPTANCE_CUMULATIVE_TESTS_AND_COVERAGE", "PASS")
-    monkeypatch.setenv("MASTERTRD_ACCEPTANCE_PUBLIC_REPO_SAFETY", "PASS")
-    monkeypatch.setenv("MASTERTRD_ACCEPTANCE_CLEAN_CHECKOUT", "PASS")
-    monkeypatch.setenv("MASTERTRD_ACCEPTANCE_RISK_REVIEW", "PASS")
-    monkeypatch.setenv("MASTERTRD_ACCEPTANCE_RECONCILIATION_TEST", "PASS")
-    monkeypatch.setenv("MASTERTRD_ACCEPTANCE_KILL_SWITCH_TEST", "PASS")
-    monkeypatch.setenv("MASTERTRD_ACCEPTANCE_TESTNET_SMOKE", "BLOCKED_OWNER_INPUT")
-    monkeypatch.delenv("MASTERTRD_PROMOTION_GOVERNOR_ALLOWED", raising=False)
+    _set_full_acceptance_receipts(monkeypatch)
 
     exit_code = main([str(root), "--write", str(output)])
 
@@ -88,6 +120,32 @@ def test_markdown_cli_uses_verified_receipts_and_never_promotes_blocked_testnet(
     text = output.read_text(encoding="utf-8")
     assert "Implementation status: `PROCESS_READY`" in text
     assert "LIVE eligible: `false`" in text
+    assert "family_coverage" in text
+    assert "verified by receipt MASTERTRD_CAPABILITY_FAMILY_COVERAGE" in text
     assert "testnet_smoke" in text
     assert "BLOCKED_OWNER_INPUT" in text
     assert "b" * 40 in text
+
+
+def test_full_json_cli_records_exact_v2_matrix_and_blocked_live_state(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = _repo_fixture(tmp_path)
+    output = tmp_path / "acceptance.json"
+    monkeypatch.setenv("GITHUB_SHA", "c" * 40)
+    _set_full_acceptance_receipts(monkeypatch)
+
+    exit_code = main([str(root), "--full-report", "--write", str(output)])
+
+    assert exit_code == 0
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["commit_sha"] == "c" * 40
+    assert payload["implementation_status"] == "PROCESS_READY"
+    assert payload["live_eligible"] is False
+    assert [check["capability"] for check in payload["capability_checks"]] == list(
+        MANDATORY_V2_CAPABILITIES
+    )
+    assert all(check["passed"] is True for check in payload["capability_checks"])
+    testnet_probe = next(probe for probe in payload["probes"] if probe["name"] == "testnet_smoke")
+    assert testnet_probe["status"] == "BLOCKED_OWNER_INPUT"
