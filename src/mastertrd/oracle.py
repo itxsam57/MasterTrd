@@ -96,6 +96,10 @@ LIVE_TRADING_ENABLED=false
 ORACLE_ENABLED=false
 MASTERTRD_CANDIDATE_MANIFEST=/var/lib/mastertrd/paper-candidate.json
 MASTERTRD_SESSION_STATE=/var/lib/mastertrd/paper-session.json
+MASTERTRD_PAPER_ARCHIVE=/var/lib/mastertrd/paper/reports.json
+MASTERTRD_PAPER_HISTORY_DIR=/var/lib/mastertrd/paper/sessions
+MASTERTRD_PAPER_ROTATION_REQUEST=/var/lib/mastertrd/paper/rotate.request
+MASTERTRD_PAPER_ROTATE_AFTER_SECONDS=86400
 MASTERTRD_CODE_HASH=
 MASTERTRD_PUBLIC_FEED_FIXTURE=
 MASTERTRD_SESSION_NONCE=
@@ -195,7 +199,7 @@ apt-get update
 apt-get install -y python3 python3-venv git curl logrotate ca-certificates
 
 id -u {spec.service_user} >/dev/null 2>&1 || useradd --system --home {spec.app_dir} --shell /usr/sbin/nologin {spec.service_user}
-mkdir -p {spec.app_dir} /etc/mastertrd /var/lib/mastertrd /var/log/mastertrd
+mkdir -p {spec.app_dir} /etc/mastertrd /var/lib/mastertrd /var/lib/mastertrd/paper /var/log/mastertrd
 chown -R {spec.service_user}:{spec.service_user} {spec.app_dir} /var/lib/mastertrd /var/log/mastertrd
 
 if [[ ! -f {spec.env_file} ]]; then
@@ -215,6 +219,77 @@ cat > /usr/local/bin/mastertrd-health <<'MASTERTRD_HEALTH'
 MASTERTRD_HEALTH
 chmod 755 /usr/local/bin/mastertrd-health
 
+cat > /usr/local/bin/mastertrd-paper-rotate-request <<'MASTERTRD_ROTATE_REQUEST'
+#!/usr/bin/env bash
+set -euo pipefail
+ENV_FILE={spec.env_file}
+[[ -r "$ENV_FILE" ]] || exit 0
+
+mode="$(awk -F= '$1=="MASTERTRD_MODE" {{print $2}}' "$ENV_FILE" | tail -n1)"
+live="$(awk -F= '$1=="LIVE_TRADING_ENABLED" {{print $2}}' "$ENV_FILE" | tail -n1)"
+[[ "${{mode^^}}" == "PAPER" ]] || exit 0
+[[ "${{live,,}}" != "true" ]] || exit 0
+
+state_path="$(awk -F= '$1=="MASTERTRD_SESSION_STATE" {{print substr($0, index($0, "=") + 1)}}' "$ENV_FILE" | tail -n1)"
+request_path="$(awk -F= '$1=="MASTERTRD_PAPER_ROTATION_REQUEST" {{print substr($0, index($0, "=") + 1)}}' "$ENV_FILE" | tail -n1)"
+rotate_after="$(awk -F= '$1=="MASTERTRD_PAPER_ROTATE_AFTER_SECONDS" {{print $2}}' "$ENV_FILE" | tail -n1)"
+[[ -n "$state_path" && -n "$request_path" ]] || exit 0
+case "$rotate_after" in
+  ''|*[!0-9]*) exit 0 ;;
+esac
+(( rotate_after > 0 )) || exit 0
+[[ -f "$state_path" ]] || exit 0
+
+started_ns="$({spec.python_bin} - "$state_path" <<'MASTERTRD_ROTATE_PY'
+import sys
+from mastertrd.paper_session import JsonPaperSessionStore
+
+journal = JsonPaperSessionStore(sys.argv[1]).load()
+if journal.finalized_report is None:
+    print(journal.started_ns)
+MASTERTRD_ROTATE_PY
+)"
+[[ -n "$started_ns" ]] || exit 0
+now_ns="$(date +%s%N)"
+(( now_ns >= started_ns )) || exit 0
+elapsed_seconds=$(( (now_ns - started_ns) / 1000000000 ))
+(( elapsed_seconds >= rotate_after )) || exit 0
+
+if [[ ! -e "$request_path" ]]; then
+  install -o {spec.service_user} -g {spec.service_user} -m 600 /dev/null "$request_path"
+fi
+MASTERTRD_ROTATE_REQUEST
+chmod 755 /usr/local/bin/mastertrd-paper-rotate-request
+
+cat > /etc/systemd/system/mastertrd-paper-rotate.service <<'MASTERTRD_ROTATE_SERVICE'
+[Unit]
+Description=Request MasterTrd in-process PAPER evidence rotation
+After=mastertrd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mastertrd-paper-rotate-request
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/mastertrd
+MASTERTRD_ROTATE_SERVICE
+
+cat > /etc/systemd/system/mastertrd-paper-rotate.timer <<'MASTERTRD_ROTATE_TIMER'
+[Unit]
+Description=Check whether MasterTrd PAPER evidence window should rotate
+
+[Timer]
+OnBootSec=1m
+OnUnitActiveSec=1m
+Persistent=true
+Unit=mastertrd-paper-rotate.service
+
+[Install]
+WantedBy=timers.target
+MASTERTRD_ROTATE_TIMER
+
 cat > /etc/logrotate.d/mastertrd <<'MASTERTRD_LOGROTATE'
 {logrotate}
 MASTERTRD_LOGROTATE
@@ -222,9 +297,11 @@ chmod 644 /etc/logrotate.d/mastertrd
 
 systemctl daemon-reload
 systemctl enable mastertrd.service
+systemctl enable --now mastertrd-paper-rotate.timer
 
 echo "Oracle adapter installed with safe defaults."
 echo "The host environment file is preserved on repeat runs; repository deployment never overwrites credentials."
+echo "PAPER evidence rotation is requested in-process and never restarts the execution engine."
 echo "Use the identity-checked Oracle Deploy workflow to configure and start PAPER."
 '''
 
