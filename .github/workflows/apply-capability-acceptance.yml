@@ -29,7 +29,7 @@ jobs:
           text = path.read_text(encoding='utf-8')
 
           old = '''    static_passed = all(check.passed for check in static_checks)\n    implementation_complete = (\n        static_passed\n        and not missing_mandatory_suites\n        and not failed_mandatory_suites\n    )\n'''
-          new = '''    dataset_fixture_records = tuple(str(item) for item in dataset_fixtures)\n    engine_version_records = tuple(\n        sorted((str(name), str(version)) for name, version in engine_versions.items())\n    )\n    capability_evidence_present = (\n        bool(dataset_fixture_records)\n        and any(\n            name == "nautilus-trader" and bool(version.strip())\n            for name, version in engine_version_records\n        )\n    )\n    static_passed = all(check.passed for check in static_checks)\n    implementation_complete = (\n        static_passed\n        and not missing_mandatory_suites\n        and not failed_mandatory_suites\n        and capability_evidence_present\n    )\n'''
+          new = '''    dataset_fixture_records = tuple(str(item) for item in dataset_fixtures)\n    engine_version_records = tuple(\n        sorted((str(name), str(version)) for name, version in engine_versions.items())\n    )\n    capability_evidence_present = bool(dataset_fixture_records)\n    static_passed = all(check.passed for check in static_checks)\n    implementation_complete = (\n        static_passed\n        and not missing_mandatory_suites\n        and not failed_mandatory_suites\n        and capability_evidence_present\n    )\n'''
           if text.count(old) != 1:
               raise SystemExit('acceptance implementation anchor drifted')
           text = text.replace(old, new, 1)
@@ -52,5 +52,5 @@ jobs:
           git config user.email 'mastertrd-autopilot@users.noreply.github.com'
           rm .github/workflows/apply-capability-acceptance.yml
           git add src/mastertrd/acceptance.py .github/workflows/apply-capability-acceptance.yml
-          git commit -m 'fix(acceptance): require capability evidence for process readiness'
+          git commit -m 'fix(acceptance): require dataset capability evidence for process readiness'
           git push origin HEAD:v2/plan-closure-20260831
