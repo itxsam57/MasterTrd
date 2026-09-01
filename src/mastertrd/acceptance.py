@@ -72,6 +72,7 @@ class AcceptanceReport:
     probes: tuple[AcceptanceProbe, ...]
     missing_mandatory_suites: tuple[str, ...]
     failed_mandatory_suites: tuple[str, ...]
+    missing_mandatory_capabilities: tuple[str, ...]
     missing_live_evidence: tuple[str, ...]
     owner_input_blockers: tuple[str, ...]
     promotion_governor_allowed: bool
@@ -126,13 +127,15 @@ def run_full_acceptance(
     engine_version_records = tuple(
         sorted((str(name), str(version)) for name, version in engine_versions.items())
     )
-    capability_evidence_present = bool(dataset_fixture_records)
+    missing_mandatory_capabilities = (
+        () if dataset_fixture_records else ("dataset_fixture_evidence",)
+    )
     static_passed = all(check.passed for check in static_checks)
     implementation_complete = (
         static_passed
         and not missing_mandatory_suites
         and not failed_mandatory_suites
-        and capability_evidence_present
+        and not missing_mandatory_capabilities
     )
 
     missing_live_evidence = tuple(
@@ -166,6 +169,7 @@ def run_full_acceptance(
         probes=probe_results,
         missing_mandatory_suites=missing_mandatory_suites,
         failed_mandatory_suites=failed_mandatory_suites,
+        missing_mandatory_capabilities=missing_mandatory_capabilities,
         missing_live_evidence=missing_live_evidence,
         owner_input_blockers=owner_input_blockers,
         promotion_governor_allowed=bool(promotion_governor_allowed),
@@ -219,6 +223,15 @@ def write_acceptance_markdown(output: Path, report: AcceptanceReport) -> Path:
         else:
             result = "PASS" if suite.passed else "FAIL"
             lines.append(f"| `{name}` | `{result}` | {_md_cell(suite.detail)} |")
+
+    lines.extend(["", "## Mandatory capability evidence", ""])
+    if report.missing_mandatory_capabilities:
+        lines.extend(
+            f"- `{name}`: `MISSING`"
+            for name in report.missing_mandatory_capabilities
+        )
+    else:
+        lines.append("- `dataset_fixture_evidence`: `PASS`")
 
     lines.extend(
         [
