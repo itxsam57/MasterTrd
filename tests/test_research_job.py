@@ -137,7 +137,7 @@ def test_read_verified_public_archive_uses_checksum_and_download(monkeypatch, tm
     assert calls["url"] == "https://data.example/file.zip"
     assert calls["destination"] == tmp_path / "file.zip"
     assert calls["expected_sha256"] == checksum
-    assert calls["symbol"] == "BTCUSDT.BINANCE"
+    assert calls["symbol"] == "BTCUSDT"
     assert calls["interval"] == "1h"
 
 
