@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from mastertrd.contracts import MarketBar
 from mastertrd.genome import StrategyGenome
 from mastertrd.research.generator import generate_candidate
-from mastertrd.research.screen import screen_genome
+from mastertrd.research.screen import _single_leg_signals, screen_genome
 
 
 def _bars(instrument: str, count: int = 180) -> list[MarketBar]:
@@ -49,6 +49,83 @@ def _bars_from_closes(instrument: str, closes: list[float]) -> list[MarketBar]:
         )
         previous = close
     return bars
+
+
+class _CountingBar:
+    """Count real price-field reads without using a wall-clock benchmark."""
+
+    def __init__(self, bar: MarketBar, counter: list[int]) -> None:
+        self._bar = bar
+        self._counter = counter
+
+    def _read(self, name: str) -> float:
+        self._counter[0] += 1
+        return float(getattr(self._bar, name))
+
+    @property
+    def close(self) -> float:
+        return self._read("close")
+
+    @property
+    def high(self) -> float:
+        return self._read("high")
+
+    @property
+    def low(self) -> float:
+        return self._read("low")
+
+
+def _single_leg_price_reads(genome: StrategyGenome, bars: list[MarketBar]) -> int:
+    counter = [0]
+    counted = tuple(_CountingBar(bar, counter) for bar in bars)
+    _single_leg_signals(genome, counted)
+    return counter[0]
+
+
+def _assert_near_linear_price_reads(genome: StrategyGenome, closes: list[float]) -> None:
+    midpoint = len(closes) // 2
+    small = _bars_from_closes(genome.instruments[0], closes[:midpoint])
+    large = _bars_from_closes(genome.instruments[0], closes)
+    small_reads = _single_leg_price_reads(genome, small)
+    large_reads = _single_leg_price_reads(genome, large)
+
+    # Doubling a history may do a little more fixed-window work, but must not
+    # approach the ~4x field-read growth of the old full-prefix hot loop.
+    assert large_reads <= small_reads * 2.5
+
+
+def test_rsi_screen_history_work_scales_near_linearly():
+    instrument = "ETHUSDT"
+    genome = StrategyGenome(
+        strategy_id="screen-rsi-complexity",
+        family="momentum",
+        style="intraday",
+        instruments=(instrument,),
+        timeframe="5m",
+        entry={"type": "rsi_momentum", "period": 14, "threshold": 101},
+        exit={"type": "atr_bracket", "stop_atr": 2.0, "target_atr": 3.0},
+        allow_short=False,
+    )
+    closes = [100.0 + (index % 9) * 0.1 for index in range(480)]
+
+    _assert_near_linear_price_reads(genome, closes)
+
+
+def test_donchian_screen_history_work_scales_near_linearly():
+    instrument = "ETHUSDT"
+    genome = StrategyGenome(
+        strategy_id="screen-donchian-complexity",
+        family="breakout",
+        style="intraday",
+        instruments=(instrument,),
+        timeframe="5m",
+        entry={"type": "donchian_breakout", "window": 55},
+        exit={"type": "atr_bracket", "stop_atr": 2.0, "target_atr": 3.0},
+        allow_short=False,
+    )
+    closes = [100.0 + (0.05 if index % 2 else 0.0) for index in range(480)]
+
+    _assert_near_linear_price_reads(genome, closes)
 
 
 def test_screen_result_keeps_original_genome_hash_and_uses_shared_signals():
