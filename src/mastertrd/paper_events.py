@@ -16,6 +16,23 @@ class NautilusPaperEventSink:
     def closed_positions(self) -> int:
         return self._closed_positions
 
+    def bind_journal(self, journal: PaperSessionJournal) -> None:
+        """Move evidence recording to a fresh window without replacing Nautilus."""
+        if not isinstance(journal, PaperSessionJournal):
+            raise TypeError("journal must be a PaperSessionJournal")
+        current = self._journal
+        if journal.strategy_id != current.strategy_id:
+            raise ValueError("paper event journal strategy identity changed")
+        if journal.genome_hash != current.genome_hash:
+            raise ValueError("paper event journal genome identity changed")
+        if journal.code_hash != current.code_hash:
+            raise ValueError("paper event journal code identity changed")
+        if journal.session_id == current.session_id:
+            raise ValueError("paper event journal rotation requires a new session identity")
+        if journal.finalized_report is not None:
+            raise ValueError("paper event journal cannot bind to a finalized session")
+        self._journal = journal
+
     def on_position_closed(self, event) -> None:
         from nautilus_trader.model.events import PositionClosed
 
