@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from mastertrd.nautilus_evaluation import run_binance_spot_evaluation
 from mastertrd.research_brain import (
     ResearchBrainConfig,
     generate_research_candidates,
@@ -84,6 +85,27 @@ def test_named_stat_arb_recipe_uses_the_existing_multi_leg_universe_contract() -
     assert batch.candidates
     assert {candidate.style for candidate in batch.candidates} == {"recipe:pairs-cointegration-balanced"}
     assert all(len(candidate.instruments) == 2 for candidate in batch.candidates)
+
+
+def test_multi_leg_recipe_cannot_be_proxied_through_single_instrument_nautilus_wrapper() -> None:
+    from nautilus_trader.test_kit.providers import TestInstrumentProvider
+
+    btc = TestInstrumentProvider.btcusdt_binance()
+    eth = TestInstrumentProvider.ethusdt_binance()
+    candidate = compile_strategy_recipe(
+        "pairs-cointegration-balanced",
+        instruments=(btc.id.value, eth.id.value),
+        seed=23,
+    )
+
+    with pytest.raises(ValueError, match="missing instrument metadata"):
+        run_binance_spot_evaluation(
+            genome=candidate,
+            instrument=btc,
+            data=(),
+            dataset_hash="multi-leg-proxy-regression",
+            code_hash="strategy-universe-v1",
+        )
 
 
 def test_recipe_identity_survives_the_research_specialist_stage() -> None:
