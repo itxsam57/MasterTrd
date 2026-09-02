@@ -1,5 +1,7 @@
 import json
 
+from websockets.exceptions import ConnectionClosedError
+
 from mastertrd.binance_stream import (
     BinancePublicBookTickerSource,
     BinancePublicMarketSource,
@@ -138,6 +140,43 @@ def test_book_ticker_source_reconnects_with_backoff_and_keeps_update_identity():
     assert [event.event_id for event in events] == [
         "binance-book:BTCUSDT:20",
         "binance-book:BTCUSDT:21",
+    ]
+    assert sleeps == [0.25]
+
+
+def test_book_ticker_source_reconnects_on_websocket_connection_closed_error():
+    connections = iter(
+        [
+            FakeConnection(
+                [
+                    combined("ETHUSDT", 40, "2100", "2102"),
+                    ConnectionClosedError(None, None),
+                ]
+            ),
+            FakeConnection(
+                [
+                    combined("ETHUSDT", 40, "2100", "2102"),
+                    combined("ETHUSDT", 41, "2103", "2105"),
+                ]
+            ),
+        ]
+    )
+    sleeps: list[float] = []
+    times = iter([1_700_150_000.0, 1_700_150_001.0])
+    source = BinancePublicBookTickerSource(
+        ("ETHUSDT.BINANCE",),
+        connector=lambda _uri: next(connections),
+        clock=lambda: next(times),
+        sleep=lambda seconds: sleeps.append(seconds),
+        reconnect_backoff_seconds=(0.25, 0.5),
+        max_reconnect_attempts=1,
+    )
+
+    events = list(MarketStream(source))
+
+    assert [event.event_id for event in events] == [
+        "binance-book:ETHUSDT:40",
+        "binance-book:ETHUSDT:41",
     ]
     assert sleeps == [0.25]
 
