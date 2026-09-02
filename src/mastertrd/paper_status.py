@@ -1,0 +1,60 @@
+from __future__ import annotations
+
+import argparse
+import json
+import time
+
+from mastertrd.paper_session import JsonPaperSessionStore, PaperSessionJournal
+
+
+def paper_status_payload(
+    journal: PaperSessionJournal,
+    *,
+    observed_ns: int,
+) -> dict[str, object]:
+    observed_ns = int(observed_ns)
+    if observed_ns < journal.started_ns:
+        raise ValueError("observed_ns cannot be before session start")
+    if observed_ns < journal.latest_timestamp_ns:
+        raise ValueError("observed_ns cannot be before the latest session event")
+
+    trade_returns = [float(event.value) for event in journal._events if event.kind == "closed_trade"]
+    reconciliation = [bool(event.value) for event in journal._events if event.kind == "reconciliation"]
+    market_events = sum(1 for event in journal._events if event.kind == "market_event")
+
+    equity = 1.0
+    peak = 1.0
+    max_drawdown = 0.0
+    for value in trade_returns:
+        equity *= 1.0 + value
+        peak = max(peak, equity)
+        if peak > 0.0:
+            max_drawdown = max(max_drawdown, (peak - equity) / peak)
+
+    execution_state = journal.execution_state_checkpoint
+    return {
+        "schema_version": 1,
+        "strategy_id": journal.strategy_id,
+        "genome_hash": journal.genome_hash,
+        "code_hash": journal.code_hash,
+        "session_id": journal.session_id,
+        "duration_seconds": (observed_ns - journal.started_ns) // 1_000_000_000,
+        "market_events": market_events,
+        "closed_trades": len(trade_returns),
+        "total_return": equity - 1.0,
+        "max_drawdown": max_drawdown,
+        "reconciliation_checks": len(reconciliation),
+        "reconciliation_errors": sum(1 for ok in reconciliation if not ok),
+        "position_count": 0 if execution_state is None else len(execution_state.positions),
+        "open_order_count": 0 if execution_state is None else len(execution_state.open_order_ids),
+        "latest_timestamp_ns": journal.latest_timestamp_ns,
+        "finalized": journal.finalized_report is not None,
+    }
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Emit a sanitized read-only PAPER runtime status snapshot")
+    parser.add_argument("--session-state", required=True)
+    args = parser.parse_args()
+    journal = JsonPaperSessionStore(args.session_state).load()
+    print(json.dumps(paper_status_payload(journal, observed_ns=time.time_ns()), sort_keys=True))
