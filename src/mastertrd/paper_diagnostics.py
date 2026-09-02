@@ -22,7 +22,7 @@ _FAILURE_MARKERS = (
 
 
 def _safe_frame(path: str, line: str, function: str) -> dict[str, object] | None:
-    normalized = path.replace("\\", "/")
+    normalized = re.sub(r"/+", "/", path.replace("\\", "/"))
     marker = "/src/mastertrd/"
     if marker in normalized:
         relative = "mastertrd/" + normalized.split(marker, 1)[1]
