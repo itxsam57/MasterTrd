@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+import importlib
+from pathlib import Path
+
+from mastertrd.paper_evidence import PaperStartReceipt
+from mastertrd.paper_session import PaperSessionJournal
+from mastertrd.reconciliation import ExecutionState
+
+
+NANOSECOND = 1_000_000_000
+
+
+def _receipt() -> PaperStartReceipt:
+    return PaperStartReceipt(
+        strategy_id="S-paper-status",
+        genome_hash="a" * 64,
+        session_id="paper-status-session",
+        venue="SANDBOX",
+        engine="nautilus_trader",
+        engine_version="1.231.0",
+        connected=True,
+    )
+
+
+def test_paper_status_snapshot_is_read_only_and_reports_current_evidence():
+    started = 1_000 * NANOSECOND
+    journal = PaperSessionJournal(_receipt(), code_hash="code-status", started_ns=started)
+    journal.record_market_event("bar-1", timestamp_ns=started + 15 * NANOSECOND)
+    journal.record_closed_trade("trade-1", 0.10, timestamp_ns=started + 20 * NANOSECOND)
+    journal.record_closed_trade("trade-2", -0.05, timestamp_ns=started + 30 * NANOSECOND)
+    journal.record_reconciliation("recon-1", ok=True, timestamp_ns=started + 35 * NANOSECOND)
+    journal.record_reconciliation("recon-2", ok=False, timestamp_ns=started + 40 * NANOSECOND)
+    journal.record_execution_state(
+        ExecutionState(
+            account_id="PAPER-ACCOUNT",
+            positions={"ETHUSDT.BINANCE": "0.01000"},
+            open_order_ids=frozenset({"order-1"}),
+            balances={"USDT": "1000"},
+        ),
+        timestamp_ns=started + 45 * NANOSECOND,
+    )
+
+    module = importlib.import_module("mastertrd.paper_status")
+    payload = module.paper_status_payload(journal, observed_ns=started + 60 * NANOSECOND)
+
+    assert payload == {
+        "schema_version": 1,
+        "strategy_id": "S-paper-status",
+        "genome_hash": "a" * 64,
+        "code_hash": "code-status",
+        "session_id": "paper-status-session",
+        "duration_seconds": 60,
+        "market_events": 1,
+        "closed_trades": 2,
+        "total_return": 0.045,
+        "max_drawdown": 0.05,
+        "reconciliation_checks": 2,
+        "reconciliation_errors": 1,
+        "position_count": 1,
+        "open_order_count": 1,
+        "latest_timestamp_ns": started + 45 * NANOSECOND,
+        "finalized": False,
+    }
+    assert journal.finalized_report is None
+
+
+def test_paper_status_workflow_is_read_only_and_publishes_safe_artifact():
+    path = Path(".github/workflows/paper-status.yml")
+    assert path.exists()
+    workflow = path.read_text(encoding="utf-8")
+
+    assert "schedule:" in workflow
+    assert "*/5 * * * *" in workflow
+    assert "workflow_dispatch:" in workflow
+    assert "environment: oracle" in workflow
+    assert "actions/upload-artifact@v4" in workflow
+    assert "paper-status.json" in workflow
+    assert "systemctl show" in workflow
+
+    forbidden = (
+        "systemctl restart",
+        "systemctl stop",
+        "LIVE_TRADING_ENABLED=true",
+        "MASTERTRD_MODE=LIVE",
+        "sed -i",
+        "tee -a /etc/mastertrd",
+    )
+    for token in forbidden:
+        assert token not in workflow
