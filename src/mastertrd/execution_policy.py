@@ -50,6 +50,7 @@ class HftPositionState:
     inventory: float
     imbalance: float
     spread_bps: float
+    elapsed_ms: float = 0.0
 
     def __post_init__(self) -> None:
         for name in ("entry_price", "current_price", "tick_size"):
@@ -61,6 +62,8 @@ class HftPositionState:
         for name in ("inventory", "imbalance", "spread_bps"):
             if not isfinite(float(getattr(self, name))):
                 raise ValueError(f"{name} must be finite")
+        if not isfinite(float(self.elapsed_ms)) or float(self.elapsed_ms) < 0.0:
+            raise ValueError("elapsed_ms must be finite and non-negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -316,6 +319,15 @@ def evaluate_hft_execution_policy(
         if state.ticks_held >= max_ticks:
             return _flat("hft_timeout")
         return ExecutionDecision(state.direction, "hold_hft_ticks_or_timeout", False)
+
+    if kind == "micro_profit_timeout":
+        timeout_ms = _positive_hft_limit(genome, "timeout_ms")
+        max_inventory = _positive_hft_limit(genome, "max_inventory")
+        if abs(state.inventory) >= max_inventory:
+            return _flat("hft_inventory_exit")
+        if state.elapsed_ms >= timeout_ms:
+            return _flat("hft_micro_profit_timeout")
+        return ExecutionDecision(state.direction, "hold_hft_micro_profit", False)
 
     if kind in {"inventory_exit", "inventory_flatten"}:
         max_inventory = _positive_hft_limit(genome, "max_inventory")
