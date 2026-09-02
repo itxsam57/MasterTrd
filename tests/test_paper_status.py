@@ -75,6 +75,9 @@ def test_paper_status_workflow_is_read_only_and_publishes_safe_artifact():
     assert "schedule:" in workflow
     assert "*/5 * * * *" in workflow
     assert "workflow_dispatch:" in workflow
+    assert "push:" in workflow
+    assert "branches: [main]" in workflow
+    assert "src/mastertrd/paper_status.py" in workflow
     assert "environment: oracle" in workflow
     assert "actions/upload-artifact@v4" in workflow
     assert "paper-status.json" in workflow
