@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
+import pytest
+
 from mastertrd.paper_evidence import PaperStartReceipt
 from mastertrd.paper_session import PaperSessionJournal
 from mastertrd.reconciliation import ExecutionState
@@ -53,8 +55,8 @@ def test_paper_status_snapshot_is_read_only_and_reports_current_evidence():
         "duration_seconds": 60,
         "market_events": 1,
         "closed_trades": 2,
-        "total_return": 0.045,
-        "max_drawdown": 0.05,
+        "total_return": pytest.approx(0.045),
+        "max_drawdown": pytest.approx(0.05),
         "reconciliation_checks": 2,
         "reconciliation_errors": 1,
         "position_count": 1,
