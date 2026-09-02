@@ -27,6 +27,7 @@ class HftBookState:
     tick_size: float
     mid_history: tuple[float, ...] = ()
     inventory: float = 0.0
+    timestamp_ns: int = 0
     bid_levels: tuple[tuple[float, float], ...] = ()
     ask_levels: tuple[tuple[float, float], ...] = ()
 
@@ -41,6 +42,8 @@ class HftBookState:
             raise ValueError("HFT book cannot be crossed")
         if not isfinite(float(self.inventory)):
             raise ValueError("inventory must be finite")
+        if isinstance(self.timestamp_ns, bool) or not isinstance(self.timestamp_ns, int) or self.timestamp_ns < 0:
+            raise ValueError("timestamp_ns must be a non-negative integer")
         if any(not isfinite(float(value)) or float(value) <= 0.0 for value in self.mid_history):
             raise ValueError("mid_history must contain positive finite prices")
         self._validate_levels(self.bid_levels, "bid_levels")
@@ -118,6 +121,7 @@ class _OpenHftPosition:
     entry_price: float
     signed_qty: float
     ticks_held: int = 0
+    opened_timestamp_ns: int = 0
 
 
 def _exact_states(
@@ -433,6 +437,14 @@ class GeneratedHftStrategy(NautilusRiskMixin, Strategy):
             return SignalDirection.SHORT
         return SignalDirection.FLAT
 
+    @staticmethod
+    def _event_timestamp_ns(event) -> int:
+        raw = getattr(event, "ts_event", getattr(event, "ts_init", 0))
+        value = int(raw)
+        if value < 0:
+            raise ValueError("event timestamp must be non-negative")
+        return value
+
     def _record_position_event(self, event) -> None:
         instrument_id = getattr(getattr(event, "instrument_id", None), "value", None)
         if instrument_id not in self._mid_history:
@@ -444,12 +456,17 @@ class GeneratedHftStrategy(NautilusRiskMixin, Strategy):
         entry_price = float(event.avg_px_open)
         signed_qty = float(event.signed_qty)
         previous = self._positions.get(instrument_id)
-        ticks_held = previous.ticks_held if previous and previous.direction is direction else 0
+        same_position = previous is not None and previous.direction is direction
+        ticks_held = previous.ticks_held if same_position else 0
+        opened_timestamp_ns = (
+            previous.opened_timestamp_ns if same_position else self._event_timestamp_ns(event)
+        )
         self._positions[instrument_id] = _OpenHftPosition(
             direction=direction,
             entry_price=entry_price,
             signed_qty=signed_qty,
             ticks_held=ticks_held,
+            opened_timestamp_ns=opened_timestamp_ns,
         )
 
     def on_position_opened(self, event) -> None:
@@ -480,6 +497,7 @@ class GeneratedHftStrategy(NautilusRiskMixin, Strategy):
         ask_price: float,
         bid_size: float,
         ask_size: float,
+        timestamp_ns: int = 0,
     ) -> HftBookState:
         midpoint = (float(bid_price) + float(ask_price)) / 2.0
         history = self._mid_history[instrument_id]
@@ -496,6 +514,7 @@ class GeneratedHftStrategy(NautilusRiskMixin, Strategy):
             tick_size=self._instrument_tick_size(instrument_id),
             mid_history=tuple(history),
             inventory=0.0 if position is None else position.signed_qty,
+            timestamp_ns=timestamp_ns,
         )
         self._states[instrument_id] = state
         return state
@@ -516,6 +535,7 @@ class GeneratedHftStrategy(NautilusRiskMixin, Strategy):
             ask_price=self._numeric(tick.ask_price),
             bid_size=self._numeric(tick.bid_size),
             ask_size=self._numeric(tick.ask_size),
+            timestamp_ns=self._event_timestamp_ns(tick),
         )
         self._process_market_state()
 
@@ -538,6 +558,7 @@ class GeneratedHftStrategy(NautilusRiskMixin, Strategy):
             ask_price=self._numeric(ask_price),
             bid_size=self._numeric(bid_size),
             ask_size=self._numeric(ask_size),
+            timestamp_ns=self._event_timestamp_ns(deltas),
         )
         self._process_market_state()
 
@@ -574,6 +595,10 @@ class GeneratedHftStrategy(NautilusRiskMixin, Strategy):
                 inventory=position.signed_qty,
                 imbalance=state.imbalance(int(self.genome.entry.get("levels", 1))),
                 spread_bps=spread_bps,
+                elapsed_ms=max(
+                    0.0,
+                    (state.timestamp_ns - position.opened_timestamp_ns) / 1_000_000.0,
+                ),
             ),
         )
         if not decision.close_position:
