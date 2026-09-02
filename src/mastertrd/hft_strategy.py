@@ -59,6 +59,14 @@ class HftBookState:
         return (float(self.bid_price) + float(self.ask_price)) / 2.0
 
     @property
+    def microprice(self) -> float:
+        total = float(self.bid_size) + float(self.ask_size)
+        return (
+            float(self.ask_price) * float(self.bid_size)
+            + float(self.bid_price) * float(self.ask_size)
+        ) / total
+
+    @property
     def spread_ticks(self) -> float:
         return (float(self.ask_price) - float(self.bid_price)) / float(self.tick_size)
 
@@ -130,6 +138,16 @@ def _positive_number(mapping: Mapping[str, object], key: str) -> float:
     return value
 
 
+def _nonnegative_number(mapping: Mapping[str, object], key: str) -> float:
+    try:
+        value = float(mapping[key])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"{key} must be non-negative and finite") from exc
+    if not isfinite(value) or value < 0.0:
+        raise ValueError(f"{key} must be non-negative and finite")
+    return value
+
+
 def _positive_int(mapping: Mapping[str, object], key: str) -> int:
     value = _positive_number(mapping, key)
     integer = int(value)
@@ -151,6 +169,8 @@ def _limit_intent(
     direction: SignalDirection,
     price: float,
     reason: str,
+    *,
+    quantity_weight: float = 1.0,
 ) -> HftOrderIntent:
     return HftOrderIntent(
         instrument_id=instrument_id,
@@ -158,6 +178,7 @@ def _limit_intent(
         price=price,
         post_only=True,
         reason=reason,
+        quantity_weight=quantity_weight,
     )
 
 
@@ -197,12 +218,72 @@ def _grid_intents(genome: StrategyGenome, state: HftBookState) -> tuple[HftOrder
     return tuple(intents)
 
 
+def _micro_profit_intents(
+    genome: StrategyGenome,
+    state: HftBookState,
+) -> tuple[HftOrderIntent, ...]:
+    levels = _positive_int(genome.entry, "levels")
+    imbalance_threshold = _nonnegative_number(genome.entry, "imbalance_threshold")
+    if imbalance_threshold > 1.0:
+        raise ValueError("imbalance_threshold cannot exceed one")
+    target_net_usd = _positive_number(genome.entry, "target_net_usd")
+    maker_fee_bps = _nonnegative_number(genome.entry, "maker_fee_bps")
+    slippage_bps = _nonnegative_number(genome.entry, "slippage_bps")
+    max_quote_notional_usd = _positive_number(genome.entry, "max_quote_notional_usd")
+    inventory_skew_bps = _nonnegative_number(genome.entry, "inventory_skew_bps")
+    spread_max_bps = _positive_number(genome.filters, "spread_max_bps")
+    if state.spread_bps > spread_max_bps:
+        return ()
+
+    midpoint = state.midpoint
+    gross_edge_per_unit = float(state.ask_price) - float(state.bid_price)
+    round_trip_cost_per_unit = midpoint * 2.0 * (maker_fee_bps + slippage_bps) / 10_000.0
+    net_edge_per_unit = gross_edge_per_unit - round_trip_cost_per_unit
+    if net_edge_per_unit <= 0.0:
+        return ()
+
+    max_quantity = max_quote_notional_usd / midpoint
+    required_quantity = target_net_usd / net_edge_per_unit
+    if required_quantity > max_quantity:
+        return ()
+    quantity_weight = required_quantity / max_quantity
+
+    imbalance = state.imbalance(levels)
+    center = state.microprice if abs(imbalance) >= imbalance_threshold else midpoint
+    center -= float(state.inventory) * midpoint * inventory_skew_bps / 10_000.0
+    half_spread = gross_edge_per_unit / 2.0
+    bid = min(float(state.bid_price), center - half_spread)
+    ask = max(float(state.ask_price), center + half_spread)
+    if bid <= 0.0 or ask <= bid:
+        raise ValueError("micro-profit quote calculation produced invalid prices")
+
+    return (
+        _limit_intent(
+            state.instrument_id,
+            SignalDirection.LONG,
+            bid,
+            "micro_profit_2s",
+            quantity_weight=quantity_weight,
+        ),
+        _limit_intent(
+            state.instrument_id,
+            SignalDirection.SHORT,
+            ask,
+            "micro_profit_2s",
+            quantity_weight=quantity_weight,
+        ),
+    )
+
+
 def _market_making_intents(
     genome: StrategyGenome,
     state: HftBookState,
 ) -> tuple[HftOrderIntent, ...]:
-    if str(genome.entry.get("type", genome.entry.get("kind"))) != "inventory_skew_mm":
-        raise ValueError("market_making entry requires inventory_skew_mm")
+    entry_type = str(genome.entry.get("type", genome.entry.get("kind")))
+    if entry_type == "micro_profit_2s":
+        return _micro_profit_intents(genome, state)
+    if entry_type != "inventory_skew_mm":
+        raise ValueError("market_making entry requires inventory_skew_mm or micro_profit_2s")
     half_spread_bps = _positive_number(genome.entry, "half_spread_bps")
     inventory_skew_bps = float(state.inventory) * half_spread_bps
     center = state.midpoint * (1.0 - inventory_skew_bps / 10_000.0)
