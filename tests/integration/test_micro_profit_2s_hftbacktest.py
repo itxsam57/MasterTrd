@@ -46,7 +46,11 @@ def synthetic_fillable_l2(*, cycles: int = 4) -> OrderBookDataset:
         base = start + cycle * 2 * SECOND_NS
         rows = (
             (100_000_000, (), 30.0, 10.0),
-            (500_000_000, (OrderBookTrade("SELL", 100.0, 20.0),), 20.0, 10.0),
+            # Risk-adverse queue semantics require the historical aggressive trade
+            # to consume the resting quantity ahead of our newly submitted quote
+            # before our order can fill. Keep this fixture deliberately larger
+            # than the displayed best-bid queue so it is genuinely fillable.
+            (500_000_000, (OrderBookTrade("SELL", 100.0, 40.0),), 20.0, 10.0),
             (1_000_000_000, (OrderBookTrade("BUY", 100.2, 20.0),), 20.0, 20.0),
             (1_900_000_000, (), 30.0, 10.0),
         )
