@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/paper-status.yml'
       - 'src/mastertrd/paper_status.py'
+      - 'src/mastertrd/paper_diagnostics.py'
   schedule:
     - cron: '*/5 * * * *'
 
@@ -86,8 +87,16 @@ jobs:
             < src/mastertrd/paper_status.py \
             > artifacts/paper-status/paper-status.json
 
+          # Raw journal text is never written to disk or uploaded. It flows
+          # directly through the repository-owned sanitizer and only the safe
+          # fingerprint below is persisted in the status artifact.
+          "${ssh_cmd[@]}" "$target" \
+            "sudo journalctl -u mastertrd.service --no-pager -n 1000 -o cat" \
+            | python src/mastertrd/paper_diagnostics.py \
+            > artifacts/paper-status/paper-diagnostics.json
+
           service_active="$("${ssh_cmd[@]}" "$target" "sudo systemctl is-active mastertrd.service" || true)"
-          service_restarts="$("${ssh_cmd[@]}" "$target" "sudo systemctl show mastertrd.service --property=NRestarts --value")"
+          service_props="$("${ssh_cmd[@]}" "$target" "sudo systemctl show mastertrd.service --no-pager --property=NRestarts --property=Result --property=ExecMainCode --property=ExecMainStatus")"
           if "${ssh_cmd[@]}" "$target" "sudo /usr/local/bin/mastertrd-health >/dev/null 2>&1"; then
             health_ok=true
           else
@@ -95,9 +104,10 @@ jobs:
           fi
 
           export PAPER_STATUS_PATH="artifacts/paper-status/paper-status.json"
+          export PAPER_STATUS_DIAGNOSTICS_PATH="artifacts/paper-status/paper-diagnostics.json"
           export PAPER_STATUS_REMOTE_SHA="$remote_sha"
           export PAPER_STATUS_SERVICE_ACTIVE="$service_active"
-          export PAPER_STATUS_SERVICE_RESTARTS="$service_restarts"
+          export PAPER_STATUS_SERVICE_PROPS="$service_props"
           export PAPER_STATUS_HEALTH_OK="$health_ok"
           python - <<'PY'
           import json
@@ -105,18 +115,34 @@ jobs:
           from pathlib import Path
 
           path = Path(os.environ["PAPER_STATUS_PATH"])
+          diagnostics_path = Path(os.environ["PAPER_STATUS_DIAGNOSTICS_PATH"])
           payload = json.loads(path.read_text(encoding="utf-8"))
+          diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
           if payload.get("code_hash") != os.environ["PAPER_STATUS_REMOTE_SHA"]:
               raise SystemExit("PAPER status code identity mismatch")
+
+          properties = {}
+          for line in os.environ["PAPER_STATUS_SERVICE_PROPS"].splitlines():
+              if "=" in line:
+                  key, value = line.split("=", 1)
+                  properties[key] = value
+
+          restart_raw = properties.get("NRestarts", "0")
+          status_raw = properties.get("ExecMainStatus", "")
           payload.update(
               {
                   "remote_git_sha": os.environ["PAPER_STATUS_REMOTE_SHA"],
                   "service_active": os.environ["PAPER_STATUS_SERVICE_ACTIVE"] == "active",
-                  "service_restarts": int(os.environ["PAPER_STATUS_SERVICE_RESTARTS"] or "0"),
+                  "service_restarts": int(restart_raw or "0"),
+                  "service_result": properties.get("Result") or None,
+                  "service_exec_main_code": properties.get("ExecMainCode") or None,
+                  "service_exec_main_status": int(status_raw) if status_raw.isdigit() else None,
                   "health_ok": os.environ["PAPER_STATUS_HEALTH_OK"] == "true",
+                  "crash_diagnostics": diagnostics,
               }
           )
           path.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
+          diagnostics_path.unlink(missing_ok=True)
           PY
 
       - name: Upload sanitized PAPER status
