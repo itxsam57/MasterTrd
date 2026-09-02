@@ -8,6 +8,7 @@ on:
       - 'src/mastertrd/research_job.py'
       - 'src/mastertrd/research_brain.py'
       - 'src/mastertrd/research/screen.py'
+      - 'src/mastertrd/research/regimes.py'
       - 'src/mastertrd/strategy_universe.py'
       - 'src/mastertrd/nautilus_paper.py'
   schedule:
