@@ -31,6 +31,7 @@ def _state(**overrides: float | int | SignalDirection) -> HftPositionState:
         "inventory": 0.0,
         "imbalance": 0.2,
         "spread_bps": 10.0,
+        "elapsed_ms": 0.0,
     }
     values.update(overrides)
     return HftPositionState(**values)
@@ -62,6 +63,21 @@ def test_inventory_exit_families_flatten_at_configured_inventory_limit(family: s
     assert decision.reason == "hft_inventory_exit"
 
 
+def test_micro_profit_timeout_uses_elapsed_milliseconds_and_inventory_cap() -> None:
+    genome = _genome(
+        "market_making",
+        {"type": "micro_profit_timeout", "timeout_ms": 2000, "max_inventory": 0.10},
+    )
+
+    hold = evaluate_hft_execution_policy(genome, _state(elapsed_ms=1999.999, inventory=0.05))
+    timeout = evaluate_hft_execution_policy(genome, _state(elapsed_ms=2000.0, inventory=0.05))
+    inventory = evaluate_hft_execution_policy(genome, _state(elapsed_ms=50.0, inventory=-0.10))
+
+    assert not hold.close_position and hold.reason == "hold_hft_micro_profit"
+    assert timeout.close_position and timeout.reason == "hft_micro_profit_timeout"
+    assert inventory.close_position and inventory.reason == "hft_inventory_exit"
+
+
 def test_order_book_exit_closes_on_imbalance_reversal_or_adverse_ticks() -> None:
     genome = _genome("order_book", {"type": "imbalance_reversal_or_ticks", "ticks": 4})
 
@@ -91,3 +107,5 @@ def test_hft_exit_state_fails_closed_on_nonfinite_or_invalid_tick_state() -> Non
         evaluate_hft_execution_policy(genome, _state(tick_size=0.0))
     with pytest.raises(ValueError, match="current_price"):
         evaluate_hft_execution_policy(genome, _state(current_price=float("nan")))
+    with pytest.raises(ValueError, match="elapsed_ms"):
+        evaluate_hft_execution_policy(genome, _state(elapsed_ms=-0.1))
