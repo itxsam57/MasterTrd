@@ -8,6 +8,9 @@ from typing import Iterable
 import numpy as np
 
 
+_MAX_PELT_CANDIDATE_POINTS = 4_096
+
+
 @dataclass(frozen=True, slots=True)
 class RegimeMap:
     dataset_hash: str
@@ -15,6 +18,7 @@ class RegimeMap:
     change_points: tuple[int, ...]
     min_size: int
     penalty: float
+    jump: int
 
 
 def _values(values: Iterable[float], *, minimum: int) -> np.ndarray:
@@ -26,16 +30,26 @@ def _values(values: Iterable[float], *, minimum: int) -> np.ndarray:
     return data
 
 
+def _pelt_jump(observations: int) -> int:
+    """Bound the PELT candidate grid while retaining exact search for short histories."""
+    return max(1, (int(observations) + _MAX_PELT_CANDIDATE_POINTS - 1) // _MAX_PELT_CANDIDATE_POINTS)
+
+
 def discover_regimes(returns: Iterable[float], *, min_size: int, penalty: float) -> RegimeMap:
     if min_size < 2:
         raise ValueError("min_size must be at least two")
     if not isfinite(float(penalty)) or penalty <= 0.0:
         raise ValueError("penalty must be positive and finite")
     data = _values(returns, minimum=max(8, min_size * 2))
+    jump = _pelt_jump(int(data.size))
 
     import ruptures as rpt
 
-    points = rpt.Pelt(model="l2", min_size=min_size, jump=1).fit(data.reshape(-1, 1)).predict(pen=penalty)
+    points = (
+        rpt.Pelt(model="l2", min_size=min_size, jump=jump)
+        .fit(data.reshape(-1, 1))
+        .predict(pen=penalty)
+    )
     change_points = tuple(int(point) for point in points if 0 < int(point) < len(data))
     return RegimeMap(
         dataset_hash=hashlib.sha256(data.tobytes()).hexdigest(),
@@ -43,4 +57,5 @@ def discover_regimes(returns: Iterable[float], *, min_size: int, penalty: float)
         change_points=change_points,
         min_size=int(min_size),
         penalty=float(penalty),
+        jump=jump,
     )
