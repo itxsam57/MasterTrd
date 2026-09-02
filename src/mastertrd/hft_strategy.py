@@ -93,6 +93,7 @@ class HftOrderIntent:
     price: float | None = None
     post_only: bool = False
     quantity_weight: float = 1.0
+    notional_usd: float | None = None
 
     def __post_init__(self) -> None:
         if not self.instrument_id or not self.reason:
@@ -105,6 +106,10 @@ class HftOrderIntent:
             raise ValueError("post-only HFT intent requires a limit price")
         if not isfinite(float(self.quantity_weight)) or float(self.quantity_weight) <= 0.0:
             raise ValueError("quantity_weight must be positive and finite")
+        if self.notional_usd is not None and (
+            not isfinite(float(self.notional_usd)) or float(self.notional_usd) <= 0.0
+        ):
+            raise ValueError("notional_usd must be positive and finite")
 
 
 @dataclass(slots=True)
@@ -171,6 +176,7 @@ def _limit_intent(
     reason: str,
     *,
     quantity_weight: float = 1.0,
+    notional_usd: float | None = None,
 ) -> HftOrderIntent:
     return HftOrderIntent(
         instrument_id=instrument_id,
@@ -179,6 +185,7 @@ def _limit_intent(
         post_only=True,
         reason=reason,
         quantity_weight=quantity_weight,
+        notional_usd=notional_usd,
     )
 
 
@@ -246,7 +253,9 @@ def _micro_profit_intents(
     required_quantity = target_net_usd / net_edge_per_unit
     if required_quantity > max_quantity:
         return ()
-    quantity_weight = required_quantity / max_quantity
+    required_notional_usd = required_quantity * midpoint * (1.0 + 1e-12)
+    if required_notional_usd > max_quote_notional_usd:
+        return ()
 
     imbalance = state.imbalance(levels)
     center = state.microprice if abs(imbalance) >= imbalance_threshold else midpoint
@@ -263,14 +272,14 @@ def _micro_profit_intents(
             SignalDirection.LONG,
             bid,
             "micro_profit_2s",
-            quantity_weight=quantity_weight,
+            notional_usd=required_notional_usd,
         ),
         _limit_intent(
             state.instrument_id,
             SignalDirection.SHORT,
             ask,
             "micro_profit_2s",
-            quantity_weight=quantity_weight,
+            notional_usd=required_notional_usd,
         ),
     )
 
@@ -602,9 +611,16 @@ class GeneratedHftStrategy(NautilusRiskMixin, Strategy):
     def _submit_intent(self, intent: HftOrderIntent) -> None:
         instrument = self.instruments[intent.instrument_id]
         side = OrderSide.BUY if intent.direction is SignalDirection.LONG else OrderSide.SELL
-        quantity = instrument.make_qty(
-            self.config.trade_size * Decimal(str(intent.quantity_weight)),
-        )
+        if intent.notional_usd is not None:
+            state = self._states.get(intent.instrument_id)
+            if state is None or state.midpoint <= 0.0:
+                raise RuntimeError("absolute HFT notional requires a current positive midpoint")
+            raw_quantity = Decimal(str(intent.notional_usd)) / Decimal(str(state.midpoint))
+            quantity = instrument.make_qty(raw_quantity)
+        else:
+            quantity = instrument.make_qty(
+                self.config.trade_size * Decimal(str(intent.quantity_weight)),
+            )
         if intent.price is None:
             order = self.order_factory.market(
                 instrument_id=instrument.id,
