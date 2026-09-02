@@ -197,6 +197,12 @@ class BinancePublicBookTickerSource:
         }
 
     def __iter__(self) -> Iterator[RawMarketPayload]:
+        # ``websockets`` is an execution-stack dependency and is intentionally
+        # imported only when the network iterator is used. Connection closures
+        # are transport failures; malformed payload/data exceptions still escape
+        # and fail closed rather than being misclassified as reconnectable.
+        from websockets.exceptions import ConnectionClosed
+
         reconnects = 0
         while True:
             transport_failed = False
@@ -206,7 +212,7 @@ class BinancePublicBookTickerSource:
                         payload = self._decode(message)
                         if payload is not None:
                             yield payload
-            except (OSError, TimeoutError):
+            except (OSError, TimeoutError, ConnectionClosed):
                 transport_failed = True
 
             if self._max_reconnect_attempts is not None and reconnects >= self._max_reconnect_attempts:
