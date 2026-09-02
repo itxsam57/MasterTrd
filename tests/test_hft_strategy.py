@@ -234,3 +234,62 @@ def test_cross_venue_spread_emits_atomic_hedge_pair() -> None:
     assert by_id[right].direction is SignalDirection.SHORT
     assert all(intent.price is None for intent in intents)
     assert all(intent.reason == "cross_venue_spread" for intent in intents)
+
+
+def test_hft_runtime_passes_real_elapsed_milliseconds_to_exit_policy(monkeypatch) -> None:
+    from nautilus_trader.test_kit.providers import TestInstrumentProvider
+
+    import mastertrd.hft_strategy as hft_strategy
+    from mastertrd.execution_policy import ExecutionDecision
+
+    instrument = TestInstrumentProvider.ethusdt_binance()
+    instrument_id = instrument.id.value
+    genome = replace(
+        generate_candidate(family="market_making", instruments=(instrument_id,), seed=71),
+        entry={
+            "type": "micro_profit_2s",
+            "levels": 1,
+            "imbalance_threshold": 0.10,
+            "target_net_usd": 0.01,
+            "maker_fee_bps": 1.0,
+            "slippage_bps": 0.5,
+            "max_quote_notional_usd": 100.0,
+            "inventory_skew_bps": 1.0,
+        },
+        exit={"type": "micro_profit_timeout", "timeout_ms": 2000, "max_inventory": 0.10},
+        filters={"spread_max_bps": 25.0},
+        allow_short=True,
+    )
+    strategy = nautilus_strategy.compile_hft_genome_to_nautilus(
+        genome,
+        instruments={instrument_id: instrument},
+        trade_size_override="0.10",
+        risk_runtime=build_research_backtest_risk_runtime(),
+    )
+    strategy.instruments[instrument_id] = instrument
+    strategy._positions[instrument_id] = hft_strategy._OpenHftPosition(
+        direction=SignalDirection.LONG,
+        entry_price=100.0,
+        signed_qty=0.05,
+        opened_timestamp_ns=1_000_000_000,
+    )
+    strategy._states[instrument_id] = hft_strategy.HftBookState(
+        instrument_id=instrument_id,
+        bid_price=99.9,
+        ask_price=100.1,
+        bid_size=10.0,
+        ask_size=10.0,
+        tick_size=0.1,
+        inventory=0.05,
+        timestamp_ns=3_000_000_000,
+    )
+    captured = {}
+
+    def fake_policy(candidate, state):
+        captured["elapsed_ms"] = state.elapsed_ms
+        return ExecutionDecision(state.direction, "hold_test", False)
+
+    monkeypatch.setattr(hft_strategy, "evaluate_hft_execution_policy", fake_policy)
+
+    assert strategy._evaluate_open_position_exit(instrument_id) is False
+    assert captured["elapsed_ms"] == 2000.0
