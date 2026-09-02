@@ -57,6 +57,15 @@ def test_autonomous_research_tracks_public_metadata_loader_changes():
     assert "src/mastertrd/nautilus_paper.py" in paths
 
 
+def test_autonomous_research_rebuilds_provenance_for_execution_and_workflow_changes():
+    _, workflow = _load("autonomous-research.yml")
+    push = _on(workflow).get("push")
+    assert isinstance(push, dict)
+    paths = set(push.get("paths", []))
+    assert "src/mastertrd/binance_stream.py" in paths
+    assert ".github/workflows/autonomous-research.yml" in paths
+
+
 def test_autonomous_research_uploads_only_the_public_report():
     text, workflow = _load("autonomous-research.yml")
     jobs = _jobs(workflow)
