@@ -1,0 +1,130 @@
+name: PAPER Status
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/5 * * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paper-status-oracle
+  cancel-in-progress: true
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: oracle
+    env:
+      ORACLE_ENABLED: ${{ vars.ORACLE_ENABLED }}
+      ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+      ORACLE_SSH_USER: ${{ secrets.ORACLE_SSH_USER }}
+      ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+      ORACLE_KNOWN_HOSTS: ${{ secrets.ORACLE_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fail closed unless Oracle status access is explicitly enabled
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          if [[ "${ORACLE_ENABLED,,}" != "true" ]]; then
+            echo 'Oracle status access is disabled.' >&2
+            exit 1
+          fi
+          for name in ORACLE_HOST ORACLE_SSH_USER ORACLE_SSH_KEY ORACLE_KNOWN_HOSTS; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing required Oracle Environment secret: ${name}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Configure pinned SSH trust
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$ORACLE_SSH_KEY" > "$HOME/.ssh/oracle_key"
+          chmod 600 "$HOME/.ssh/oracle_key"
+          printf '%s\n' "$ORACLE_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Read sanitized PAPER status without mutating Oracle
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          mkdir -p artifacts/paper-status
+          target="${ORACLE_SSH_USER}@${ORACLE_HOST}"
+          ssh_cmd=(ssh -i "$HOME/.ssh/oracle_key" -o BatchMode=yes)
+
+          mode="$("${ssh_cmd[@]}" "$target" "sudo awk -F= '\$1==\"MASTERTRD_MODE\" {print \$2}' /etc/mastertrd/mastertrd.env | tail -n1")"
+          live_enabled="$("${ssh_cmd[@]}" "$target" "sudo awk -F= '\$1==\"LIVE_TRADING_ENABLED\" {print \$2}' /etc/mastertrd/mastertrd.env | tail -n1")"
+          session_state="$("${ssh_cmd[@]}" "$target" "sudo awk -F= '\$1==\"MASTERTRD_SESSION_STATE\" {print \$2}' /etc/mastertrd/mastertrd.env | tail -n1")"
+          runtime_code_hash="$("${ssh_cmd[@]}" "$target" "sudo awk -F= '\$1==\"MASTERTRD_CODE_HASH\" {print \$2}' /etc/mastertrd/mastertrd.env | tail -n1")"
+          remote_sha="$("${ssh_cmd[@]}" "$target" "sudo -u mastertrd git -C /opt/mastertrd rev-parse HEAD")"
+
+          if [[ "${mode^^}" != "PAPER" || "${live_enabled,,}" != "false" ]]; then
+            echo 'Oracle is not in safe PAPER mode; refusing status collection.' >&2
+            exit 1
+          fi
+          if [[ -z "$session_state" || -z "$runtime_code_hash" ]]; then
+            echo 'Oracle PAPER runtime identity is incomplete.' >&2
+            exit 1
+          fi
+          if [[ "$remote_sha" != "$runtime_code_hash" ]]; then
+            echo 'Oracle PAPER runtime code identity does not match the deployed checkout.' >&2
+            exit 1
+          fi
+
+          session_arg="$(printf '%q' "$session_state")"
+          "${ssh_cmd[@]}" "$target" \
+            "sudo -u mastertrd /opt/mastertrd/.venv/bin/python - --session-state ${session_arg}" \
+            < src/mastertrd/paper_status.py \
+            > artifacts/paper-status/paper-status.json
+
+          service_active="$("${ssh_cmd[@]}" "$target" "sudo systemctl is-active mastertrd.service" || true)"
+          service_restarts="$("${ssh_cmd[@]}" "$target" "sudo systemctl show mastertrd.service --property=NRestarts --value")"
+          if "${ssh_cmd[@]}" "$target" "sudo /usr/local/bin/mastertrd-health >/dev/null 2>&1"; then
+            health_ok=true
+          else
+            health_ok=false
+          fi
+
+          export PAPER_STATUS_PATH="artifacts/paper-status/paper-status.json"
+          export PAPER_STATUS_REMOTE_SHA="$remote_sha"
+          export PAPER_STATUS_SERVICE_ACTIVE="$service_active"
+          export PAPER_STATUS_SERVICE_RESTARTS="$service_restarts"
+          export PAPER_STATUS_HEALTH_OK="$health_ok"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["PAPER_STATUS_PATH"])
+          payload = json.loads(path.read_text(encoding="utf-8"))
+          if payload.get("code_hash") != os.environ["PAPER_STATUS_REMOTE_SHA"]:
+              raise SystemExit("PAPER status code identity mismatch")
+          payload.update(
+              {
+                  "remote_git_sha": os.environ["PAPER_STATUS_REMOTE_SHA"],
+                  "service_active": os.environ["PAPER_STATUS_SERVICE_ACTIVE"] == "active",
+                  "service_restarts": int(os.environ["PAPER_STATUS_SERVICE_RESTARTS"] or "0"),
+                  "health_ok": os.environ["PAPER_STATUS_HEALTH_OK"] == "true",
+              }
+          )
+          path.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
+          PY
+
+      - name: Upload sanitized PAPER status
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-status-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/paper-status/paper-status.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Remove local SSH key material
+        if: always()
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          rm -f "$HOME/.ssh/oracle_key" "$HOME/.ssh/known_hosts"
