@@ -301,7 +301,7 @@ class NautilusStreamingPaperExecution:
         if not isinstance(payload, dict):
             raise RuntimeError("PAPER strategy telemetry is invalid")
         merged = dict(payload)
-        provider = self._telemetry_provider
+        provider = getattr(self, "_telemetry_provider", None)
         if provider is None:
             return merged
         extension = provider()
