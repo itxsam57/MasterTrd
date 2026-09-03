@@ -46,14 +46,13 @@ def test_promotion_grade_trend_does_not_compile_to_nautilus_example_strategy():
 
 
 def test_bar_history_contract_exposes_conservative_restart_warmup():
-    import mastertrd.execution_signals as signals
-    import mastertrd.nautilus_paper as paper
+    from mastertrd.paper_hardening import paper_bootstrap_bar_limit, required_bar_history
 
     candidate = _ema_genome()
-    required = signals.required_bar_history(candidate)
+    required = required_bar_history(candidate)
     assert required == 34
-    assert paper.paper_bootstrap_bar_limit(candidate) >= required
-    assert paper.paper_bootstrap_bar_limit(candidate) >= 100
+    assert paper_bootstrap_bar_limit(candidate) >= required
+    assert paper_bootstrap_bar_limit(candidate) >= 100
 
 
 def test_strategy_telemetry_is_integrity_covered_and_survives_restart(tmp_path):
