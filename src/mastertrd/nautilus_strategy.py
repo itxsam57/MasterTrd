@@ -53,50 +53,6 @@ def _bar_type(instrument_id: str, timeframe: str):
     )
 
 
-def _compile_ema_baseline(
-    genome: StrategyGenome,
-    *,
-    instrument,
-    trade_size: Decimal,
-    risk_runtime: RiskRuntime,
-):
-    entry_kind = genome.entry.get("kind", genome.entry.get("type"))
-    exit_kind = genome.exit.get("kind", genome.exit.get("type"))
-    if entry_kind != "ema_cross":
-        raise ValueError("trend entry requires ema_cross")
-    if exit_kind != "cross_reverse":
-        raise ValueError("trend exit requires cross_reverse")
-    try:
-        fast_period = int(genome.entry.get("fast_period", genome.entry.get("fast")))
-        slow_period = int(genome.entry.get("slow_period", genome.entry.get("slow")))
-    except (TypeError, ValueError) as exc:
-        raise ValueError("EMA periods must be positive integers") from exc
-    if fast_period <= 0 or slow_period <= 0:
-        raise ValueError("EMA periods must be positive integers")
-    if fast_period >= slow_period:
-        raise ValueError("fast_period must be less than slow_period")
-
-    from nautilus_trader.examples.strategies.ema_cross import EMACrossConfig
-
-    from .nautilus_risk_hook import RiskManagedEMACross
-
-    config = EMACrossConfig(
-        instrument_id=instrument.id,
-        bar_type=_bar_type(instrument.id.value, genome.timeframe),
-        trade_size=trade_size,
-        fast_ema_period=fast_period,
-        slow_ema_period=slow_period,
-        subscribe_quote_ticks=False,
-        subscribe_trade_ticks=False,
-        request_bars=False,
-    )
-    return RiskManagedEMACross(
-        config=config,
-        genome=genome,
-        risk_runtime=risk_runtime,
-    )
-
-
 def compile_hft_genome_to_nautilus(
     genome: StrategyGenome,
     *,
@@ -176,14 +132,6 @@ def compile_genome_to_nautilus(
         trade_size_override if trade_size_override is not None else trade_size,
     )
 
-    if genome.family == "trend":
-        return _compile_ema_baseline(
-            genome,
-            instrument=instrument,
-            trade_size=effective_trade_size,
-            risk_runtime=risk_runtime,
-        )
-
     if genome.family in _MULTI_LEG_FAMILIES:
         assert instrument_map is not None
 
@@ -223,6 +171,11 @@ def compile_genome_to_nautilus(
             risk_runtime=risk_runtime,
         )
 
+    # All single-leg BAR families, including trend, use the same MasterTrd
+    # signal/exit semantics in research, backtest, PAPER and promotion-grade
+    # execution. The Nautilus bundled EMA example is deliberately not part of
+    # this path because it is an example/test strategy rather than our alpha
+    # contract.
     from .nautilus_bar_strategy import GeneratedBarStrategy, GeneratedBarStrategyConfig
 
     config = GeneratedBarStrategyConfig(
