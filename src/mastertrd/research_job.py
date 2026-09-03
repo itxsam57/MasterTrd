@@ -18,7 +18,12 @@ from .nautilus_paper import load_public_binance_spot_instrument
 from .research.generator import generate_candidate
 from .research_brain import ResearchBrainConfig, ResearchDataset, run_research_brain
 from .strategy_families import DataLevel, FAMILIES, family_spec
-from .strategy_universe import AssetClass, RecipeReadiness, recipes_for, strategy_recipe
+from .strategy_universe import (
+    AssetClass,
+    RecipeReadiness,
+    STRATEGY_RECIPES,
+    strategy_recipe,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,52 +64,91 @@ class ResearchJobPlan:
                 raise ValueError("scheduled recipe family must be runnable")
             if AssetClass.CRYPTO not in recipe.asset_classes:
                 raise ValueError("scheduled public recipe must support crypto")
-            if family_spec(recipe.family).min_data_level is not DataLevel.BAR:
+            spec = family_spec(recipe.family)
+            if spec.min_data_level is not DataLevel.BAR:
                 raise ValueError("scheduled public recipe must use BAR data")
+            if spec.max_instruments != 1:
+                raise ValueError("scheduled public recipe must be single-leg")
+
+
+def scheduled_public_recipe_ids() -> tuple[str, ...]:
+    """Return every executable recipe that the current public BAR job can test honestly.
+
+    This is intentionally capability-derived rather than a hand-maintained shortlist:
+    an admitted recipe must be executable today, support crypto, require only BAR data,
+    and be single-leg. Everything else remains visible through
+    ``research_recipe_coverage`` with an explicit blocker.
+    """
+
+    return tuple(
+        recipe.recipe_id
+        for recipe in STRATEGY_RECIPES
+        if recipe.readiness is RecipeReadiness.EXECUTABLE
+        and AssetClass.CRYPTO in recipe.asset_classes
+        and family_spec(recipe.family).min_data_level is DataLevel.BAR
+        and family_spec(recipe.family).max_instruments == 1
+    )
+
+
+def research_recipe_coverage() -> dict[str, str]:
+    """Classify every planned recipe as scheduled now or explicitly blocked."""
+
+    scheduled = frozenset(scheduled_public_recipe_ids())
+    coverage: dict[str, str] = {}
+    for recipe in STRATEGY_RECIPES:
+        if recipe.recipe_id in scheduled:
+            coverage[recipe.recipe_id] = "scheduled_public_bar"
+            continue
+        spec = family_spec(recipe.family)
+        if recipe.readiness is not RecipeReadiness.EXECUTABLE:
+            reason = recipe.blocker or f"{recipe.readiness.value.lower()}_requirements_unsatisfied"
+        elif AssetClass.CRYPTO not in recipe.asset_classes:
+            reason = "public_binance_spot_asset_class_unavailable"
+        elif spec.min_data_level is not DataLevel.BAR:
+            reason = f"qualifying_public_{spec.min_data_level.value.lower()}_data_unavailable"
+        elif spec.max_instruments != 1:
+            reason = "scheduled_exact_multi_leg_validation_unavailable"
+        else:
+            reason = "scheduled_public_provider_contract_unavailable"
+        coverage[recipe.recipe_id] = f"blocked:{reason}"
+    return coverage
 
 
 def _default_runnable_recipe_ids(runnable_families: tuple[str, ...]) -> tuple[str, ...]:
-    """Select a bounded deterministic breadth of exact public-data recipes.
-
-    Strategy Universe may contain many more executable recipes. The scheduled job
-    intentionally takes two per runnable family so autonomous research broadens
-    beyond family-only randomness without turning every hourly run into an
-    unbounded compute fan-out.
-    """
-    selected: list[str] = []
-    eligible = recipes_for(
-        asset_class=AssetClass.CRYPTO,
-        readiness=RecipeReadiness.EXECUTABLE,
+    selected = tuple(
+        recipe_id
+        for recipe_id in scheduled_public_recipe_ids()
+        if strategy_recipe(recipe_id).family in runnable_families
     )
-    for family in runnable_families:
-        family_ids = [
-            recipe.recipe_id
-            for recipe in eligible
-            if recipe.family == family
-            and family_spec(recipe.family).min_data_level is DataLevel.BAR
-        ]
-        if len(family_ids) < 2:
-            raise RuntimeError(f"scheduled research requires at least two executable crypto BAR recipes for {family}")
-        selected.extend(family_ids[:2])
-    return tuple(selected)
+    if not selected:
+        raise RuntimeError("scheduled research has no compatible executable recipes")
+    return selected
+
+
+def _archive_months_for_recipe(recipe_id: str) -> int:
+    """Give slow families enough stable monthly data for their generated lookbacks."""
+
+    family = strategy_recipe(recipe_id).family
+    if family == "position":
+        return 18
+    if family == "swing":
+        return 8
+    return 2
 
 
 def default_research_job_plan() -> ResearchJobPlan:
     requested = tuple(FAMILIES)
-    runnable = (
-        "trend",
-        "momentum",
-        "breakout",
-        "mean_reversion",
-        "volatility",
+    scheduled = scheduled_public_recipe_ids()
+    runnable = tuple(
+        family
+        for family in requested
+        if any(strategy_recipe(recipe_id).family == family for recipe_id in scheduled)
     )
     reasons = {
-        "stat_arb": "scheduled_multi_leg_validation_unavailable",
-        "funding_basis": "scheduled_multi_leg_validation_unavailable",
-        "delta_neutral": "scheduled_multi_leg_validation_unavailable",
-        "portfolio": "scheduled_multi_leg_validation_unavailable",
-        "swing": "scheduled_long_horizon_window_unavailable",
-        "position": "scheduled_long_horizon_window_unavailable",
+        "stat_arb": "scheduled_exact_multi_leg_validation_unavailable",
+        "funding_basis": "scheduled_exact_multi_leg_validation_unavailable",
+        "delta_neutral": "scheduled_exact_multi_leg_validation_unavailable",
+        "portfolio": "scheduled_exact_multi_leg_validation_unavailable",
         "options": "qualifying_public_option_data_unavailable",
         "scalping": "qualifying_public_tick_data_unavailable",
         "grid": "qualifying_public_tick_data_unavailable",
@@ -113,7 +157,10 @@ def default_research_job_plan() -> ResearchJobPlan:
         "cross_venue_arb": "qualifying_public_tick_data_unavailable",
     }
     blocked = tuple(
-        ResearchJobBlocker(family=family, reason=reasons[family])
+        ResearchJobBlocker(
+            family=family,
+            reason=reasons.get(family, "scheduled_public_recipe_unavailable"),
+        )
         for family in requested
         if family not in runnable
     )
@@ -130,10 +177,12 @@ def default_research_job_plan() -> ResearchJobPlan:
 
 
 def research_job_plan_for_recipe(recipe_id: str) -> ResearchJobPlan:
-    """Return one fail-closed shard of the default autonomous research plan."""
+    """Return one fail-closed shard of the complete autonomous public schedule."""
+
     base = default_research_job_plan()
     if recipe_id not in base.runnable_recipe_ids:
-        raise ValueError(f"{recipe_id!r} is not in the default autonomous research schedule")
+        disposition = research_recipe_coverage().get(recipe_id, "blocked:unknown_recipe")
+        raise ValueError(f"{recipe_id!r} is not runnable in public BAR research: {disposition}")
     recipe = strategy_recipe(recipe_id)
     return ResearchJobPlan(
         requested_families=base.requested_families,
@@ -142,7 +191,7 @@ def research_job_plan_for_recipe(recipe_id: str) -> ResearchJobPlan:
         instruments=base.instruments,
         seed_start=base.seed_start,
         seed_stop=base.seed_stop,
-        archive_months=base.archive_months,
+        archive_months=_archive_months_for_recipe(recipe_id),
         runnable_recipe_ids=(recipe_id,),
     )
 
@@ -472,6 +521,7 @@ def run_research_job(
         "code_hash": code_hash,
         "lock_hash": lock_hash,
         "periods": list(periods),
+        "recipe_coverage": research_recipe_coverage(),
         "plan": {
             "requested_families": list(plan.requested_families),
             "runnable_families": list(plan.runnable_families),
@@ -480,6 +530,7 @@ def run_research_job(
             "instruments": list(plan.instruments),
             "seed_start": plan.seed_start,
             "seed_stop": plan.seed_stop,
+            "archive_months": plan.archive_months,
         },
         "runs": runs,
     }
