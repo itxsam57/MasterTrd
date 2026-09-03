@@ -98,6 +98,18 @@ def test_real_paper_factory_anchors_completeness_to_first_bar_after_bootstrap(tm
     assert source._completeness is not None
     assert source._completeness._first_expected_start_ms == 480_000
     assert source.completeness_snapshot.expected_closed_bars == 0
+
+    execution = built._dispatch.__self__
+    telemetry = execution.strategy_telemetry()
+    assert telemetry["expected_closed_bars"] == 0
+    assert telemetry["ws_closed_bars"] == 0
+    assert telemetry["rest_recovered_bars"] == 0
+    assert telemetry["missing_closed_bars"] == 0
+    assert telemetry["recovery_failures"] == 0
+    assert telemetry["last_closed_bar_ms"] is None
+    assert telemetry["last_expected_close_ms"] is None
+    assert telemetry["last_recovery_error"] is None
+    assert telemetry["data_healthy"] is True
     built.close()
 
 
