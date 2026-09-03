@@ -27,7 +27,7 @@ concurrency:
 jobs:
   research-brain:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       max-parallel: 10
@@ -35,14 +35,29 @@ jobs:
         recipe_id:
           - ema-cross-fast
           - ema-cross-balanced
+          - ema-cross-slow
+          - ema-cross-crypto
           - rsi-momentum-fast
           - rsi-momentum-balanced
+          - rsi-momentum-slow
+          - rsi-momentum-crypto
           - donchian-20
           - donchian-55
+          - donchian-fast
+          - donchian-crypto
           - zscore-fast
           - zscore-balanced
+          - zscore-slow
+          - zscore-crypto
           - atr-breakout-fast
           - atr-breakout-balanced
+          - atr-breakout-slow
+          - atr-breakout-crypto
+          - pullback-fast
+          - pullback-balanced
+          - pullback-crypto
+          - long-trend-balanced
+          - long-trend-slow
     env:
       MASTERTRD_RESEARCH_RECIPE_ID: ${{ matrix.recipe_id }}
     steps:
