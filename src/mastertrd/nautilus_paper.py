@@ -247,6 +247,7 @@ class NautilusStreamingPaperExecution:
         self._journal = journal
         self._sink = NautilusPaperEventSink(journal)
         self._ended = False
+        self._last_strategy_telemetry: dict[str, object] | None = None
 
         compiled = compile_genome_to_nautilus(
             candidate,
@@ -296,11 +297,19 @@ class NautilusStreamingPaperExecution:
             raise RuntimeError("PAPER strategy telemetry is invalid")
         return payload
 
+    def _record_strategy_telemetry_if_changed(self, *, timestamp_ns: int) -> None:
+        payload = self.strategy_telemetry()
+        if payload == self._last_strategy_telemetry:
+            return
+        self._journal.record_strategy_telemetry(payload, timestamp_ns=int(timestamp_ns))
+        self._last_strategy_telemetry = dict(payload)
+
     def bind_journal(self, journal: PaperSessionJournal) -> None:
         """Rotate evidence ownership while keeping this Nautilus engine alive."""
         if self._ended:
             raise RuntimeError("Nautilus PAPER execution bridge is already finalized")
         self._journal = journal
+        self._last_strategy_telemetry = None
         self._sink.bind_journal(journal)
 
     def execution_state(self, *, account_id: str) -> ExecutionState:
@@ -384,10 +393,7 @@ class NautilusStreamingPaperExecution:
         self._engine.add_data([data])
         self._engine.run(streaming=True)
         telemetry_timestamp = max(event.timestamp_ns, self._journal.latest_timestamp_ns)
-        self._journal.record_strategy_telemetry(
-            self.strategy_telemetry(),
-            timestamp_ns=telemetry_timestamp,
-        )
+        self._record_strategy_telemetry_if_changed(timestamp_ns=telemetry_timestamp)
         self._engine.clear_data()
 
     def close(self) -> None:
