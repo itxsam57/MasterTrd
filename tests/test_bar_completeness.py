@@ -339,6 +339,8 @@ def test_tracker_ignores_irrelevant_events_and_rejects_corrupt_bar_identity():
             "ask": 2,
             "bid_size": 1,
             "ask_size": 1,
+            "last": 1.5,
+            "last_size": 0,
         }
     )
     tracker.observe(tick)
