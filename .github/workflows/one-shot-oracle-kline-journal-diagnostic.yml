@@ -1,0 +1,64 @@
+name: One-shot Oracle Kline Journal Diagnostic
+
+on:
+  push:
+    branches:
+      - ops/oracle-kline-journal-diagnostic-20260903
+    paths:
+      - .github/workflows/one-shot-oracle-kline-journal-diagnostic.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    environment: oracle
+    steps:
+      - name: Configure pinned SSH trust
+        env:
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+          ORACLE_KNOWN_HOSTS: ${{ secrets.ORACLE_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$ORACLE_SSH_KEY" > "$HOME/.ssh/oracle_key"
+          chmod 600 "$HOME/.ssh/oracle_key"
+          printf '%s\n' "$ORACLE_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+      - name: Count sanitized market-event classes in active PAPER journal
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_SSH_USER: ${{ secrets.ORACLE_SSH_USER }}
+        run: |
+          target="${ORACLE_SSH_USER}@${ORACLE_HOST}"
+          ssh -i "$HOME/.ssh/oracle_key" -o BatchMode=yes "$target" 'sudo python3 - <<'"'"'PY'"'"'
+          import json
+          from pathlib import Path
+
+          env = {}
+          for line in Path("/etc/mastertrd/mastertrd.env").read_text().splitlines():
+              if "=" in line:
+                  k, v = line.split("=", 1)
+                  env[k] = v
+          path = Path(env["MASTERTRD_SESSION_STATE"])
+          payload = json.loads(path.read_text())
+          events = payload.get("events", [])
+          market = [e for e in events if e.get("kind") == "market_event"]
+          klines = [e for e in market if str(e.get("event_id", "")).startswith("binance-kline:")]
+          books = [e for e in market if str(e.get("event_id", "")).startswith("binance-book:")]
+          telemetry = [e for e in events if e.get("kind") == "strategy_telemetry"]
+          print(json.dumps({
+              "mode": env.get("MASTERTRD_MODE"),
+              "live_enabled": env.get("LIVE_TRADING_ENABLED"),
+              "runtime_code_hash": env.get("MASTERTRD_CODE_HASH"),
+              "market_events": len(market),
+              "book_events": len(books),
+              "kline_events": len(klines),
+              "last_kline_event_id": None if not klines else klines[-1].get("event_id"),
+              "last_kline_timestamp_ns": None if not klines else klines[-1].get("timestamp_ns"),
+              "strategy_telemetry_events": len(telemetry),
+          }, sort_keys=True))
+          PY'
+      - name: Remove SSH material
+        if: always()
+        run: rm -f "$HOME/.ssh/oracle_key" "$HOME/.ssh/known_hosts"
