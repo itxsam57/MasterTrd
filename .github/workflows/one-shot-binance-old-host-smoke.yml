@@ -1,0 +1,49 @@
+name: One-shot Binance Old Host Smoke
+
+on:
+  push:
+    branches:
+      - ops/ws-smoke-af3cfbd-20260903
+    paths:
+      - .github/workflows/one-shot-binance-old-host-smoke.yml
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: af3cfbd8a96a91fea4eca821e781fd521d34531e
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install exact locked stack
+        run: |
+          python -m pip install --disable-pip-version-check 'uv==0.12.7'
+          uv lock --check
+          uv sync --locked --all-extras
+      - name: Probe old data-stream.binance.com host
+        continue-on-error: true
+        run: |
+          uv run python - <<'PY'
+          import asyncio, json, time, websockets
+          uri='wss://data-stream.binance.com/stream?streams=ethusdt@bookTicker/ethusdt@kline_4h'
+          async def main():
+              saw_book=saw_kline=False
+              try:
+                  async with websockets.connect(uri, open_timeout=10, close_timeout=5) as ws:
+                      deadline=time.monotonic()+30
+                      while time.monotonic()<deadline and not (saw_book and saw_kline):
+                          raw=await asyncio.wait_for(ws.recv(), timeout=max(1,deadline-time.monotonic()))
+                          p=json.loads(raw); stream=str(p.get('stream',''))
+                          if stream.endswith('@bookTicker'): saw_book=True
+                          if '@kline_4h' in stream: saw_kline=True
+              except Exception as exc:
+                  print(json.dumps({'old_host_exception':type(exc).__name__,'message':str(exc)[:200]}))
+              print(json.dumps({'old_host_book':saw_book,'old_host_kline_4h':saw_kline},sort_keys=True))
+          asyncio.run(main())
+          PY
