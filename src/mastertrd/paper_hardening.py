@@ -104,6 +104,7 @@ def load_public_binance_bar_history(
 
     This is a fail-closed PAPER bootstrap path. It never authenticates, never
     falls back to synthetic data, and excludes the current in-progress candle.
+    The caller owns the candidate-specific minimum history check.
     """
 
     raw_instrument = str(instrument_id).strip().upper()
@@ -163,19 +164,6 @@ def load_public_binance_bar_history(
         )
         previous_close_ms = close_ms
 
-    if len(bars) < required_bar_history_for_limit(limit, bars):
-        raise RuntimeError("public Binance PAPER history returned too few closed bars")
-    return tuple(bars)
-
-
-def required_bar_history_for_limit(limit: int, bars: list[MarketBar]) -> int:
-    """Validate that the public endpoint returned a useful closed-history window.
-
-    The loader does not know the genome; the caller already chooses a limit at
-    or above its required history. Requiring at least half the requested window
-    catches truncated/malformed responses while tolerating newly listed markets.
-    """
-
     if not bars:
-        return 1
-    return min(limit, max(1, limit // 2))
+        raise RuntimeError("public Binance PAPER history returned no closed bars")
+    return tuple(bars)
