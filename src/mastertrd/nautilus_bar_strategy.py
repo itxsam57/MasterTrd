@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -13,6 +14,7 @@ from .execution_policy import ExecutionDecision, PositionState, evaluate_executi
 from .execution_signals import SignalDirection
 from .genome import StrategyGenome
 from .nautilus_risk_hook import NautilusRiskMixin
+from .paper_hardening import required_bar_history
 from .risk_runtime import RiskRuntime
 
 
@@ -31,15 +33,42 @@ class GeneratedBarStrategy(NautilusRiskMixin, Strategy):
         config: GeneratedBarStrategyConfig,
         genome: StrategyGenome,
         risk_runtime: RiskRuntime | None = None,
+        initial_bars: Sequence[MarketBar] = (),
     ) -> None:
         super().__init__(config)
         self.genome = genome
-        self._bars: list[MarketBar] = []
+        self._bars_required = required_bar_history(genome)
+        self._bars = self._validated_initial_bars(initial_bars)
+        self._bootstrap_bars = len(self._bars)
+        self._live_bars = 0
         self._position_state = PositionState(SignalDirection.FLAT, 0.0, 0.0, 0.0, 0)
         self.instrument = None
         self.last_decision = ExecutionDecision(SignalDirection.FLAT, "not_started")
+        if self._bars:
+            self.last_decision = evaluate_execution_policy(
+                self.genome,
+                self._bars,
+                self._position_state,
+            )
         self.last_exit_reason: str | None = None
         self._configure_risk_runtime(genome.strategy_id, risk_runtime)
+
+    def _validated_initial_bars(self, bars: Sequence[MarketBar]) -> list[MarketBar]:
+        normalized = list(bars)
+        previous: datetime | None = None
+        for bar in normalized:
+            if not isinstance(bar, MarketBar):
+                raise TypeError("initial_bars must contain MarketBar values")
+            if bar.instrument != self.genome.instruments[0]:
+                raise ValueError("initial bar instrument does not match strategy")
+            if bar.venue != self.config.instrument_id.venue.value:
+                raise ValueError("initial bar venue does not match strategy")
+            if bar.timeframe != self.genome.timeframe:
+                raise ValueError("initial bar timeframe does not match strategy")
+            if previous is not None and bar.timestamp <= previous:
+                raise ValueError("initial bars must be strictly ordered")
+            previous = bar.timestamp
+        return normalized
 
     def on_start(self) -> None:
         self.instrument = self.cache.instrument(self.config.instrument_id)
@@ -135,13 +164,30 @@ class GeneratedBarStrategy(NautilusRiskMixin, Strategy):
         if bar.bar_type != self.config.bar_type:
             return
         market_bar = self._to_market_bar(bar)
+        if self._bars and market_bar.timestamp <= self._bars[-1].timestamp:
+            return
         self._bars.append(market_bar)
+        self._live_bars += 1
         self._advance_position_state(market_bar)
         decision = evaluate_execution_policy(self.genome, self._bars, self._position_state)
         self.last_decision = decision
         if decision.close_position:
             self.last_exit_reason = decision.reason
         self._apply_decision(decision)
+
+    def runtime_telemetry(self) -> dict[str, object]:
+        telemetry = {
+            "bars_seen": len(self._bars),
+            "bars_required": self._bars_required,
+            "warmup_remaining": max(0, self._bars_required - len(self._bars)),
+            "bootstrap_bars": self._bootstrap_bars,
+            "live_bars": self._live_bars,
+            "last_signal": self.last_decision.direction.value,
+            "last_signal_reason": self.last_decision.reason,
+            "last_exit_reason": self.last_exit_reason,
+        }
+        telemetry.update(self.risk_telemetry())
+        return telemetry
 
     def _risk_reference_price(self, instrument_id) -> float:
         if not self._bars:
