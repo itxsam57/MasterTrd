@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 import json
 import os
 from pathlib import Path
 import time
 
+from .bar_completeness import timeframe_milliseconds
 from .binance_stream import BinancePublicMarketSource
-from .contracts import RuntimeMode
+from .contracts import MarketBar, RuntimeMode
 from .credentials import load_binance_credentials
 from .execution import build_binance_execution_profile
 from .execution_runtime import ExecutionRuntime
@@ -210,6 +211,40 @@ def _configured_new_paper_start_ns(environ: Mapping[str, str]) -> int:
     return started_ns
 
 
+def _public_paper_first_expected_start_ms(
+    initial_bars: Sequence[MarketBar],
+    *,
+    timeframe: str,
+) -> int:
+    """Return the first live candle start after authoritative bootstrap history."""
+
+    if not initial_bars:
+        raise RuntimeError("public PAPER bootstrap closed-bar identity is unavailable")
+    latest = initial_bars[-1]
+    raw_close_ms = latest.extras.get("source_kline_close_ms")
+    if isinstance(raw_close_ms, bool):
+        raise RuntimeError("public PAPER bootstrap closed-bar identity is invalid")
+    try:
+        close_ms = int(raw_close_ms)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("public PAPER bootstrap closed-bar identity is invalid") from exc
+    if close_ms < 0:
+        raise RuntimeError("public PAPER bootstrap closed-bar identity is invalid")
+
+    timestamp_ms = int(round(latest.timestamp.timestamp() * 1_000.0))
+    if timestamp_ms != close_ms:
+        raise RuntimeError("public PAPER bootstrap closed-bar identity does not match history")
+
+    try:
+        width_ms = timeframe_milliseconds(timeframe)
+    except ValueError as exc:
+        raise RuntimeError("public PAPER completeness requires a fixed Binance timeframe") from exc
+    first_expected_start_ms = close_ms + 1
+    if first_expected_start_ms % width_ms != 0:
+        raise RuntimeError("public PAPER bootstrap closed-bar identity is not timeframe-aligned")
+    return first_expected_start_ms
+
+
 def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> ExecutionRuntime:
     candidate = _load_candidate(_required(environ, "MASTERTRD_CANDIDATE_MANIFEST"))
     session_path = Path(_required(environ, "MASTERTRD_SESSION_STATE"))
@@ -223,11 +258,12 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
         raise RuntimeError("PAPER runtime currently requires one instrument")
 
     # Resolve authoritative metadata and, for the real public path, sufficient
-    # closed-bar warmup history before touching durable session state. A metadata
-    # or history failure must not leave behind a session file that falsely looks
-    # like a successfully initialized PAPER process.
+    # closed-bar warmup history before touching durable session state. A metadata,
+    # history, or completeness-anchor failure must not leave behind a session file
+    # that falsely looks like a successfully initialized PAPER process.
     fixture_path = environ.get("MASTERTRD_PUBLIC_FEED_FIXTURE", "").strip()
-    initial_bars = ()
+    initial_bars: Sequence[MarketBar] = ()
+    first_expected_start_ms: int | None = None
     if fixture_path:
         instrument = fixture_binance_spot_instrument(candidate.instruments[0])
     else:
@@ -243,6 +279,10 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
                 f"public PAPER history is insufficient for strategy warmup: "
                 f"{len(initial_bars)}/{minimum_history} closed bars"
             )
+        first_expected_start_ms = _public_paper_first_expected_start_ms(
+            initial_bars,
+            timeframe=candidate.timeframe,
+        )
 
     archive: JsonPaperReportArchive | None = None
     history_dir: Path | None = None
@@ -313,10 +353,14 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
             clock=lambda: journal_ref["journal"].latest_timestamp_ns / 1_000_000_000.0,
         )
     else:
+        if first_expected_start_ms is None:
+            raise RuntimeError("public PAPER completeness anchor is unavailable")
         stream = MarketStream(
             BinancePublicMarketSource(
                 candidate.instruments,
                 timeframe=candidate.timeframe,
+                first_expected_start_ms=first_expected_start_ms,
+                recovery_grace_ms=0,
             )
         )
         # Real public PAPER uses wall-clock freshness. Missing or stale market
