@@ -137,7 +137,7 @@ class BinancePublicBookTickerSource:
     @property
     def uri(self) -> str:
         streams = "/".join(f"{symbol.lower()}@bookTicker" for symbol in self.symbols)
-        return f"wss://data-stream.binance.com/stream?streams={streams}"
+        return f"wss://data-stream.binance.vision/stream?streams={streams}"
 
     def _decode(self, message: str | bytes) -> dict[str, object] | None:
         payload = _json_payload(message)
@@ -296,7 +296,7 @@ class BinancePublicMarketSource(BinancePublicBookTickerSource):
             lowered = symbol.lower()
             streams.append(f"{lowered}@bookTicker")
             streams.append(f"{lowered}@kline_{self.timeframe}")
-        return "wss://data-stream.binance.com/stream?streams=" + "/".join(streams)
+        return "wss://data-stream.binance.vision/stream?streams=" + "/".join(streams)
 
     def _decode_kline(self, payload: dict[str, object]) -> dict[str, object] | None:
         raw_kline = payload.get("k")
