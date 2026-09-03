@@ -41,12 +41,19 @@ jobs:
                   k, v = line.split("=", 1)
                   env[k] = v
           path = Path(env["MASTERTRD_SESSION_STATE"])
-          payload = json.loads(path.read_text())
+          envelope = json.loads(path.read_text())
+          payload = envelope.get("payload", {})
           events = payload.get("events", [])
           market = [e for e in events if e.get("kind") == "market_event"]
           klines = [e for e in market if str(e.get("event_id", "")).startswith("binance-kline:")]
           books = [e for e in market if str(e.get("event_id", "")).startswith("binance-book:")]
           telemetry = [e for e in events if e.get("kind") == "strategy_telemetry"]
+          last_telemetry = None
+          if telemetry:
+              try:
+                  last_telemetry = json.loads(str(telemetry[-1].get("value")))
+              except Exception:
+                  last_telemetry = {"parse_error": True}
           print(json.dumps({
               "mode": env.get("MASTERTRD_MODE"),
               "live_enabled": env.get("LIVE_TRADING_ENABLED"),
@@ -57,6 +64,7 @@ jobs:
               "last_kline_event_id": None if not klines else klines[-1].get("event_id"),
               "last_kline_timestamp_ns": None if not klines else klines[-1].get("timestamp_ns"),
               "strategy_telemetry_events": len(telemetry),
+              "last_strategy_telemetry": last_telemetry,
           }, sort_keys=True))
           PY'
       - name: Remove SSH material
