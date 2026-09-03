@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 import json
 from math import isfinite, log, sqrt
 import time
 from typing import Any, ContextManager, Protocol
 
-from .streaming import RawMarketPayload
+from .bar_completeness import (
+    BarCompletenessSnapshot,
+    ClosedBarCompletenessTracker,
+    RecoveryLoader,
+    load_public_binance_closed_kline,
+)
+from .streaming import MarketStream, RawMarketPayload
 
 
 class _Connection(Protocol):
@@ -196,6 +202,15 @@ class BinancePublicBookTickerSource:
             **extras,
         }
 
+    def _ready_payloads(self, payload: RawMarketPayload) -> Iterator[RawMarketPayload]:
+        """Yield decoded payloads in dispatch order.
+
+        Subclasses can inject authoritative events which must precede the just-
+        decoded current payload without duplicating transport/reconnect logic.
+        """
+
+        yield payload
+
     def __iter__(self) -> Iterator[RawMarketPayload]:
         # ``websockets`` is an execution-stack dependency and is intentionally
         # imported only when the network iterator is used. Connection closures
@@ -211,7 +226,7 @@ class BinancePublicBookTickerSource:
                     for message in connection:
                         payload = self._decode(message)
                         if payload is not None:
-                            yield payload
+                            yield from self._ready_payloads(payload)
             except (OSError, TimeoutError, ConnectionClosed):
                 transport_failed = True
 
@@ -236,7 +251,9 @@ class BinancePublicMarketSource(BinancePublicBookTickerSource):
     execution-risk state. Kline updates are emitted only after Binance marks the
     candle closed, so bar strategies never trade an in-progress candle. Both
     book update IDs and closed-candle identities survive reconnects to suppress
-    replayed market events.
+    replayed market events. When closed-bar completeness is configured, an
+    overdue candle is recovered authoritatively before any newer book tick can
+    advance PAPER execution.
     """
 
     _SUPPORTED_INTERVALS = frozenset(
@@ -271,6 +288,10 @@ class BinancePublicMarketSource(BinancePublicBookTickerSource):
         reconnect_backoff_seconds: Sequence[float] = (1.0, 2.0, 5.0, 10.0, 30.0),
         max_reconnect_attempts: int | None = None,
         volatility_window: int = 30,
+        first_expected_start_ms: int | None = None,
+        recovery_loader: RecoveryLoader = load_public_binance_closed_kline,
+        recovery_grace_ms: int = 0,
+        recovery_retry_interval_ms: int = 30_000,
     ) -> None:
         interval = str(timeframe).strip()
         if interval not in self._SUPPORTED_INTERVALS:
@@ -288,6 +309,21 @@ class BinancePublicMarketSource(BinancePublicBookTickerSource):
         self._last_closed_kline_start: dict[str, int] = {}
         self._latest_spread_bps: dict[str, float] = {}
         self._latest_realized_volatility: dict[str, float] = {}
+        self._completeness: ClosedBarCompletenessTracker | None = None
+        if first_expected_start_ms is not None:
+            self._completeness = ClosedBarCompletenessTracker(
+                instruments=self.symbols,
+                timeframe=self.timeframe,
+                first_expected_start_ms=int(first_expected_start_ms),
+                recovery_loader=recovery_loader,
+                grace_ms=int(recovery_grace_ms),
+                retry_interval_ms=int(recovery_retry_interval_ms),
+            )
+
+    @property
+    def completeness_snapshot(self) -> BarCompletenessSnapshot | None:
+        tracker = self._completeness
+        return None if tracker is None else tracker.snapshot
 
     @property
     def uri(self) -> str:
@@ -378,3 +414,48 @@ class BinancePublicMarketSource(BinancePublicBookTickerSource):
         if volatility is not None:
             self._latest_realized_volatility[symbol] = float(volatility)
         return decoded
+
+    def _enrich_recovered_bar(self, payload: Mapping[str, object]) -> dict[str, object]:
+        recovered = dict(payload)
+        symbol = _canonical_symbol(str(recovered.get("instrument", "")))
+        if symbol not in self._symbol_set:
+            raise RuntimeError("closed-bar recovery returned an unexpected Binance symbol")
+        if str(recovered.get("timeframe", "")) != self.timeframe:
+            raise RuntimeError("closed-bar recovery returned an unexpected timeframe")
+
+        spread_bps = self._latest_spread_bps.get(symbol)
+        if spread_bps is not None:
+            recovered["spread_bps"] = spread_bps
+        realized_volatility = self._latest_realized_volatility.get(symbol)
+        if realized_volatility is not None:
+            recovered["realized_volatility"] = realized_volatility
+        return recovered
+
+    def _ready_payloads(self, payload: RawMarketPayload) -> Iterator[RawMarketPayload]:
+        tracker = self._completeness
+        if tracker is None:
+            yield payload
+            return
+
+        normalized = MarketStream.normalize(payload)
+        if normalized.kind == "bar":
+            tracker.observe(normalized)
+            yield payload
+            return
+
+        observed_ms = int(float(payload["timestamp_ms"]))
+        recovered = tracker.recover_due(observed_ms)
+        for raw in recovered:
+            enriched = self._enrich_recovered_bar(raw)
+            symbol = str(enriched["instrument"])
+            start_ms = int(enriched["source_kline_start_ms"])
+            previous_start = self._last_closed_kline_start.get(symbol)
+            if previous_start is None or start_ms > previous_start:
+                self._last_closed_kline_start[symbol] = start_ms
+            yield enriched
+
+        snapshot = tracker.snapshot
+        if not snapshot.data_healthy:
+            detail = snapshot.last_recovery_error or "authoritative candle unavailable"
+            raise RuntimeError(f"closed-bar recovery failed: {detail}")
+        yield payload
