@@ -1,7 +1,9 @@
 import json
 
+import pytest
 from websockets.exceptions import ConnectionClosedError
 
+from mastertrd.bar_completeness import canonical_binance_kline_event_id
 from mastertrd.binance_stream import (
     BinancePublicBookTickerSource,
     BinancePublicMarketSource,
@@ -77,6 +79,26 @@ def kline(
             },
         }
     )
+
+
+def recovered_payload(symbol: str, timeframe: str, start_ms: int) -> dict[str, object]:
+    width_ms = 60_000 if timeframe == "1m" else 14_400_000
+    close_ms = start_ms + width_ms - 1
+    return {
+        "event_id": canonical_binance_kline_event_id(symbol, timeframe, start_ms),
+        "venue": "BINANCE",
+        "instrument": symbol,
+        "timeframe": timeframe,
+        "timestamp_ms": close_ms,
+        "open": 2000.0,
+        "high": 2010.0,
+        "low": 1995.0,
+        "close": 2005.0,
+        "volume": 10.0,
+        "source_kline_start_ms": start_ms,
+        "source_kline_close_ms": close_ms,
+        "recovered": True,
+    }
 
 
 def test_book_ticker_source_normalizes_deduplicates_and_adds_observed_volatility():
@@ -297,3 +319,115 @@ def test_public_market_source_reconnect_deduplicates_closed_klines():
         f"binance-kline:BTCUSDT:1m:{second_start}",
     ]
     assert sleeps == [0.25]
+
+
+def test_public_market_source_recovers_missed_close_before_newer_tick_and_enriches_risk_metrics():
+    start_ms = 120_000
+    close_ms = 179_999
+    recovered = recovered_payload("ETHUSDT", "1m", start_ms)
+    recovery_calls: list[tuple[str, str, int, int]] = []
+
+    def recover(symbol: str, timeframe: str, requested_start: int, *, now_ms: int):
+        recovery_calls.append((symbol, timeframe, requested_start, now_ms))
+        return dict(recovered)
+
+    connections = iter(
+        [
+            FakeConnection(
+                [
+                    combined("ETHUSDT", 50, "2000", "2002"),
+                    combined("ETHUSDT", 51, "2004", "2006"),
+                    combined("ETHUSDT", 52, "2008", "2010"),
+                    kline(
+                        "ETHUSDT",
+                        "1m",
+                        start_ms,
+                        close_ms,
+                        open_price="2000",
+                        high="2010",
+                        low="1995",
+                        close="2005",
+                        volume="10",
+                        closed=True,
+                    ),
+                ]
+            )
+        ]
+    )
+    times = iter([179.0, 179.5, 180.1])
+    source = BinancePublicMarketSource(
+        ("ETHUSDT.BINANCE",),
+        timeframe="1m",
+        connector=lambda _uri: next(connections),
+        clock=lambda: next(times),
+        max_reconnect_attempts=0,
+        first_expected_start_ms=start_ms,
+        recovery_loader=recover,
+        recovery_grace_ms=0,
+    )
+
+    events = list(MarketStream(source))
+
+    expected_bar_id = f"binance-kline:ETHUSDT:1m:{start_ms}"
+    assert [event.event_id for event in events] == [
+        "binance-book:ETHUSDT:50",
+        "binance-book:ETHUSDT:51",
+        expected_bar_id,
+        "binance-book:ETHUSDT:52",
+    ]
+    assert recovery_calls == [("ETHUSDT", "1m", start_ms, 180_100)]
+    recovered_event = events[2]
+    assert recovered_event.kind == "bar"
+    assert recovered_event.timestamp_ns == close_ms * 1_000_000
+    assert recovered_event.bar.extras["recovered"] is True
+    assert recovered_event.bar.extras["spread_bps"] > 0.0
+    assert recovered_event.bar.extras["realized_volatility"] > 0.0
+    assert events[2].timestamp_ns < events[3].timestamp_ns
+
+    snapshot = source.completeness_snapshot
+    assert snapshot.expected_closed_bars == 1
+    assert snapshot.rest_recovered_bars == 1
+    assert snapshot.ws_closed_bars == 0
+    assert snapshot.missing_closed_bars == 0
+    assert snapshot.data_healthy is True
+
+
+def test_public_market_source_fails_closed_before_newer_tick_when_recovery_fails():
+    start_ms = 120_000
+    connections = iter(
+        [
+            FakeConnection(
+                [
+                    combined("ETHUSDT", 60, "2000", "2002"),
+                    combined("ETHUSDT", 61, "2004", "2006"),
+                    combined("ETHUSDT", 62, "2008", "2010"),
+                ]
+            )
+        ]
+    )
+    times = iter([179.0, 179.5, 180.1])
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("rest unavailable")
+
+    source = BinancePublicMarketSource(
+        ("ETHUSDT.BINANCE",),
+        timeframe="1m",
+        connector=lambda _uri: next(connections),
+        clock=lambda: next(times),
+        max_reconnect_attempts=0,
+        first_expected_start_ms=start_ms,
+        recovery_loader=fail,
+        recovery_grace_ms=0,
+    )
+    stream = iter(MarketStream(source))
+
+    assert next(stream).event_id == "binance-book:ETHUSDT:60"
+    assert next(stream).event_id == "binance-book:ETHUSDT:61"
+    with pytest.raises(RuntimeError, match="closed-bar recovery failed"):
+        next(stream)
+
+    snapshot = source.completeness_snapshot
+    assert snapshot.missing_closed_bars == 1
+    assert snapshot.recovery_failures == 1
+    assert snapshot.data_healthy is False
