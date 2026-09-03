@@ -18,6 +18,105 @@ _SUPPORTED_INTERVALS = frozenset(
 )
 
 
+def _positive_int(value: object, *, name: str) -> int:
+    try:
+        result = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a positive integer") from exc
+    if result <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return result
+
+
+def _positive_float(value: object, *, name: str) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be positive and finite") from exc
+    if not isfinite(result) or result <= 0.0:
+        raise ValueError(f"{name} must be positive and finite")
+    return result
+
+
+def validate_bar_strategy_contract(genome: StrategyGenome) -> None:
+    """Fail closed on malformed single-leg BAR entry/exit semantics at compile time."""
+
+    kind = str(genome.entry.get("kind", genome.entry.get("type", "")))
+    if not kind:
+        raise ValueError("strategy entry kind is required")
+    if kind == "ema_cross":
+        fast = _positive_int(
+            genome.entry.get("fast_period", genome.entry.get("fast")),
+            name="fast_period",
+        )
+        slow = _positive_int(
+            genome.entry.get("slow_period", genome.entry.get("slow")),
+            name="slow_period",
+        )
+        if fast >= slow:
+            raise ValueError("fast_period must be less than slow_period")
+    elif kind == "rsi_momentum":
+        _positive_int(genome.entry.get("period"), name="period")
+        threshold = _positive_float(genome.entry.get("threshold"), name="threshold")
+        if threshold <= 50.0 or threshold > 100.0:
+            raise ValueError("threshold must be greater than 50 and at most 100")
+    elif kind == "donchian_breakout":
+        _positive_int(genome.entry.get("window"), name="window")
+    elif kind == "zscore_reversion":
+        window = _positive_int(genome.entry.get("window"), name="window")
+        if window < 2:
+            raise ValueError("zscore window must be at least two")
+        _positive_float(genome.entry.get("z"), name="z")
+    elif kind == "volatility_breakout":
+        _positive_int(genome.entry.get("lookback"), name="lookback")
+        _positive_float(genome.entry.get("multiplier"), name="multiplier")
+    elif kind == "pullback_trend":
+        fast = _positive_int(genome.entry.get("fast"), name="fast")
+        slow = _positive_int(genome.entry.get("slow"), name="slow")
+        if fast >= slow:
+            raise ValueError("fast must be less than slow")
+        _positive_int(genome.entry.get("rsi"), name="rsi")
+    elif kind == "long_horizon_trend":
+        fast = _positive_int(genome.entry.get("fast"), name="fast")
+        slow = _positive_int(genome.entry.get("slow"), name="slow")
+        if fast >= slow:
+            raise ValueError("fast must be less than slow")
+    elif kind in {"cointegration_spread", "strategy_rotation"}:
+        _positive_int(
+            genome.entry.get("window", genome.entry.get("lookback")),
+            name="window",
+        )
+    elif kind in {"funding_basis", "hedged_basis", "volatility_signal"}:
+        # Specialist data/state is validated by those execution paths.
+        pass
+    else:
+        raise ValueError(f"unsupported bar entry kind: {kind}")
+
+    exit_kind = str(genome.exit.get("kind", genome.exit.get("type", "")))
+    if not exit_kind:
+        raise ValueError("strategy exit policy is required")
+    if exit_kind == "cross_reverse":
+        return
+    if exit_kind == "atr_bracket":
+        _positive_float(genome.exit.get("stop_atr"), name="stop_atr")
+        _positive_float(genome.exit.get("target_atr"), name="target_atr")
+        _positive_int(genome.exit.get("atr_period", 14), name="atr_period")
+        return
+    if exit_kind == "mean_or_atr_stop":
+        _positive_float(genome.exit.get("stop_atr"), name="stop_atr")
+        _positive_int(genome.exit.get("atr_period", 14), name="atr_period")
+        return
+    if exit_kind == "trailing_atr":
+        _positive_float(genome.exit.get("atr"), name="atr")
+        _positive_int(genome.exit.get("atr_period", 14), name="atr_period")
+        return
+    if exit_kind in {"greeks_or_time_exit", "spread_mean_exit", "edge_decay", "rebalance"}:
+        # These belong to specialist/multi-leg execution paths and are retained
+        # here only so history sizing remains deterministic when called there.
+        return
+    raise ValueError(f"unsupported exit policy: {exit_kind}")
+
+
 def _entry_bar_requirement(genome: StrategyGenome) -> int:
     kind = str(genome.entry.get("kind", genome.entry.get("type", "")))
     if kind == "ema_cross":
@@ -42,13 +141,9 @@ def _entry_bar_requirement(genome: StrategyGenome) -> int:
 
 
 def required_bar_history(genome: StrategyGenome) -> int:
-    """Return conservative closed-bar history needed before forward risk is created.
+    """Return conservative closed-bar history needed before forward risk is created."""
 
-    The entry requirement is combined with rolling exit-state requirements so a
-    strategy cannot open immediately after warm-up while its protective exit is
-    still missing the history needed to evaluate on the next closed bar.
-    """
-
+    validate_bar_strategy_contract(genome)
     required = _entry_bar_requirement(genome)
     exit_kind = str(genome.exit.get("kind", genome.exit.get("type", "")))
     if exit_kind in {"atr_bracket", "trailing_atr"}:
@@ -59,26 +154,13 @@ def required_bar_history(genome: StrategyGenome) -> int:
             int(genome.entry.get("window", 0)) + 1,
             int(genome.exit.get("atr_period", 14)) + 1,
         )
-    elif exit_kind in {"cross_reverse", "greeks_or_time_exit"}:
-        pass
-    elif exit_kind in {"spread_mean_exit", "edge_decay", "rebalance"}:
-        # Multi-leg PAPER is not currently admitted, but research/execution
-        # history sizing remains deterministic for those genomes.
-        pass
-    else:
-        raise ValueError(f"unsupported exit kind for history bootstrap: {exit_kind}")
     if required <= 0:
         raise ValueError("required bar history must be positive")
     return required
 
 
 def paper_bootstrap_bar_limit(genome: StrategyGenome) -> int:
-    """Return the number of closed public bars loaded before PAPER starts.
-
-    Keep a substantial buffer above the exact minimum so indicator state does
-    not depend on a process having remained alive since strategy deployment.
-    Binance's public kline endpoint caps one response at 1000 rows.
-    """
+    """Return the number of closed public bars loaded before PAPER starts."""
 
     return min(_MAX_BINANCE_KLINES, max(_MIN_BOOTSTRAP_BARS, required_bar_history(genome) + 10))
 
