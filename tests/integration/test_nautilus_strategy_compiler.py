@@ -23,9 +23,10 @@ def ema_genome(*, family: str = "trend") -> StrategyGenome:
     )
 
 
-def test_bar_genome_compiles_to_stable_nautilus_strategy():
-    from nautilus_trader.examples.strategies.ema_cross import EMACross
+def test_bar_genome_compiles_to_mastertrd_generated_bar_strategy():
     from nautilus_trader.test_kit.providers import TestInstrumentProvider
+
+    from mastertrd.nautilus_bar_strategy import GeneratedBarStrategy
 
     instrument = TestInstrumentProvider.ethusdt_binance()
     strategy = compile_genome_to_nautilus(
@@ -34,13 +35,14 @@ def test_bar_genome_compiles_to_stable_nautilus_strategy():
         risk_runtime=build_research_backtest_risk_runtime(),
     )
 
-    assert isinstance(strategy, EMACross)
+    assert isinstance(strategy, GeneratedBarStrategy)
     assert strategy.config.instrument_id == instrument.id
-    assert strategy.config.fast_ema_period == 3
-    assert strategy.config.slow_ema_period == 8
+    assert strategy.genome.entry["fast_period"] == 3
+    assert strategy.genome.entry["slow_period"] == 8
     assert str(strategy.config.trade_size) == "0.10"
-    assert strategy.config.request_bars is False
-    assert strategy.config.subscribe_trade_ticks is False
+    telemetry = strategy.runtime_telemetry()
+    assert telemetry["bars_required"] == 8
+    assert telemetry["warmup_remaining"] == 8
 
 
 def test_compiler_rejects_hft_family_from_generic_nautilus_path():

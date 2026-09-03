@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from dataclasses import dataclass
 import hashlib
 from importlib.metadata import version
 from pathlib import Path
 
+from .contracts import MarketBar
 from .genome import StrategyGenome
 from .paper_evidence import PaperStartReceipt
 from .paper_events import NautilusPaperEventSink
@@ -225,6 +227,7 @@ class NautilusStreamingPaperExecution:
         risk_runtime: RiskRuntime,
         journal: PaperSessionJournal,
         instrument,
+        initial_bars: Sequence[MarketBar] = (),
     ) -> None:
         if len(candidate.instruments) != 1:
             raise RuntimeError("streaming PAPER bridge currently requires one instrument")
@@ -241,8 +244,10 @@ class NautilusStreamingPaperExecution:
             starting_balances=(f"10 {base_code}", f"100000 {quote_code}"),
         )
         self._instrument = instrument
+        self._journal = journal
         self._sink = NautilusPaperEventSink(journal)
         self._ended = False
+        self._last_strategy_telemetry: dict[str, object] | None = None
 
         compiled = compile_genome_to_nautilus(
             candidate,
@@ -259,11 +264,17 @@ class NautilusStreamingPaperExecution:
                 if parent is not None:
                     parent(event)
 
-        self._strategy = RecordingStrategy(
-            config=compiled.config,
-            genome=candidate,
-            risk_runtime=risk_runtime,
-        )
+        try:
+            self._strategy = RecordingStrategy(
+                config=compiled.config,
+                genome=candidate,
+                risk_runtime=risk_runtime,
+                initial_bars=initial_bars,
+            )
+        except TypeError as exc:
+            raise RuntimeError(
+                "PAPER strategy does not support deterministic closed-bar bootstrap"
+            ) from exc
         self._engine.add_strategy(self._strategy)
 
         # Nautilus v1.231 initializes simulated accounts and starts the kernel
@@ -277,10 +288,28 @@ class NautilusStreamingPaperExecution:
     def closed_positions(self) -> int:
         return self._sink.closed_positions
 
+    def strategy_telemetry(self) -> dict[str, object]:
+        telemetry = getattr(self._strategy, "runtime_telemetry", None)
+        if not callable(telemetry):
+            raise RuntimeError("PAPER strategy telemetry is unavailable")
+        payload = telemetry()
+        if not isinstance(payload, dict):
+            raise RuntimeError("PAPER strategy telemetry is invalid")
+        return payload
+
+    def _record_strategy_telemetry_if_changed(self, *, timestamp_ns: int) -> None:
+        payload = self.strategy_telemetry()
+        if payload == self._last_strategy_telemetry:
+            return
+        self._journal.record_strategy_telemetry(payload, timestamp_ns=int(timestamp_ns))
+        self._last_strategy_telemetry = dict(payload)
+
     def bind_journal(self, journal: PaperSessionJournal) -> None:
         """Rotate evidence ownership while keeping this Nautilus engine alive."""
         if self._ended:
             raise RuntimeError("Nautilus PAPER execution bridge is already finalized")
+        self._journal = journal
+        self._last_strategy_telemetry = None
         self._sink.bind_journal(journal)
 
     def execution_state(self, *, account_id: str) -> ExecutionState:
@@ -363,6 +392,8 @@ class NautilusStreamingPaperExecution:
         data = self._bar(event) if event.kind == "bar" else self._quote(event)
         self._engine.add_data([data])
         self._engine.run(streaming=True)
+        telemetry_timestamp = max(event.timestamp_ns, self._journal.latest_timestamp_ns)
+        self._record_strategy_telemetry_if_changed(timestamp_ns=telemetry_timestamp)
         self._engine.clear_data()
 
     def close(self) -> None:

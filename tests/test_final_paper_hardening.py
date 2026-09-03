@@ -1,0 +1,236 @@
+from __future__ import annotations
+
+import inspect
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+from mastertrd.genome import StrategyGenome
+from mastertrd.paper_evidence import PaperStartReceipt
+from mastertrd.paper_session import JsonPaperSessionStore, PaperSessionJournal
+from mastertrd.strategy_families import DataLevel, family_spec
+from mastertrd.strategy_universe import AssetClass, RecipeReadiness, STRATEGY_RECIPES
+
+
+NS = 1_000_000_000
+
+
+def _ema_genome() -> StrategyGenome:
+    return StrategyGenome(
+        strategy_id="S-final-hardening",
+        family="trend",
+        style="trend",
+        instruments=("ETHUSDT.BINANCE",),
+        timeframe="15m",
+        entry={"kind": "ema_cross", "fast": 11, "slow": 34, "trade_size": "0.01"},
+        exit={"kind": "cross_reverse"},
+    )
+
+
+def _receipt(candidate: StrategyGenome) -> PaperStartReceipt:
+    return PaperStartReceipt(
+        strategy_id=candidate.strategy_id,
+        genome_hash=candidate.genome_hash,
+        session_id="final-hardening-session",
+        venue="SANDBOX",
+        engine="nautilus_trader",
+        engine_version="1.231.0",
+        connected=True,
+    )
+
+
+def test_promotion_grade_trend_does_not_compile_to_nautilus_example_strategy():
+    import mastertrd.nautilus_strategy as module
+
+    source = inspect.getsource(module)
+    assert "nautilus_trader.examples.strategies.ema_cross" not in source
+    assert "RiskManagedEMACross" not in source
+
+
+def test_bar_history_contract_exposes_conservative_restart_warmup():
+    from mastertrd.paper_hardening import paper_bootstrap_bar_limit, required_bar_history
+
+    candidate = _ema_genome()
+    required = required_bar_history(candidate)
+    assert required == 34
+    assert paper_bootstrap_bar_limit(candidate) >= required
+    assert paper_bootstrap_bar_limit(candidate) >= 100
+
+
+def test_public_history_loader_keeps_only_closed_ordered_bars(monkeypatch):
+    import mastertrd.paper_hardening as hardening
+
+    rows = [
+        [0, "100", "103", "99", "102", "10", 899_999],
+        [900_000, "102", "104", "101", "103", "11", 1_799_999],
+    ]
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(rows).encode()
+
+    monkeypatch.setattr(hardening, "urlopen", lambda *_args, **_kwargs: Response())
+    bars = hardening.load_public_binance_bar_history(
+        "ETHUSDT.BINANCE",
+        "15m",
+        limit=100,
+        now_ms=1_000_000,
+    )
+
+    assert len(bars) == 1
+    assert bars[0].instrument == "ETHUSDT.BINANCE"
+    assert bars[0].timeframe == "15m"
+    assert bars[0].close == 102.0
+    assert bars[0].extras["bootstrap"] is True
+
+
+def test_real_paper_runtime_bootstraps_before_opening_durable_session():
+    import mastertrd.runtime_factory as runtime_factory
+
+    source = inspect.getsource(runtime_factory._paper_runtime)
+    assert "load_public_binance_bar_history" in source
+    assert "paper_bootstrap_bar_limit" in source
+    assert "required_bar_history" in source
+    assert "initial_bars=initial_bars" in source
+    assert source.index("load_public_binance_bar_history") < source.index("open_persistent_paper_session")
+
+
+def test_strategy_telemetry_is_integrity_covered_and_survives_restart(tmp_path):
+    candidate = _ema_genome()
+    started = 1_000 * NS
+    journal = PaperSessionJournal(_receipt(candidate), code_hash="code-hardening", started_ns=started)
+    journal.record_strategy_telemetry(
+        {
+            "bars_seen": 34,
+            "bars_required": 34,
+            "warmup_remaining": 0,
+            "last_signal": "LONG",
+            "last_signal_reason": "ema_cross",
+            "orders_attempted": 1,
+            "orders_rejected": 0,
+            "last_risk_rejection": None,
+            "strategy_id": "forged-telemetry-identity",
+            "code_hash": "forged-telemetry-code",
+        },
+        timestamp_ns=started + NS,
+    )
+    path = tmp_path / "paper.json"
+    store = JsonPaperSessionStore(path)
+    store.save(journal)
+
+    restored = store.load()
+    assert restored.strategy_telemetry == journal.strategy_telemetry
+
+    from mastertrd.paper_status import paper_status_payload
+
+    status = paper_status_payload(restored, observed_ns=started + 2 * NS)
+    assert status["strategy_id"] == candidate.strategy_id
+    assert status["code_hash"] == "code-hardening"
+    assert status["bars_seen"] == 34
+    assert status["bars_required"] == 34
+    assert status["warmup_remaining"] == 0
+    assert status["last_signal"] == "LONG"
+    assert status["last_signal_reason"] == "ema_cross"
+    assert status["orders_attempted"] == 1
+    assert status["orders_rejected"] == 0
+
+
+def test_paper_dispatch_records_strategy_telemetry_only_when_it_changes():
+    from mastertrd.nautilus_paper import NautilusStreamingPaperExecution
+
+    class Engine:
+        def add_data(self, _data):
+            pass
+
+        def run(self, *, streaming):
+            assert streaming is True
+
+        def clear_data(self):
+            pass
+
+    class Journal:
+        def __init__(self):
+            self.latest_timestamp_ns = 0
+            self.recorded = []
+
+        def record_strategy_telemetry(self, payload, *, timestamp_ns):
+            self.recorded.append((dict(payload), int(timestamp_ns)))
+            self.latest_timestamp_ns = max(self.latest_timestamp_ns, int(timestamp_ns))
+
+    class Strategy:
+        def __init__(self):
+            self.payload = {
+                "bars_seen": 100,
+                "bars_required": 34,
+                "warmup_remaining": 0,
+                "last_signal": "FLAT",
+                "last_signal_reason": "ema_cross_flat",
+                "orders_attempted": 0,
+                "orders_allowed": 0,
+                "orders_rejected": 0,
+                "last_risk_rejection": None,
+            }
+
+        def runtime_telemetry(self):
+            return dict(self.payload)
+
+    execution = object.__new__(NautilusStreamingPaperExecution)
+    execution._ended = False
+    execution._engine = Engine()
+    execution._strategy = Strategy()
+    execution._journal = Journal()
+    execution._sink = SimpleNamespace(bind_journal=lambda _journal: None)
+    execution._quote = lambda _event: object()
+    execution._bar = lambda _event: object()
+    execution._last_strategy_telemetry = None
+
+    execution.dispatch(SimpleNamespace(kind="tick", timestamp_ns=100))
+    execution.dispatch(SimpleNamespace(kind="tick", timestamp_ns=101))
+    assert len(execution._journal.recorded) == 1
+
+    execution._strategy.payload["last_signal_reason"] = "ema_cross_long"
+    execution.dispatch(SimpleNamespace(kind="bar", timestamp_ns=102))
+    assert len(execution._journal.recorded) == 2
+
+    replacement = Journal()
+    execution.bind_journal(replacement)
+    execution.dispatch(SimpleNamespace(kind="tick", timestamp_ns=103))
+    assert len(replacement.recorded) == 1
+
+
+def test_scheduled_public_research_covers_every_compatible_executable_recipe():
+    import mastertrd.research_job as research_job
+
+    expected = {
+        recipe.recipe_id
+        for recipe in STRATEGY_RECIPES
+        if recipe.readiness is RecipeReadiness.EXECUTABLE
+        and AssetClass.CRYPTO in recipe.asset_classes
+        and family_spec(recipe.family).min_data_level is DataLevel.BAR
+        and family_spec(recipe.family).max_instruments == 1
+    }
+    scheduled = set(research_job.scheduled_public_recipe_ids())
+    assert scheduled == expected
+    assert len(scheduled) >= 25
+
+    workflow = Path(".github/workflows/autonomous-research.yml").read_text(encoding="utf-8")
+    for recipe_id in sorted(scheduled):
+        assert f"- {recipe_id}" in workflow
+
+
+def test_every_planned_recipe_is_classified_for_testing_or_explicitly_blocked():
+    import mastertrd.research_job as research_job
+
+    coverage = research_job.research_recipe_coverage()
+    assert set(coverage) == {recipe.recipe_id for recipe in STRATEGY_RECIPES}
+    assert set(coverage.values()) >= {"scheduled_public_bar"}
+    assert all(
+        disposition == "scheduled_public_bar" or disposition.startswith("blocked:")
+        for disposition in coverage.values()
+    )

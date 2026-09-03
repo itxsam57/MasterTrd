@@ -6,7 +6,7 @@ import json
 from math import isfinite
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Mapping
 
 from .paper_evidence import PaperStartReceipt
 from .paper_forward import PaperForwardReport
@@ -15,10 +15,10 @@ from .reconciliation import ExecutionState
 
 @dataclass(frozen=True, slots=True)
 class _PaperSessionEvent:
-    kind: Literal["closed_trade", "reconciliation", "market_event"]
+    kind: Literal["closed_trade", "reconciliation", "market_event", "strategy_telemetry"]
     event_id: str
     timestamp_ns: int
-    value: float | bool
+    value: float | bool | str
 
 
 class PaperSessionJournal:
@@ -79,6 +79,20 @@ class PaperSessionJournal:
         """Return the immutable persisted final report, if this session is closed."""
         return self._final_report
 
+    @property
+    def strategy_telemetry(self) -> dict[str, object] | None:
+        for event in reversed(self._events):
+            if event.kind != "strategy_telemetry":
+                continue
+            try:
+                payload = json.loads(str(event.value))
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("paper strategy telemetry is corrupt") from exc
+            if not isinstance(payload, dict):
+                raise RuntimeError("paper strategy telemetry is corrupt")
+            return payload
+        return None
+
     def has_event(self, event_id: str) -> bool:
         return event_id in self._event_ids
 
@@ -107,6 +121,62 @@ class PaperSessionJournal:
 
     def record_reconciliation(self, check_id: str, *, ok: bool, timestamp_ns: int) -> None:
         self._append(_PaperSessionEvent("reconciliation", check_id, int(timestamp_ns), bool(ok)))
+
+    @staticmethod
+    def _normalized_strategy_telemetry(telemetry: Mapping[str, object]) -> dict[str, object]:
+        if not isinstance(telemetry, Mapping):
+            raise TypeError("strategy telemetry must be a mapping")
+        required = {
+            "bars_seen",
+            "bars_required",
+            "warmup_remaining",
+            "last_signal",
+            "last_signal_reason",
+            "orders_attempted",
+            "orders_rejected",
+            "last_risk_rejection",
+        }
+        missing = required.difference(telemetry)
+        if missing:
+            raise ValueError(f"strategy telemetry is missing: {', '.join(sorted(missing))}")
+        normalized = dict(telemetry)
+        for key in ("bars_seen", "bars_required", "warmup_remaining", "orders_attempted", "orders_rejected"):
+            value = normalized[key]
+            if isinstance(value, bool):
+                raise ValueError(f"strategy telemetry {key} must be an integer")
+            try:
+                integer = int(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"strategy telemetry {key} must be an integer") from exc
+            if integer < 0 or (key == "bars_required" and integer <= 0):
+                raise ValueError(f"strategy telemetry {key} is invalid")
+            normalized[key] = integer
+        if normalized["warmup_remaining"] > normalized["bars_required"]:
+            raise ValueError("strategy telemetry warmup_remaining is invalid")
+        if not isinstance(normalized["last_signal"], str) or not normalized["last_signal"]:
+            raise ValueError("strategy telemetry last_signal is invalid")
+        if not isinstance(normalized["last_signal_reason"], str) or not normalized["last_signal_reason"]:
+            raise ValueError("strategy telemetry last_signal_reason is invalid")
+        rejection = normalized["last_risk_rejection"]
+        if rejection is not None and not isinstance(rejection, str):
+            raise ValueError("strategy telemetry last_risk_rejection is invalid")
+        # Ensure optional observability fields are safe JSON scalars/containers.
+        try:
+            json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("strategy telemetry must be JSON serializable") from exc
+        return normalized
+
+    def record_strategy_telemetry(
+        self,
+        telemetry: Mapping[str, object],
+        *,
+        timestamp_ns: int,
+    ) -> None:
+        normalized = self._normalized_strategy_telemetry(telemetry)
+        value = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+        event_id = f"strategy-telemetry:{len(self._events)}"
+        self._append(_PaperSessionEvent("strategy_telemetry", event_id, int(timestamp_ns), value))
 
     def record_execution_state(self, state: ExecutionState, *, timestamp_ns: int) -> None:
         """Atomically checkpoint expected execution state for a future process restart."""
@@ -211,6 +281,19 @@ class PaperSessionJournal:
                 if not isinstance(value, bool):
                     raise ValueError("paper session state is invalid")
                 journal.record_reconciliation(event_id, ok=value, timestamp_ns=timestamp_ns)
+            elif kind == "strategy_telemetry":
+                if not isinstance(value, str):
+                    raise ValueError("paper session state is invalid")
+                try:
+                    telemetry = json.loads(value)
+                except json.JSONDecodeError as exc:
+                    raise ValueError("paper session state is invalid") from exc
+                if not isinstance(telemetry, dict):
+                    raise ValueError("paper session state is invalid")
+                expected_id = f"strategy-telemetry:{len(journal._events)}"
+                if event_id != expected_id:
+                    raise ValueError("paper session state is invalid")
+                journal.record_strategy_telemetry(telemetry, timestamp_ns=timestamp_ns)
             else:
                 raise ValueError("paper session state is invalid")
 

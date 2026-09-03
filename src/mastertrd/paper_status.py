@@ -7,6 +7,22 @@ import time
 from mastertrd.paper_session import JsonPaperSessionStore, PaperSessionJournal
 
 
+_STRATEGY_TELEMETRY_FIELDS = (
+    "bars_seen",
+    "bars_required",
+    "warmup_remaining",
+    "bootstrap_bars",
+    "live_bars",
+    "last_signal",
+    "last_signal_reason",
+    "last_exit_reason",
+    "orders_attempted",
+    "orders_allowed",
+    "orders_rejected",
+    "last_risk_rejection",
+)
+
+
 def paper_status_payload(
     journal: PaperSessionJournal,
     *,
@@ -32,7 +48,7 @@ def paper_status_payload(
             max_drawdown = max(max_drawdown, (peak - equity) / peak)
 
     execution_state = journal.execution_state_checkpoint
-    return {
+    payload: dict[str, object] = {
         "schema_version": 1,
         "strategy_id": journal.strategy_id,
         "genome_hash": journal.genome_hash,
@@ -50,6 +66,12 @@ def paper_status_payload(
         "latest_timestamp_ns": journal.latest_timestamp_ns,
         "finalized": journal.finalized_report is not None,
     }
+    telemetry = journal.strategy_telemetry
+    if telemetry is not None:
+        for key in _STRATEGY_TELEMETRY_FIELDS:
+            if key in telemetry:
+                payload[key] = telemetry[key]
+    return payload
 
 
 if __name__ == "__main__":

@@ -6,8 +6,9 @@ from mastertrd.risk_profiles import build_research_backtest_risk_runtime
 
 
 def test_generated_trend_candidate_compiles_with_explicit_research_trade_size():
-    from nautilus_trader.examples.strategies.ema_cross import EMACross
     from nautilus_trader.test_kit.providers import TestInstrumentProvider
+
+    from mastertrd.nautilus_bar_strategy import GeneratedBarStrategy
 
     instrument = TestInstrumentProvider.ethusdt_binance()
     candidate = generate_candidate(
@@ -23,9 +24,11 @@ def test_generated_trend_candidate_compiles_with_explicit_research_trade_size():
         risk_runtime=build_research_backtest_risk_runtime(),
     )
 
-    assert isinstance(strategy, EMACross)
+    assert isinstance(strategy, GeneratedBarStrategy)
     assert strategy.config.instrument_id == instrument.id
-    assert strategy.config.fast_ema_period < strategy.config.slow_ema_period
+    fast = int(candidate.entry.get("fast_period", candidate.entry.get("fast")))
+    slow = int(candidate.entry.get("slow_period", candidate.entry.get("slow")))
+    assert fast < slow
     assert str(strategy.config.trade_size) == "0.01000"
 
 
@@ -57,9 +60,9 @@ def test_trade_size_override_cannot_hide_an_unsupported_exit_semantic():
         instruments=(instrument.id.value,),
         seed=9,
     )
-    unsafe = replace(candidate, exit={"type": "atr_bracket", "stop_atr": 2.0, "target_atr": 4.0})
+    unsafe = replace(candidate, exit={"type": "unimplemented_exit"})
 
-    with pytest.raises(ValueError, match="exit"):
+    with pytest.raises(ValueError, match="unsupported exit"):
         compile_genome_to_nautilus(
             unsafe,
             instrument=instrument,
