@@ -66,7 +66,11 @@ def paper_status_payload(
         "latest_timestamp_ns": journal.latest_timestamp_ns,
         "finalized": journal.finalized_report is not None,
     }
-    telemetry = journal.strategy_telemetry
+    # PAPER Status can be newer than the currently deployed read-only journal
+    # reader during a rolling upgrade. Pre-telemetry journals legitimately lack
+    # this attribute; all canonical identity/evidence above must still be
+    # reportable without weakening validation or fabricating telemetry.
+    telemetry = getattr(journal, "strategy_telemetry", None)
     if telemetry is not None:
         for key in _STRATEGY_TELEMETRY_FIELDS:
             if key in telemetry:
