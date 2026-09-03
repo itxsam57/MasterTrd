@@ -1,0 +1,66 @@
+name: One-shot Binance WS Smoke
+
+on:
+  push:
+    branches:
+      - ops/ws-smoke-af3cfbd-20260903
+    paths:
+      - .github/workflows/one-shot-binance-ws-smoke.yml
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: af3cfbd8a96a91fea4eca821e781fd521d34531e
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install exact locked stack
+        run: |
+          python -m pip install --disable-pip-version-check 'uv==0.12.7'
+          uv lock --check
+          uv sync --locked --all-extras
+          test "$(git rev-parse HEAD)" = 'af3cfbd8a96a91fea4eca821e781fd521d34531e'
+      - name: Prove corrected combined stream carries 4h kline traffic
+        run: |
+          uv run python - <<'PY'
+          import asyncio
+          import json
+          import time
+          import websockets
+          from mastertrd.binance_stream import BinancePublicMarketSource
+
+          async def main():
+              source = BinancePublicMarketSource(('ETHUSDT.BINANCE',), timeframe='4h')
+              assert source.uri.startswith('wss://data-stream.binance.vision/')
+              deadline = time.monotonic() + 45
+              saw_book = False
+              saw_kline = False
+              async with websockets.connect(source.uri, open_timeout=15, close_timeout=5) as ws:
+                  while time.monotonic() < deadline and not (saw_book and saw_kline):
+                      raw = await asyncio.wait_for(ws.recv(), timeout=max(1, deadline - time.monotonic()))
+                      payload = json.loads(raw)
+                      stream = str(payload.get('stream', ''))
+                      data = payload.get('data', {})
+                      if stream.endswith('@bookTicker'):
+                          saw_book = True
+                      if '@kline_4h' in stream:
+                          k = data.get('k', {}) if isinstance(data, dict) else {}
+                          if k.get('i') != '4h':
+                              raise SystemExit('received malformed 4h kline stream')
+                          saw_kline = True
+                          print(json.dumps({'stream': stream, 'interval': k.get('i'), 'closed': k.get('x')}, sort_keys=True))
+              if not saw_book:
+                  raise SystemExit('no bookTicker received from corrected combined stream')
+              if not saw_kline:
+                  raise SystemExit('no 4h kline update received from corrected combined stream')
+              print('BINANCE_COMBINED_4H_STREAM_PASS')
+
+          asyncio.run(main())
+          PY
