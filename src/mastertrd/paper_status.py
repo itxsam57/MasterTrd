@@ -32,7 +32,7 @@ def paper_status_payload(
             max_drawdown = max(max_drawdown, (peak - equity) / peak)
 
     execution_state = journal.execution_state_checkpoint
-    return {
+    payload: dict[str, object] = {
         "schema_version": 1,
         "strategy_id": journal.strategy_id,
         "genome_hash": journal.genome_hash,
@@ -50,6 +50,10 @@ def paper_status_payload(
         "latest_timestamp_ns": journal.latest_timestamp_ns,
         "finalized": journal.finalized_report is not None,
     }
+    telemetry = journal.strategy_telemetry
+    if telemetry is not None:
+        payload.update(telemetry)
+    return payload
 
 
 if __name__ == "__main__":
