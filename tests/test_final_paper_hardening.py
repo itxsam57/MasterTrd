@@ -115,6 +115,8 @@ def test_strategy_telemetry_is_integrity_covered_and_survives_restart(tmp_path):
             "orders_attempted": 1,
             "orders_rejected": 0,
             "last_risk_rejection": None,
+            "strategy_id": "forged-telemetry-identity",
+            "code_hash": "forged-telemetry-code",
         },
         timestamp_ns=started + NS,
     )
@@ -128,6 +130,8 @@ def test_strategy_telemetry_is_integrity_covered_and_survives_restart(tmp_path):
     from mastertrd.paper_status import paper_status_payload
 
     status = paper_status_payload(restored, observed_ns=started + 2 * NS)
+    assert status["strategy_id"] == candidate.strategy_id
+    assert status["code_hash"] == "code-hardening"
     assert status["bars_seen"] == 34
     assert status["bars_required"] == 34
     assert status["warmup_remaining"] == 0
@@ -184,6 +188,7 @@ def test_paper_dispatch_records_strategy_telemetry_only_when_it_changes():
     execution._sink = SimpleNamespace(bind_journal=lambda _journal: None)
     execution._quote = lambda _event: object()
     execution._bar = lambda _event: object()
+    execution._last_strategy_telemetry = None
 
     execution.dispatch(SimpleNamespace(kind="tick", timestamp_ns=100))
     execution.dispatch(SimpleNamespace(kind="tick", timestamp_ns=101))
