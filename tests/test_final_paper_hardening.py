@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 
 from mastertrd.genome import StrategyGenome
@@ -53,6 +54,50 @@ def test_bar_history_contract_exposes_conservative_restart_warmup():
     assert required == 34
     assert paper_bootstrap_bar_limit(candidate) >= required
     assert paper_bootstrap_bar_limit(candidate) >= 100
+
+
+def test_public_history_loader_keeps_only_closed_ordered_bars(monkeypatch):
+    import mastertrd.paper_hardening as hardening
+
+    rows = [
+        [0, "100", "103", "99", "102", "10", 899_999],
+        [900_000, "102", "104", "101", "103", "11", 1_799_999],
+    ]
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(rows).encode()
+
+    monkeypatch.setattr(hardening, "urlopen", lambda *_args, **_kwargs: Response())
+    bars = hardening.load_public_binance_bar_history(
+        "ETHUSDT.BINANCE",
+        "15m",
+        limit=100,
+        now_ms=1_000_000,
+    )
+
+    assert len(bars) == 1
+    assert bars[0].instrument == "ETHUSDT.BINANCE"
+    assert bars[0].timeframe == "15m"
+    assert bars[0].close == 102.0
+    assert bars[0].extras["bootstrap"] is True
+
+
+def test_real_paper_runtime_bootstraps_before_opening_durable_session():
+    import mastertrd.runtime_factory as runtime_factory
+
+    source = inspect.getsource(runtime_factory._paper_runtime)
+    assert "load_public_binance_bar_history" in source
+    assert "paper_bootstrap_bar_limit" in source
+    assert "required_bar_history" in source
+    assert "initial_bars=initial_bars" in source
+    assert source.index("load_public_binance_bar_history") < source.index("open_persistent_paper_session")
 
 
 def test_strategy_telemetry_is_integrity_covered_and_survives_restart(tmp_path):
