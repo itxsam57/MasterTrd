@@ -22,6 +22,10 @@ class NautilusRiskMixin:
             raise ValueError("risk_runtime is required for risk-managed Nautilus strategies")
         self._risk_strategy_id = strategy_id
         self.risk_runtime = risk_runtime
+        self._risk_orders_attempted = 0
+        self._risk_orders_allowed = 0
+        self._risk_orders_rejected = 0
+        self._risk_last_rejection: str | None = None
 
     def _risk_reference_price(self, instrument_id) -> float:
         return 0.0
@@ -50,19 +54,38 @@ class NautilusRiskMixin:
             order_type=getattr(order_type, "name", str(order_type)),
         )
 
+    def risk_telemetry(self) -> dict[str, object]:
+        return {
+            "orders_attempted": int(self._risk_orders_attempted),
+            "orders_allowed": int(self._risk_orders_allowed),
+            "orders_rejected": int(self._risk_orders_rejected),
+            "last_risk_rejection": self._risk_last_rejection,
+        }
+
     def submit_order(self, order: Any, *args: Any, **kwargs: Any):
+        self._risk_orders_attempted += 1
         intent = self._risk_intent_for_order(order)
         snapshot = self._risk_snapshot_for_order(order, intent)
         decision = self.risk_runtime.check_order(intent, snapshot)
         if decision.action is not RiskAction.ALLOW:
+            self._risk_orders_rejected += 1
+            self._risk_last_rejection = f"{decision.action}:{decision.reason}"
             logger = getattr(self, "log", None)
             if logger is not None:
                 logger.warning(f"Risk rejected order: {decision.action} {decision.reason}")
             return None
+        self._risk_orders_allowed += 1
+        self._risk_last_rejection = None
         return super().submit_order(order, *args, **kwargs)
 
 
 class RiskManagedEMACross(NautilusRiskMixin, EMACross):
+    """Legacy compatibility wrapper for tests and non-promotion callers.
+
+    Promotion-grade trend compilation no longer selects Nautilus's bundled EMA
+    example strategy; see ``compile_genome_to_nautilus``.
+    """
+
     def __init__(
         self,
         *,
