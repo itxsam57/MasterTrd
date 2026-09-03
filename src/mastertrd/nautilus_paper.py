@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
 from importlib.metadata import version
@@ -15,6 +15,9 @@ from .paper_session import JsonPaperSessionStore, PaperSessionJournal
 from .reconciliation import ExecutionState
 from .risk_runtime import RiskRuntime
 from .streaming import MarketStreamEvent
+
+
+TelemetryProvider = Callable[[], Mapping[str, object] | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +231,7 @@ class NautilusStreamingPaperExecution:
         journal: PaperSessionJournal,
         instrument,
         initial_bars: Sequence[MarketBar] = (),
+        telemetry_provider: TelemetryProvider | None = None,
     ) -> None:
         if len(candidate.instruments) != 1:
             raise RuntimeError("streaming PAPER bridge currently requires one instrument")
@@ -248,6 +252,7 @@ class NautilusStreamingPaperExecution:
         self._sink = NautilusPaperEventSink(journal)
         self._ended = False
         self._last_strategy_telemetry: dict[str, object] | None = None
+        self._telemetry_provider = telemetry_provider
 
         compiled = compile_genome_to_nautilus(
             candidate,
@@ -295,7 +300,23 @@ class NautilusStreamingPaperExecution:
         payload = telemetry()
         if not isinstance(payload, dict):
             raise RuntimeError("PAPER strategy telemetry is invalid")
-        return payload
+        merged = dict(payload)
+        provider = self._telemetry_provider
+        if provider is None:
+            return merged
+        extension = provider()
+        if extension is None:
+            return merged
+        if not isinstance(extension, Mapping):
+            raise RuntimeError("PAPER telemetry provider returned an invalid payload")
+        overlap = set(merged).intersection(extension)
+        if overlap:
+            raise RuntimeError(
+                "PAPER telemetry provider cannot overwrite strategy telemetry: "
+                + ", ".join(sorted(overlap))
+            )
+        merged.update(dict(extension))
+        return merged
 
     def _record_strategy_telemetry_if_changed(self, *, timestamp_ns: int) -> None:
         payload = self.strategy_telemetry()
