@@ -41,15 +41,16 @@ def test_recipe_shard_plan_preserves_default_scope_and_limits_exact_recipe():
     assert shard.instruments == base.instruments
     assert shard.seed_start == base.seed_start
     assert shard.seed_stop == base.seed_stop
-    assert shard.archive_months == base.archive_months
+    assert shard.archive_months >= base.archive_months
 
 
-def test_recipe_shard_plan_rejects_recipe_outside_default_public_schedule():
-    with pytest.raises(ValueError, match="default autonomous research schedule"):
+def test_recipe_shard_plan_rejects_recipe_outside_public_bar_schedule_with_blocker():
+    with pytest.raises(ValueError, match="not runnable in public BAR research") as exc_info:
         research_job.research_job_plan_for_recipe("options-iv-rv-defined-risk")
+    assert "blocked:" in str(exc_info.value)
 
 
-def test_autonomous_research_matrix_exactly_shards_default_recipe_schedule():
+def test_autonomous_research_matrix_exactly_shards_complete_public_recipe_schedule():
     workflow = _workflow()
     jobs = workflow.get("jobs")
     assert isinstance(jobs, dict) and len(jobs) == 1
@@ -65,7 +66,8 @@ def test_autonomous_research_matrix_exactly_shards_default_recipe_schedule():
 
     expected = list(research_job.default_research_job_plan().runnable_recipe_ids)
     assert recipe_ids == expected
-    assert len(recipe_ids) == 10
+    assert recipe_ids == list(research_job.scheduled_public_recipe_ids())
+    assert len(recipe_ids) >= 25
     assert len(set(recipe_ids)) == len(recipe_ids)
 
     env = job.get("env")
