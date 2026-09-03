@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from mastertrd.genome import StrategyGenome
 from mastertrd.paper_evidence import PaperStartReceipt
@@ -134,6 +135,68 @@ def test_strategy_telemetry_is_integrity_covered_and_survives_restart(tmp_path):
     assert status["last_signal_reason"] == "ema_cross"
     assert status["orders_attempted"] == 1
     assert status["orders_rejected"] == 0
+
+
+def test_paper_dispatch_records_strategy_telemetry_only_when_it_changes():
+    from mastertrd.nautilus_paper import NautilusStreamingPaperExecution
+
+    class Engine:
+        def add_data(self, _data):
+            pass
+
+        def run(self, *, streaming):
+            assert streaming is True
+
+        def clear_data(self):
+            pass
+
+    class Journal:
+        def __init__(self):
+            self.latest_timestamp_ns = 0
+            self.recorded = []
+
+        def record_strategy_telemetry(self, payload, *, timestamp_ns):
+            self.recorded.append((dict(payload), int(timestamp_ns)))
+            self.latest_timestamp_ns = max(self.latest_timestamp_ns, int(timestamp_ns))
+
+    class Strategy:
+        def __init__(self):
+            self.payload = {
+                "bars_seen": 100,
+                "bars_required": 34,
+                "warmup_remaining": 0,
+                "last_signal": "FLAT",
+                "last_signal_reason": "ema_cross_flat",
+                "orders_attempted": 0,
+                "orders_allowed": 0,
+                "orders_rejected": 0,
+                "last_risk_rejection": None,
+            }
+
+        def runtime_telemetry(self):
+            return dict(self.payload)
+
+    execution = object.__new__(NautilusStreamingPaperExecution)
+    execution._ended = False
+    execution._engine = Engine()
+    execution._strategy = Strategy()
+    execution._journal = Journal()
+    execution._sink = SimpleNamespace(bind_journal=lambda _journal: None)
+    execution._quote = lambda _event: object()
+    execution._bar = lambda _event: object()
+
+    execution.dispatch(SimpleNamespace(kind="tick", timestamp_ns=100))
+    execution.dispatch(SimpleNamespace(kind="tick", timestamp_ns=101))
+    assert len(execution._journal.recorded) == 1
+
+    execution._strategy.payload["last_signal_reason"] = "ema_cross_long"
+    execution.dispatch(SimpleNamespace(kind="bar", timestamp_ns=102))
+    assert len(execution._journal.recorded) == 2
+
+    replacement = Journal()
+    execution.bind_journal(replacement)
+    execution.dispatch(SimpleNamespace(kind="tick", timestamp_ns=103))
+    assert len(replacement.recorded) == 1
 
 
 def test_scheduled_public_research_covers_every_compatible_executable_recipe():
