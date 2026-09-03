@@ -26,6 +26,11 @@ from .nautilus_paper import (
     open_persistent_paper_session,
 )
 from .paper_archive import JsonPaperReportArchive
+from .paper_hardening import (
+    load_public_binance_bar_history,
+    paper_bootstrap_bar_limit,
+    required_bar_history,
+)
 from .paper_session import JsonPaperSessionStore, PaperSessionJournal
 from .reconciliation import Reconciler
 from .risk import RiskLimits
@@ -217,14 +222,27 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
     if len(candidate.instruments) != 1:
         raise RuntimeError("PAPER runtime currently requires one instrument")
 
-    # Resolve authoritative instrument metadata before touching durable session
-    # state. A public-network metadata failure must not leave behind a session
-    # file that falsely looks like a successfully initialized PAPER process.
+    # Resolve authoritative metadata and, for the real public path, sufficient
+    # closed-bar warmup history before touching durable session state. A metadata
+    # or history failure must not leave behind a session file that falsely looks
+    # like a successfully initialized PAPER process.
     fixture_path = environ.get("MASTERTRD_PUBLIC_FEED_FIXTURE", "").strip()
+    initial_bars = ()
     if fixture_path:
         instrument = fixture_binance_spot_instrument(candidate.instruments[0])
     else:
         instrument = load_public_binance_spot_instrument(candidate.instruments[0])
+        initial_bars = load_public_binance_bar_history(
+            candidate.instruments[0],
+            candidate.timeframe,
+            limit=paper_bootstrap_bar_limit(candidate),
+        )
+        minimum_history = required_bar_history(candidate)
+        if len(initial_bars) < minimum_history:
+            raise RuntimeError(
+                f"public PAPER history is insufficient for strategy warmup: "
+                f"{len(initial_bars)}/{minimum_history} closed bars"
+            )
 
     archive: JsonPaperReportArchive | None = None
     history_dir: Path | None = None
@@ -329,6 +347,7 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
         risk_runtime=risk_runtime,
         journal=session.journal,
         instrument=instrument,
+        initial_bars=initial_bars,
     )
     account_id_ref = {"value": f"paper:{session.journal.session_id}"}
 
