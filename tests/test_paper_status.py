@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -65,6 +66,35 @@ def test_paper_status_snapshot_is_read_only_and_reports_current_evidence():
         "finalized": False,
     }
     assert journal.finalized_report is None
+
+
+def test_paper_status_accepts_pre_telemetry_legacy_journal_shape():
+    started = 2_000 * NANOSECOND
+    current = PaperSessionJournal(_receipt(), code_hash="legacy-code", started_ns=started)
+    current.record_market_event("bar-legacy", timestamp_ns=started + NANOSECOND)
+    current.record_reconciliation("recon-legacy", ok=True, timestamp_ns=started + 2 * NANOSECOND)
+
+    legacy = SimpleNamespace(
+        started_ns=current.started_ns,
+        latest_timestamp_ns=current.latest_timestamp_ns,
+        strategy_id=current.strategy_id,
+        genome_hash=current.genome_hash,
+        code_hash=current.code_hash,
+        session_id=current.session_id,
+        _events=current._events,
+        execution_state_checkpoint=current.execution_state_checkpoint,
+        finalized_report=current.finalized_report,
+    )
+
+    module = importlib.import_module("mastertrd.paper_status")
+    payload = module.paper_status_payload(legacy, observed_ns=started + 3 * NANOSECOND)
+
+    assert payload["strategy_id"] == "S-paper-status"
+    assert payload["code_hash"] == "legacy-code"
+    assert payload["market_events"] == 1
+    assert payload["reconciliation_errors"] == 0
+    assert "bars_seen" not in payload
+    assert "warmup_remaining" not in payload
 
 
 def test_paper_status_workflow_is_read_only_and_publishes_safe_artifact():
