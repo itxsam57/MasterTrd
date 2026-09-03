@@ -7,6 +7,22 @@ import time
 from mastertrd.paper_session import JsonPaperSessionStore, PaperSessionJournal
 
 
+_STRATEGY_TELEMETRY_FIELDS = (
+    "bars_seen",
+    "bars_required",
+    "warmup_remaining",
+    "bootstrap_bars",
+    "live_bars",
+    "last_signal",
+    "last_signal_reason",
+    "last_exit_reason",
+    "orders_attempted",
+    "orders_allowed",
+    "orders_rejected",
+    "last_risk_rejection",
+)
+
+
 def paper_status_payload(
     journal: PaperSessionJournal,
     *,
@@ -52,7 +68,9 @@ def paper_status_payload(
     }
     telemetry = journal.strategy_telemetry
     if telemetry is not None:
-        payload.update(telemetry)
+        for key in _STRATEGY_TELEMETRY_FIELDS:
+            if key in telemetry:
+                payload[key] = telemetry[key]
     return payload
 
 
