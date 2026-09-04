@@ -6,7 +6,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import time
 from typing import Mapping
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from .contracts import StrategyState
@@ -221,14 +223,73 @@ def _checksum_from_response(text: str) -> str:
     return lowered
 
 
-def _download(url: str, destination: Path) -> None:
+def _is_retryable_public_data_error(exc: BaseException) -> bool:
+    if isinstance(exc, HTTPError):
+        return exc.code == 429 or 500 <= exc.code <= 599
+    return isinstance(exc, (URLError, TimeoutError, ConnectionError))
+
+
+def _retry_sleep_seconds(attempt: int) -> float:
+    return float(2 ** (attempt - 1))
+
+
+def _read_url_text_with_retry(
+    url: str,
+    *,
+    timeout: int,
+    urlopen_fn=None,
+    sleep_fn=None,
+    max_attempts: int = 4,
+) -> str:
+    if max_attempts <= 0:
+        raise ValueError("max_attempts must be positive")
+    opener = urlopen if urlopen_fn is None else urlopen_fn
+    sleeper = time.sleep if sleep_fn is None else sleep_fn
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with opener(url, timeout=timeout) as response:
+                return response.read().decode("utf-8")
+        except Exception as exc:
+            if not _is_retryable_public_data_error(exc) or attempt >= max_attempts:
+                raise
+            sleeper(_retry_sleep_seconds(attempt))
+    raise RuntimeError("public data retry loop ended unexpectedly")
+
+
+def _download(
+    url: str,
+    destination: Path,
+    *,
+    urlopen_fn=None,
+    sleep_fn=None,
+    max_attempts: int = 4,
+) -> None:
+    if max_attempts <= 0:
+        raise ValueError("max_attempts must be positive")
+    opener = urlopen if urlopen_fn is None else urlopen_fn
+    sleeper = time.sleep if sleep_fn is None else sleep_fn
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with urlopen(url, timeout=60) as response, destination.open("wb") as handle:
-        while True:
-            chunk = response.read(1024 * 1024)
-            if not chunk:
-                break
-            handle.write(chunk)
+    partial = destination.with_name(f".{destination.name}.part")
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            partial.unlink(missing_ok=True)
+            with opener(url, timeout=60) as response, partial.open("wb") as handle:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(partial, destination)
+            return
+        except Exception as exc:
+            partial.unlink(missing_ok=True)
+            if not _is_retryable_public_data_error(exc) or attempt >= max_attempts:
+                raise
+            sleeper(_retry_sleep_seconds(attempt))
+    raise RuntimeError("public archive retry loop ended unexpectedly")
 
 
 def _read_verified_public_archive(
@@ -250,8 +311,7 @@ def _read_verified_public_archive(
         period=period,
     )
     checksum_url = f"{url}.CHECKSUM"
-    with urlopen(checksum_url, timeout=30) as response:
-        checksum_text = response.read().decode("utf-8")
+    checksum_text = _read_url_text_with_retry(checksum_url, timeout=30)
     expected_sha256 = _checksum_from_response(checksum_text)
     archive_path = data_dir / url.rsplit("/", 1)[-1]
     _download(url, archive_path)
