@@ -38,6 +38,11 @@ def _passing_result(lane: ExecutionCanaryLane) -> dict[str, object]:
         "orders_rejected": 0,
         "observed_sides": sides,
         "closed_positions": lane.minimum_closed_positions,
+        "closed_trade_returns": [0.01] * lane.minimum_closed_positions,
+        "winning_trades": lane.minimum_closed_positions,
+        "losing_trades": 0,
+        "breakeven_trades": 0,
+        "total_return": (1.01 ** lane.minimum_closed_positions) - 1.0,
         "held_source_bars": lane.hold_source_bars,
         "reconciliation_errors": 0,
         "final_flat": True,
@@ -333,3 +338,24 @@ def test_execution_canary_matrix_fails_closed_and_writes_no_receipt(tmp_path) ->
             max_workers=4,
         )
     assert not receipt.exists()
+
+
+def test_execution_canary_result_requires_consistent_realized_pnl():
+    lane = execution_canary_lanes()[0]
+    result = _passing_result(lane)
+    result["closed_trade_returns"] = [-0.02]
+    result["winning_trades"] = 0
+    result["losing_trades"] = 1
+    result["breakeven_trades"] = 0
+    result["total_return"] = -0.02
+    validate_execution_canary_result(lane, result)
+
+    bad = dict(result)
+    bad["total_return"] = 0.5
+    with pytest.raises(RuntimeError, match="total_return"):
+        validate_execution_canary_result(lane, bad)
+
+    bad = dict(result)
+    bad["closed_trade_returns"] = []
+    with pytest.raises(RuntimeError, match="closed_trade_returns"):
+        validate_execution_canary_result(lane, bad)

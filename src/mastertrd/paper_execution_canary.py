@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_CEILING
+from math import isclose, isfinite
 import hashlib
 from importlib.metadata import version
 import json
@@ -93,6 +94,35 @@ def validate_execution_canary_result(lane: ExecutionCanaryLane, result: Mapping[
         raise RuntimeError(f"{lane.name}: orders_rejected must be zero")
     if _integer(result, "closed_positions") < lane.minimum_closed_positions:
         raise RuntimeError(f"{lane.name}: closed_positions below minimum")
+    trade_returns_raw = result.get("closed_trade_returns")
+    if not isinstance(trade_returns_raw, list):
+        raise RuntimeError(f"{lane.name}: closed_trade_returns must be a list")
+    try:
+        trade_returns = [float(value) for value in trade_returns_raw]
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{lane.name}: closed_trade_returns must be numeric") from exc
+    if len(trade_returns) != _integer(result, "closed_positions"):
+        raise RuntimeError(f"{lane.name}: closed_trade_returns count mismatch")
+    if any(not isfinite(value) or value < -1.0 for value in trade_returns):
+        raise RuntimeError(f"{lane.name}: closed_trade_returns contains invalid return")
+    winning = sum(1 for value in trade_returns if value > 0.0)
+    losing = sum(1 for value in trade_returns if value < 0.0)
+    breakeven = sum(1 for value in trade_returns if value == 0.0)
+    if _integer(result, "winning_trades") != winning:
+        raise RuntimeError(f"{lane.name}: winning_trades mismatch")
+    if _integer(result, "losing_trades") != losing:
+        raise RuntimeError(f"{lane.name}: losing_trades mismatch")
+    if _integer(result, "breakeven_trades") != breakeven:
+        raise RuntimeError(f"{lane.name}: breakeven_trades mismatch")
+    equity = 1.0
+    for value in trade_returns:
+        equity *= 1.0 + value
+    try:
+        total_return = float(result["total_return"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError(f"{lane.name}: total_return must be numeric") from exc
+    if not isfinite(total_return) or not isclose(total_return, equity - 1.0, rel_tol=1e-12, abs_tol=1e-12):
+        raise RuntimeError(f"{lane.name}: total_return mismatch")
     if _integer(result, "held_source_bars") < lane.hold_source_bars:
         raise RuntimeError(f"{lane.name}: held_source_bars below minimum")
     if _integer(result, "reconciliation_errors") != 0:
@@ -180,6 +210,7 @@ def _build_canary_strategy(*, lane: ExecutionCanaryLane, instrument, risk_runtim
             self.real_closed_bars = 0
             self.held_source_bars = 0
             self.closed_positions = 0
+            self.closed_trade_returns: list[float] = []
             self.observed_sides: list[str] = []
             self._position_side = "FLAT"
             self._cursor = 0
@@ -245,6 +276,7 @@ def _build_canary_strategy(*, lane: ExecutionCanaryLane, instrument, risk_runtim
             if not self._matches(event):
                 return
             self.closed_positions += 1
+            self.closed_trade_returns.append(float(event.realized_return))
             self._position_side = "FLAT"
             if self._cursor < len(self.lane.plan) and self.lane.plan[self._cursor] == "FLAT":
                 self._cursor += 1
@@ -419,6 +451,9 @@ class _CanaryPaperBridge:
         self._engine.add_data([data])
         self._engine.run(streaming=True)
         self._engine.clear_data()
+
+    def closed_trade_returns(self) -> list[float]:
+        return list(self.strategy.closed_trade_returns)
 
     def execution_state(self, *, account_id: str) -> ExecutionState:
         from nautilus_trader.model.identifiers import Venue
@@ -617,6 +652,10 @@ def run_paper_execution_canary_lane(
             if snapshot is None:
                 raise RuntimeError("execution canary completeness snapshot is unavailable")
             risk = bridge.strategy.risk_telemetry()
+            trade_returns = bridge.closed_trade_returns()
+            equity = 1.0
+            for value in trade_returns:
+                equity *= 1.0 + value
             final_flat = not final_state.open_order_ids and all(
                 quantity == 0 for quantity in final_state.positions.values()
             )
@@ -634,6 +673,11 @@ def run_paper_execution_canary_lane(
                 "orders_rejected": int(risk["orders_rejected"]),
                 "observed_sides": list(bridge.strategy.observed_sides),
                 "closed_positions": int(bridge.strategy.closed_positions),
+                "closed_trade_returns": trade_returns,
+                "winning_trades": sum(1 for value in trade_returns if value > 0.0),
+                "losing_trades": sum(1 for value in trade_returns if value < 0.0),
+                "breakeven_trades": sum(1 for value in trade_returns if value == 0.0),
+                "total_return": equity - 1.0,
                 "held_source_bars": int(bridge.strategy.held_source_bars),
                 "reconciliation_errors": int(run_report.reconciliation_errors),
                 "reconciliation_checks": int(run_report.reconciliation_checks),
