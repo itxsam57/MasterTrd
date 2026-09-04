@@ -65,6 +65,15 @@ class ExecutionRuntime:
     def _execution_state_is_flat(state: ExecutionState) -> bool:
         return not state.open_order_ids and all(quantity == 0 for quantity in state.positions.values())
 
+    def _available_event_id(self, base: str) -> str:
+        """Return a deterministic unused journal id for a restartable receipt."""
+        if not self._journal.has_event(base):
+            return base
+        suffix = 1
+        while self._journal.has_event(f"{base}:restart:{suffix}"):
+            suffix += 1
+        return f"{base}:restart:{suffix}"
+
     def _refresh_market_risk_state(self, event: MarketStreamEvent) -> None:
         extras = event.data.extras
         volatility_raw = extras.get("realized_volatility")
@@ -203,9 +212,10 @@ class ExecutionRuntime:
                 if not startup_reconciliation.ok:
                     reconciliation_errors += 1
                 startup_timestamp = max(event.timestamp_ns, self._journal.latest_timestamp_ns)
+                startup_id = self._available_event_id(f"reconcile:startup:{event.event_id}")
                 self._record_reconciliation(
                     reconciliation=startup_reconciliation,
-                    reconciliation_id=f"reconcile:startup:{event.event_id}",
+                    reconciliation_id=startup_id,
                     timestamp_ns=startup_timestamp,
                 )
                 if not startup_reconciliation.ok:
