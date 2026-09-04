@@ -36,3 +36,21 @@ def test_research_brain_config_and_stage_receipts_are_deterministic(tmp_path):
     assert memory.get_stage("run-001", RESEARCH_STAGES[0]) == receipt
     assert memory.stage_receipts("run-001") == [receipt]
     memory.close()
+
+
+def test_research_optimizer_rejects_semantically_invalid_bar_genomes():
+    from dataclasses import replace
+
+    from mastertrd.research_brain import _valid_genome
+    from mastertrd.strategy_universe import compile_strategy_recipe
+
+    valid = compile_strategy_recipe(
+        "rsi-momentum-balanced",
+        instruments=("BTCUSDT.BINANCE",),
+        seed=42,
+        trade_size="0.01000",
+    )
+    invalid = replace(valid, entry={**valid.entry, "threshold": 49})
+
+    assert _valid_genome(valid) is True
+    assert _valid_genome(invalid) is False

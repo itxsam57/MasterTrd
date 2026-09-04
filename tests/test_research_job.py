@@ -414,3 +414,31 @@ def test_main_fails_closed_without_code_hash_or_lock(monkeypatch, tmp_path):
     monkeypatch.setenv("MASTERTRD_CODE_HASH", "code-v1")
     with pytest.raises(RuntimeError, match="uv.lock is required"):
         research_job.main()
+
+
+def test_scheduled_research_uses_promotion_grade_validation_policies():
+    from mastertrd.research_job import _scheduled_validation_policies
+
+    robust, advanced, transfer, hidden = _scheduled_validation_policies()
+
+    assert robust.min_trades_per_slice == 5
+    assert robust.min_profitable_slice_ratio == 1.0
+    assert robust.max_drawdown == 0.20
+    assert robust.min_stressed_return == 0.0
+    assert robust.max_return_degradation == 0.60
+    assert robust.min_stable_neighbor_ratio == 0.67
+    assert advanced.min_evaluations == 1
+    assert advanced.min_trades_per_evaluation == 5
+    assert advanced.min_positive_ratio == 1.0
+    assert advanced.max_drawdown == 0.25
+    assert advanced.min_monte_carlo_survival_ratio == 1.0
+    assert advanced.max_monte_carlo_loss == -0.10
+    assert transfer.min_transfer_assets == 1
+    assert transfer.min_trades_per_asset == 5
+    assert transfer.min_pass_ratio == 1.0
+    assert transfer.min_total_return == 0.0
+    assert transfer.max_drawdown == 0.25
+    assert hidden.min_trades_per_evaluation == 5
+    assert hidden.min_total_return == 0.0
+    assert hidden.max_drawdown == 0.20
+    assert hidden.min_regime_pass_ratio == 0.67

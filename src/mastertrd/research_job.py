@@ -11,14 +11,18 @@ from typing import Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
+from .advanced_validation import AdvancedValidationPolicy
+from .asset_transfer import AssetTransferPolicy
 from .contracts import StrategyState
 from .data.archive import ArchiveReadResult, dataset_hash_for_bars, read_binance_archive
 from .data.binance_public import binance_kline_url
 from .genome import StrategyGenome
+from .hidden_gate import HiddenGatePolicy
 from .memory_duckdb import DuckDbResearchMemory
 from .nautilus_paper import load_public_binance_spot_instrument
 from .research.generator import generate_candidate
 from .research_brain import ResearchBrainConfig, ResearchDataset, run_research_brain
+from .robustness import RobustnessPolicy
 from .strategy_families import DataLevel, FAMILIES, family_spec
 from .strategy_universe import (
     AssetClass,
@@ -136,6 +140,22 @@ def _archive_months_for_recipe(recipe_id: str) -> int:
     if family == "swing":
         return 8
     return 2
+
+
+def _scheduled_validation_policies() -> tuple[
+    RobustnessPolicy,
+    AdvancedValidationPolicy,
+    AssetTransferPolicy,
+    HiddenGatePolicy,
+]:
+    """Promotion-grade evidence thresholds for autonomous public research."""
+
+    return (
+        RobustnessPolicy(5, 1.0, 0.20, 0.0, 0.60, 0.67),
+        AdvancedValidationPolicy(1, 5, 1.0, 0.25, 1.0, -0.10),
+        AssetTransferPolicy(1, 5, 1.0, 0.0, 0.25),
+        HiddenGatePolicy(5, 0.0, 0.20, 0.67),
+    )
 
 
 def default_research_job_plan() -> ResearchJobPlan:
@@ -529,12 +549,13 @@ def run_research_job(
                         data_dir=data_dir,
                     )
                 dataset, manifests = dataset_cache[timeframe]
+                robust_policy, advanced_policy, transfer_policy, hidden_policy = _scheduled_validation_policies()
                 config = ResearchBrainConfig(
                     families=(family,),
                     instruments=plan.instruments,
                     seed_start=seed,
                     seed_stop=seed + 1,
-                    screening_min_return=-1.0,
+                    screening_min_return=0.0,
                     optimization_trials=2,
                     evolution_generations=1,
                     evolution_population=4,
@@ -545,6 +566,10 @@ def run_research_job(
                     trade_size="0.01000",
                     starting_balances=("10 ETH", "10 BTC", "100000 USDT"),
                     recipe_ids=(recipe_id,) if recipe_id is not None else (),
+                    robustness_policy=robust_policy,
+                    advanced_policy=advanced_policy,
+                    asset_transfer_policy=transfer_policy,
+                    hidden_policy=hidden_policy,
                 )
                 report = run_research_brain(
                     config,

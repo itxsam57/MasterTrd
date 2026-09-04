@@ -375,11 +375,13 @@ def _parameter_space(genome: StrategyGenome) -> dict[str, object]:
 
 
 def _valid_genome(genome: StrategyGenome) -> bool:
-    entry = genome.entry
-    fast_key = "fast" if "fast" in entry else "fast_period" if "fast_period" in entry else None
-    slow_key = "slow" if "slow" in entry else "slow_period" if "slow_period" in entry else None
-    if fast_key and slow_key:
-        return float(entry[fast_key]) < float(entry[slow_key])
+    if "BAR" in genome.data_requirements:
+        from .paper_hardening import validate_bar_strategy_contract
+
+        try:
+            validate_bar_strategy_contract(genome)
+        except (TypeError, ValueError):
+            return False
     return True
 
 
