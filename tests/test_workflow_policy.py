@@ -217,3 +217,24 @@ def test_research_stack_owns_strategy_universe_recipe_changes_and_traceability_t
     assert "tests/test_strategy_recipe_compiler.py" in lower
     assert "tests/test_research_recipe_scheduling.py" in lower
     assert "tests/integration/test_strategy_universe_research.py" in lower
+
+
+def test_oracle_deploy_requires_atomic_candidate_matrix_and_minute_scale_paper_windows():
+    text, workflow = _load("oracle-deploy.yml")
+    dispatch = _on(workflow).get("workflow_dispatch")
+    assert isinstance(dispatch, dict)
+    inputs = dispatch.get("inputs")
+    assert isinstance(inputs, dict)
+    assert inputs["paper_candidates_json"]["required"] is True
+    assert "paper_candidate_manifest_json" not in inputs
+
+    lower = text.lower()
+    assert "validate_paper_candidate_manifests" in lower
+    assert lower.index("validate_paper_candidate_manifests") < lower.index("configure pinned ssh trust")
+    assert "mastertrd_paper_rotate_after_seconds=600" in lower
+    assert "mastertrd-paper@" in lower
+    assert "mastertrd-paper-rotate@" in lower
+    assert "/etc/mastertrd/paper" in lower
+    assert "/var/lib/mastertrd/paper/$github_sha" in lower
+    assert "live_trading_enabled=false" in lower
+    assert "configured for live" in lower

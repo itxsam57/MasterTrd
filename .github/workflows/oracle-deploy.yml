@@ -3,8 +3,8 @@ name: Oracle Deploy
 on:
   workflow_dispatch:
     inputs:
-      paper_candidate_manifest_json:
-        description: Public-safe ResearchJob PAPER candidate manifest for this exact source SHA
+      paper_candidates_json:
+        description: Public-safe ResearchJob paper_candidates JSON array for this exact source SHA
         required: true
         type: string
 
@@ -14,7 +14,7 @@ permissions:
 jobs:
   deploy-oracle:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     environment: oracle
     env:
       ORACLE_ENABLED: ${{ vars.ORACLE_ENABLED }}
@@ -51,50 +51,64 @@ jobs:
           uv pip check
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
-      - name: Validate identity-bound PAPER candidate
+      - name: Validate atomic PAPER candidate matrix
         env:
-          PAPER_CANDIDATE_MANIFEST_JSON: ${{ inputs.paper_candidate_manifest_json }}
+          PAPER_CANDIDATES_JSON: ${{ inputs.paper_candidates_json }}
         run: |
-          mkdir -p artifacts/oracle
+          mkdir -p artifacts/oracle/paper-candidates
           uv run python - <<'PY'
           import hashlib
           import json
           import os
           from pathlib import Path
 
-          from mastertrd.oracle import validate_paper_candidate_manifest
+          from mastertrd.oracle import validate_paper_candidate_manifests
 
+          raw = os.environ.get("PAPER_CANDIDATES_JSON", "").strip()
           try:
-              payload = json.loads(os.environ["PAPER_CANDIDATE_MANIFEST_JSON"])
-          except (KeyError, json.JSONDecodeError) as exc:
-              raise SystemExit("paper_candidate_manifest_json must contain valid JSON") from exc
-          if not isinstance(payload, dict):
-              raise SystemExit("paper_candidate_manifest_json must contain a JSON object")
+              payloads = json.loads(raw)
+          except json.JSONDecodeError as exc:
+              raise SystemExit(f"paper_candidates_json must contain valid JSON: {exc}") from exc
 
           lock_hash = hashlib.sha256(Path("uv.lock").read_bytes()).hexdigest()
-          candidate = validate_paper_candidate_manifest(
-              payload,
+          candidates = validate_paper_candidate_manifests(
+              payloads,
               expected_code_hash=os.environ["GITHUB_SHA"],
               expected_lock_hash=lock_hash,
           )
-          candidate_path = Path("artifacts/oracle/paper-candidate.json")
-          candidate_path.write_text(
-              json.dumps(candidate.canonical_payload(), sort_keys=True, indent=2, allow_nan=False),
-              encoding="utf-8",
-          )
-          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as env_file:
-              env_file.write(f"PAPER_GENOME_HASH={candidate.genome_hash}\n")
-          print(
-              json.dumps(
+          root = Path("artifacts/oracle/paper-candidates")
+          index = []
+          for candidate in candidates:
+              instance = f"g-{candidate.genome_hash[:16]}"
+              candidate_path = root / f"{instance}.json"
+              candidate_path.write_text(
+                  json.dumps(candidate.canonical_payload(), sort_keys=True, indent=2, allow_nan=False),
+                  encoding="utf-8",
+              )
+              index.append(
                   {
-                      "paper_candidate": str(candidate_path),
+                      "instance": instance,
                       "strategy_id": candidate.strategy_id,
                       "genome_hash": candidate.genome_hash,
+                      "timeframe": candidate.timeframe,
                       "code_hash": os.environ["GITHUB_SHA"],
+                      "lock_hash": lock_hash,
+                  }
+              )
+
+          Path("artifacts/oracle/deployment-index.json").write_text(
+              json.dumps(
+                  {
+                      "code_hash": os.environ["GITHUB_SHA"],
+                      "lock_hash": lock_hash,
+                      "candidates": index,
                   },
                   sort_keys=True,
-              )
+                  indent=2,
+              ),
+              encoding="utf-8",
           )
+          print(json.dumps({"candidate_count": len(index), "instances": [row["instance"] for row in index]}, sort_keys=True))
           PY
 
       - name: Render deployment bundle
@@ -112,11 +126,7 @@ jobs:
           )
           bundle = render_oracle_bundle(spec)
           root = Path('artifacts/oracle')
-          root.mkdir(parents=True, exist_ok=True)
           (root / 'bootstrap.sh').write_text(bundle.bootstrap_script, encoding='utf-8')
-          (root / 'mastertrd.service').write_text(bundle.systemd_unit, encoding='utf-8')
-          (root / 'mastertrd.logrotate').write_text(bundle.logrotate_config, encoding='utf-8')
-          (root / 'mastertrd-health').write_text(bundle.health_script, encoding='utf-8')
           PY
           chmod 700 artifacts/oracle/bootstrap.sh
 
@@ -129,33 +139,48 @@ jobs:
           printf '%s\n' "$ORACLE_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
 
-      - name: Deploy exact SHA and identity-checked PAPER candidate
+      - name: Deploy exact SHA and PAPER candidate matrix
         shell: bash
         run: |
           target="${ORACLE_SSH_USER}@${ORACLE_HOST}"
-          remote_bootstrap="/tmp/mastertrd-bootstrap-${GITHUB_SHA}.sh"
-          remote_candidate="/tmp/mastertrd-paper-candidate-${GITHUB_SHA}.json"
-          scp -i "$HOME/.ssh/oracle_key" -o BatchMode=yes artifacts/oracle/bootstrap.sh "${target}:${remote_bootstrap}"
-          scp -i "$HOME/.ssh/oracle_key" -o BatchMode=yes artifacts/oracle/paper-candidate.json "${target}:${remote_candidate}"
-          ssh -i "$HOME/.ssh/oracle_key" -o BatchMode=yes "$target" \
-            "GITHUB_SHA='$GITHUB_SHA' PAPER_GENOME_HASH='$PAPER_GENOME_HASH' REMOTE_BOOTSTRAP='$remote_bootstrap' REMOTE_CANDIDATE='$remote_candidate' bash -s" <<'REMOTE'
+          remote_root="/tmp/mastertrd-oracle-${GITHUB_SHA}-${GITHUB_RUN_ID}"
+          ssh_opts=(-i "$HOME/.ssh/oracle_key" -o BatchMode=yes)
+          ssh "${ssh_opts[@]}" "$target" "install -d -m 700 '$remote_root' '$remote_root/paper-candidates'"
+          scp "${ssh_opts[@]}" artifacts/oracle/bootstrap.sh "${target}:${remote_root}/bootstrap.sh"
+          scp "${ssh_opts[@]}" artifacts/oracle/deployment-index.json "${target}:${remote_root}/deployment-index.json"
+          scp "${ssh_opts[@]}" artifacts/oracle/paper-candidates/*.json "${target}:${remote_root}/paper-candidates/"
+
+          ssh "${ssh_opts[@]}" "$target" \
+            "GITHUB_SHA='$GITHUB_SHA' REMOTE_ROOT='$remote_root' bash -s" <<'REMOTE'
           set -euo pipefail
 
           cleanup() {
-            rm -f "$REMOTE_BOOTSTRAP" "$REMOTE_CANDIDATE"
+            rm -rf "$REMOTE_ROOT"
           }
           trap cleanup EXIT
 
-          if sudo test -f /etc/mastertrd/mastertrd.env; then
-            current_mode="$(sudo awk -F= '$1=="MASTERTRD_MODE" {print $2}' /etc/mastertrd/mastertrd.env | tail -n1)"
-            current_live="$(sudo awk -F= '$1=="LIVE_TRADING_ENABLED" {print $2}' /etc/mastertrd/mastertrd.env | tail -n1)"
-            if [[ "${current_mode^^}" == "LIVE" || "${current_live,,}" == "true" ]]; then
-              echo 'Oracle host is configured for LIVE; refusing automated mutation or restart.' >&2
+          check_not_live_env() {
+            local env_file="$1"
+            [[ -f "$env_file" ]] || return 0
+            local mode live
+            mode="$(awk -F= '$1=="MASTERTRD_MODE" {print $2}' "$env_file" | tail -n1)"
+            live="$(awk -F= '$1=="LIVE_TRADING_ENABLED" {print $2}' "$env_file" | tail -n1)"
+            if [[ "${mode^^}" == "LIVE" || "${live,,}" == "true" ]]; then
+              echo "Oracle host is configured for LIVE in $env_file; refusing automated mutation or restart." >&2
               exit 1
             fi
+          }
+
+          if sudo test -f /etc/mastertrd/mastertrd.env; then
+            check_not_live_env /etc/mastertrd/mastertrd.env
+          fi
+          if sudo test -d /etc/mastertrd/paper; then
+            while IFS= read -r env_file; do
+              check_not_live_env "$env_file"
+            done < <(sudo find /etc/mastertrd/paper -maxdepth 1 -type f -name '*.env' -print)
           fi
 
-          sudo bash "$REMOTE_BOOTSTRAP"
+          sudo bash "$REMOTE_ROOT/bootstrap.sh"
 
           if [[ ! -d /opt/mastertrd/.git ]]; then
             sudo -u mastertrd git clone https://github.com/itxsam57/MasterTrd.git /opt/mastertrd
@@ -176,61 +201,144 @@ jobs:
           sudo -u mastertrd bash -c 'cd /opt/mastertrd && .uv-tool/bin/uv lock --check && .uv-tool/bin/uv sync --locked --all-extras && .uv-tool/bin/uv pip check'
           test "$(sudo -u mastertrd git -C /opt/mastertrd rev-parse HEAD)" = "$GITHUB_SHA"
 
-          paper_root="/var/lib/mastertrd/paper/$GITHUB_SHA/$PAPER_GENOME_HASH"
-          paper_candidate="$paper_root/paper-candidate.json"
-          paper_session="$paper_root/paper-session.json"
-          paper_archive="$paper_root/paper-reports.json"
-          paper_history="$paper_root/paper-sessions"
-          paper_rotation_request="$paper_root/paper-rotate.request"
-          sudo install -d -o mastertrd -g mastertrd -m 700 "$paper_root" "$paper_history"
-          sudo install -o mastertrd -g mastertrd -m 600 "$REMOTE_CANDIDATE" "$paper_candidate"
+          sudo -u mastertrd /opt/mastertrd/.venv/bin/python - "$REMOTE_ROOT/deployment-index.json" "$REMOTE_ROOT/paper-candidates" "$GITHUB_SHA" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          from mastertrd.genome import StrategyGenome
 
-          # Legacy pre-identity paths /var/lib/mastertrd/paper-candidate.json and
-          # /var/lib/mastertrd/paper-session.json are deliberately not reused.
-          set_env_value() {
-            local key="$1"
-            local value="$2"
-            local env_file=/etc/mastertrd/mastertrd.env
-            if sudo grep -q "^${key}=" "$env_file"; then
-              sudo sed -i "s|^${key}=.*$|${key}=${value}|" "$env_file"
-            else
-              printf '%s=%s\n' "$key" "$value" | sudo tee -a "$env_file" >/dev/null
+          index_path = Path(sys.argv[1])
+          candidates_root = Path(sys.argv[2])
+          expected_sha = sys.argv[3]
+          payload = json.loads(index_path.read_text(encoding="utf-8"))
+          if payload.get("code_hash") != expected_sha:
+              raise SystemExit("deployment index code hash mismatch")
+          rows = payload.get("candidates")
+          if not isinstance(rows, list) or not rows:
+              raise SystemExit("deployment index has no PAPER candidates")
+          seen = set()
+          for row in rows:
+              if not isinstance(row, dict):
+                  raise SystemExit("deployment index candidate row is invalid")
+              instance = str(row.get("instance", ""))
+              genome_hash = str(row.get("genome_hash", ""))
+              if instance != f"g-{genome_hash[:16]}":
+                  raise SystemExit("deployment instance identity mismatch")
+              if instance in seen:
+                  raise SystemExit("duplicate deployment instance")
+              seen.add(instance)
+              candidate_path = candidates_root / f"{instance}.json"
+              candidate = StrategyGenome(**json.loads(candidate_path.read_text(encoding="utf-8")))
+              if candidate.genome_hash != genome_hash or candidate.strategy_id != row.get("strategy_id"):
+                  raise SystemExit("remote candidate identity mismatch")
+          print(json.dumps({"validated_instances": sorted(seen)}, sort_keys=True))
+          PY
+
+          mapfile -t instance_rows < <(
+            sudo -u mastertrd /opt/mastertrd/.venv/bin/python - "$REMOTE_ROOT/deployment-index.json" <<'PY'
+          import json
+          import sys
+          payload = json.load(open(sys.argv[1], encoding="utf-8"))
+          for row in payload["candidates"]:
+              print(f'{row["instance"]}|{row["genome_hash"]}')
+          PY
+          )
+
+          desired_instances=()
+          deployment_root="/var/lib/mastertrd/paper/$GITHUB_SHA"
+          sudo install -d -o mastertrd -g mastertrd -m 700 "$deployment_root"
+          sudo install -o mastertrd -g mastertrd -m 600 "$REMOTE_ROOT/deployment-index.json" "$deployment_root/deployment-index.json"
+          sudo install -d -o root -g root -m 755 /etc/mastertrd/paper
+
+          for row in "${instance_rows[@]}"; do
+            IFS='|' read -r instance genome_hash <<<"$row"
+            desired_instances+=("$instance")
+            paper_root="$deployment_root/$genome_hash"
+            paper_candidate="$paper_root/paper-candidate.json"
+            paper_session="$paper_root/paper-session.json"
+            paper_archive="$paper_root/paper-reports.json"
+            paper_history="$paper_root/paper-sessions"
+            paper_rotation_request="$paper_root/paper-rotate.request"
+            env_file="/etc/mastertrd/paper/$instance.env"
+
+            sudo install -d -o mastertrd -g mastertrd -m 700 "$paper_root" "$paper_history"
+            sudo install -o mastertrd -g mastertrd -m 600 "$REMOTE_ROOT/paper-candidates/$instance.json" "$paper_candidate"
+            env_tmp="$(mktemp)"
+            cat > "$env_tmp" <<ENV
+          MASTERTRD_MODE=PAPER
+          LIVE_TRADING_ENABLED=false
+          ORACLE_ENABLED=true
+          MASTERTRD_CANDIDATE_MANIFEST=$paper_candidate
+          MASTERTRD_SESSION_STATE=$paper_session
+          MASTERTRD_PAPER_ARCHIVE=$paper_archive
+          MASTERTRD_PAPER_HISTORY_DIR=$paper_history
+          MASTERTRD_PAPER_ROTATION_REQUEST=$paper_rotation_request
+          MASTERTRD_PAPER_ROTATE_AFTER_SECONDS=600
+          MASTERTRD_CODE_HASH=$GITHUB_SHA
+          MASTERTRD_PUBLIC_FEED_FIXTURE=
+          MASTERTRD_SESSION_NONCE=$GITHUB_SHA:$genome_hash
+          MASTERTRD_PAPER_START_NS=
+          ENV
+            sudo install -o root -g root -m 600 "$env_tmp" "$env_file"
+            rm -f "$env_tmp"
+            sudo grep -Eq '^MASTERTRD_MODE=PAPER$' "$env_file"
+            sudo grep -Eq '^LIVE_TRADING_ENABLED=false$' "$env_file"
+            sudo grep -Fqx "MASTERTRD_CODE_HASH=$GITHUB_SHA" "$env_file"
+            sudo grep -Fqx 'MASTERTRD_PAPER_ROTATE_AFTER_SECONDS=600' "$env_file"
+          done
+
+          # Only after every candidate and environment has validated/materialized
+          # may the workflow replace the prior PAPER generation.
+          sudo systemctl disable --now mastertrd.service 2>/dev/null || true
+          sudo systemctl disable --now mastertrd-paper-rotate.timer 2>/dev/null || true
+          mapfile -t stale_services < <(sudo systemctl list-unit-files 'mastertrd-paper@*.service' --no-legend 2>/dev/null | awk '{print $1}' || true)
+          mapfile -t stale_timers < <(sudo systemctl list-unit-files 'mastertrd-paper-rotate@*.timer' --no-legend 2>/dev/null | awk '{print $1}' || true)
+          if ((${#stale_services[@]})); then
+            sudo systemctl disable --now "${stale_services[@]}" || true
+          fi
+          if ((${#stale_timers[@]})); then
+            sudo systemctl disable --now "${stale_timers[@]}" || true
+          fi
+
+          sudo systemctl daemon-reload
+          started_units=()
+          for instance in "${desired_instances[@]}"; do
+            service="mastertrd-paper@$instance.service"
+            timer="mastertrd-paper-rotate@$instance.timer"
+            sudo systemctl enable --now "$service"
+            sudo systemctl enable --now "$timer"
+            started_units+=("$service")
+          done
+
+          failed=0
+          for instance in "${desired_instances[@]}"; do
+            service="mastertrd-paper@$instance.service"
+            if ! sudo /usr/local/bin/mastertrd-health "$service"; then
+              echo "Oracle PAPER health check failed: $service" >&2
+              failed=1
             fi
-          }
+          done
+          if ((failed)); then
+            if ((${#started_units[@]})); then
+              sudo systemctl disable --now "${started_units[@]}" || true
+            fi
+            exit 1
+          fi
 
-          set_env_value MASTERTRD_MODE PAPER
-          set_env_value LIVE_TRADING_ENABLED false
-          set_env_value ORACLE_ENABLED true
-          set_env_value MASTERTRD_CANDIDATE_MANIFEST "$paper_candidate"
-          set_env_value MASTERTRD_SESSION_STATE "$paper_session"
-          set_env_value MASTERTRD_PAPER_ARCHIVE "$paper_archive"
-          set_env_value MASTERTRD_PAPER_HISTORY_DIR "$paper_history"
-          set_env_value MASTERTRD_PAPER_ROTATION_REQUEST "$paper_rotation_request"
-          set_env_value MASTERTRD_PAPER_ROTATE_AFTER_SECONDS 86400
-          set_env_value MASTERTRD_CODE_HASH "$GITHUB_SHA"
-          set_env_value MASTERTRD_PUBLIC_FEED_FIXTURE ''
-          set_env_value MASTERTRD_SESSION_NONCE "$GITHUB_SHA:$PAPER_GENOME_HASH"
-          set_env_value MASTERTRD_PAPER_START_NS ''
-          sudo chown root:root /etc/mastertrd/mastertrd.env
-          sudo chmod 600 /etc/mastertrd/mastertrd.env
-
-          sudo grep -Eq '^MASTERTRD_MODE=PAPER$' /etc/mastertrd/mastertrd.env
-          sudo grep -Eq '^LIVE_TRADING_ENABLED=false$' /etc/mastertrd/mastertrd.env
-          sudo grep -Eq '^ORACLE_ENABLED=true$' /etc/mastertrd/mastertrd.env
-          sudo grep -Fqx "MASTERTRD_CANDIDATE_MANIFEST=$paper_candidate" /etc/mastertrd/mastertrd.env
-          sudo grep -Fqx "MASTERTRD_SESSION_STATE=$paper_session" /etc/mastertrd/mastertrd.env
-          sudo grep -Fqx "MASTERTRD_PAPER_ARCHIVE=$paper_archive" /etc/mastertrd/mastertrd.env
-          sudo grep -Fqx "MASTERTRD_PAPER_HISTORY_DIR=$paper_history" /etc/mastertrd/mastertrd.env
-          sudo grep -Fqx "MASTERTRD_PAPER_ROTATION_REQUEST=$paper_rotation_request" /etc/mastertrd/mastertrd.env
-          sudo grep -Fqx 'MASTERTRD_PAPER_ROTATE_AFTER_SECONDS=86400' /etc/mastertrd/mastertrd.env
-          sudo grep -Fqx "MASTERTRD_CODE_HASH=$GITHUB_SHA" /etc/mastertrd/mastertrd.env
-          sudo grep -Fqx "MASTERTRD_SESSION_NONCE=$GITHUB_SHA:$PAPER_GENOME_HASH" /etc/mastertrd/mastertrd.env
-
-          sudo systemctl restart mastertrd.service
-          sudo /usr/local/bin/mastertrd-health
+          printf 'Oracle PAPER matrix active on %s with %d strategies\n' "$GITHUB_SHA" "${#desired_instances[@]}"
           REMOTE
+
+      - name: Upload public deployment index
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oracle-paper-deployment-${{ github.sha }}-${{ github.run_id }}
+          path: artifacts/oracle/deployment-index.json
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Remove local SSH key material
         if: always()
         shell: bash
-        run: rm -f "$HOME/.ssh/oracle_key" "$HOME/.ssh/known_hosts"
+        run: |
+          rm -f "$HOME/.ssh/oracle_key" "$HOME/.ssh/known_hosts"

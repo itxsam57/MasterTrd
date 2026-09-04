@@ -287,7 +287,8 @@ def test_oracle_deploy_workflow_is_manual_environment_gated_and_fail_closed():
     triggers = workflow.get("on", workflow.get(True, {}))
     assert set(triggers) == {"workflow_dispatch"}
     dispatch = triggers["workflow_dispatch"]
-    assert dispatch["inputs"]["paper_candidate_manifest_json"]["required"] is True
+    assert dispatch["inputs"]["paper_candidates_json"]["required"] is True
+    assert "paper_candidate_manifest_json" not in dispatch["inputs"]
     assert workflow.get("permissions") == {"contents": "read"}
     jobs = workflow["jobs"]
     assert len(jobs) == 1
@@ -320,10 +321,13 @@ def test_oracle_deploy_checks_current_paper_inputs_not_deleted_factory_knob():
         assert name in upper
 
 
-def test_oracle_deploy_installs_only_identity_checked_public_paper_candidate():
+def test_oracle_deploy_installs_only_identity_checked_public_paper_candidate_set():
     text = (ROOT / ".github" / "workflows" / "oracle-deploy.yml").read_text(encoding="utf-8")
-    assert "paper_candidate_manifest_json" in text
-    assert "validate_paper_candidate_manifest" in text
-    assert "/var/lib/mastertrd/paper-candidate.json" in text
-    assert "/var/lib/mastertrd/paper-session.json" in text
+    assert "paper_candidates_json" in text
+    assert "validate_paper_candidate_manifests" in text
+    assert "/var/lib/mastertrd/paper/$GITHUB_SHA" in text
+    assert "/etc/mastertrd/paper" in text
+    assert "MASTERTRD_PAPER_ROTATE_AFTER_SECONDS=600" in text
+    assert "mastertrd-paper@" in text
+    assert "mastertrd-paper-rotate@" in text
     assert "LIVE_TRADING_ENABLED=false" in text
