@@ -188,3 +188,10 @@ def test_paper_status_reads_root_owned_strategy_env_with_sudo():
 def test_paper_status_journal_ssh_does_not_consume_instance_loop_stdin():
     workflow = Path(".github/workflows/paper-status.yml").read_text(encoding="utf-8")
     assert '"${ssh_cmd[@]}" -n "$target" "sudo journalctl' in workflow
+
+
+def test_paper_status_fails_if_legacy_single_service_is_still_active():
+    workflow = Path(".github/workflows/paper-status.yml").read_text(encoding="utf-8")
+    assert 'systemctl is-active mastertrd.service' in workflow
+    assert 'legacy MasterTrd service is still active' in workflow
+    assert 'legacy_service_active' in workflow

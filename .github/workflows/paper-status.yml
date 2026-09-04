@@ -65,6 +65,12 @@ jobs:
           remote_sha="$("${ssh_cmd[@]}" "$target" "sudo -u mastertrd git -C /opt/mastertrd rev-parse HEAD")"
           paper_root="/var/lib/mastertrd/paper/$remote_sha"
           paper_root_q="$(printf '%q' "$paper_root")"
+          legacy_service_active="$("${ssh_cmd[@]}" "$target" "systemctl is-active mastertrd.service 2>/dev/null || true")"
+          if [[ "$legacy_service_active" == "active" ]]; then
+            echo 'legacy MasterTrd service is still active' >&2
+            exit 1
+          fi
+          export PAPER_STATUS_LEGACY_SERVICE_ACTIVE="$legacy_service_active"
           "${ssh_cmd[@]}" "$target" \
             "sudo -u mastertrd /opt/mastertrd/.venv/bin/python -m mastertrd.oracle_paper_status --paper-root ${paper_root_q}" \
             > artifacts/paper-status/paper-status.json
@@ -152,6 +158,7 @@ jobs:
               diagnostic_path = diagnostics_root / f"{instance}.json"
               row["crash_diagnostics"] = json.loads(diagnostic_path.read_text(encoding="utf-8"))
           payload["remote_git_sha"] = os.environ["PAPER_STATUS_REMOTE_SHA"]
+          payload["legacy_service_active"] = os.environ["PAPER_STATUS_LEGACY_SERVICE_ACTIVE"] == "active"
           payload["all_services_active"] = all(row["service_active"] for row in payload["strategies"])
           payload["all_health_ok"] = all(row["health_ok"] for row in payload["strategies"])
           path.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
