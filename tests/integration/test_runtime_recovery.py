@@ -1,3 +1,5 @@
+import pytest
+
 from mastertrd.execution_runtime import ExecutionRuntime
 from mastertrd.paper_evidence import PaperStartReceipt
 from mastertrd.paper_session import JsonPaperSessionStore, PaperSessionJournal
@@ -117,6 +119,44 @@ def test_restart_restores_session_identity_and_replays_market_events_idempotentl
     assert report.processed_events == 1
     assert report.duplicate_events == 1
     assert store.load().has_event("market-e2") is True
+
+
+def test_restart_replays_event_when_process_crashes_before_dispatch_completes(tmp_path):
+    path = tmp_path / "paper-session.json"
+    store = JsonPaperSessionStore(path)
+    original = PaperSessionJournal(receipt(), code_hash="code-v1", started_ns=START_NS)
+    store.save(original)
+    stable_state = state()
+
+    first_runtime = ExecutionRuntime(
+        journal=original,
+        session_store=store,
+        risk_runtime=RiskRuntime(limits()),
+        reconciler=Reconciler(),
+        engine_state=lambda: stable_state,
+        venue_state=lambda: stable_state,
+        dispatch=lambda _event: (_ for _ in ()).throw(RuntimeError("dispatch crashed")),
+    )
+    with pytest.raises(RuntimeError, match="dispatch crashed"):
+        first_runtime.run(MarketStream([bar("market-crash", 0)]))
+
+    restored = store.load()
+    replayed: list[str] = []
+    second_runtime = ExecutionRuntime(
+        journal=restored,
+        session_store=store,
+        risk_runtime=RiskRuntime(limits()),
+        reconciler=Reconciler(),
+        engine_state=lambda: stable_state,
+        venue_state=lambda: stable_state,
+        dispatch=lambda event: replayed.append(event.event_id),
+    )
+    report = second_runtime.run(MarketStream([bar("market-crash", 0)]))
+
+    assert replayed == ["market-crash"]
+    assert report.processed_events == 1
+    assert report.duplicate_events == 0
+    assert store.load().has_event("market-crash") is True
 
 
 def test_reconciliation_mismatch_kills_system_before_first_market_event(tmp_path):
