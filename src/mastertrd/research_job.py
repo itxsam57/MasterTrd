@@ -138,7 +138,7 @@ def _archive_months_for_recipe(recipe_id: str) -> int:
     if family == "position":
         return 18
     if family == "swing":
-        return 8
+        return 9
     return 2
 
 

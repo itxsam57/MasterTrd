@@ -115,3 +115,12 @@ def test_main_uses_requested_recipe_shard(monkeypatch, tmp_path):
     plan = seen["plan"]
     assert plan.runnable_recipe_ids == ("ema-cross-fast",)
     assert plan.runnable_families == ("trend",)
+
+
+def test_swing_recipe_shards_have_enough_archive_months_for_daily_holdout():
+    shard = research_job.research_job_plan_for_recipe("pullback-crypto")
+
+    # Daily candidates need at least 250 observations for the configured
+    # 4x50 research windows plus a 50-bar hidden holdout. Nine calendar
+    # months is the conservative minimum; eight can be shorter than 250 days.
+    assert shard.archive_months >= 9
