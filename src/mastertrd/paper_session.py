@@ -160,6 +160,19 @@ class PaperSessionJournal:
         rejection = normalized["last_risk_rejection"]
         if rejection is not None and not isinstance(rejection, str):
             raise ValueError("strategy telemetry last_risk_rejection is invalid")
+        if "data_healthy" in normalized and not isinstance(normalized["data_healthy"], bool):
+            raise ValueError("strategy telemetry data_healthy must be a boolean")
+        if "missing_closed_bars" in normalized:
+            value = normalized["missing_closed_bars"]
+            if isinstance(value, bool):
+                raise ValueError("strategy telemetry missing_closed_bars must be an integer")
+            try:
+                integer = int(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("strategy telemetry missing_closed_bars must be an integer") from exc
+            if integer < 0:
+                raise ValueError("strategy telemetry missing_closed_bars is invalid")
+            normalized["missing_closed_bars"] = integer
         # Ensure optional observability fields are safe JSON scalars/containers.
         try:
             json.dumps(normalized, sort_keys=True, separators=(",", ":"))
@@ -352,6 +365,15 @@ class PaperSessionJournal:
 
         trade_returns = [float(event.value) for event in self._events if event.kind == "closed_trade"]
         reconciliation = [bool(event.value) for event in self._events if event.kind == "reconciliation"]
+        telemetry = self.strategy_telemetry or {}
+        data_healthy = telemetry.get("data_healthy", True)
+        missing_closed_bars = telemetry.get("missing_closed_bars", 0)
+        if not isinstance(data_healthy, bool):
+            raise ValueError("paper strategy telemetry data_healthy is invalid")
+        if isinstance(missing_closed_bars, bool) or not isinstance(missing_closed_bars, int):
+            raise ValueError("paper strategy telemetry missing_closed_bars is invalid")
+        if missing_closed_bars < 0:
+            raise ValueError("paper strategy telemetry missing_closed_bars is invalid")
 
         equity = 1.0
         peak = 1.0
@@ -399,6 +421,8 @@ class PaperSessionJournal:
             reconciliation_checks=len(reconciliation),
             session_event_hash=session_event_hash,
             provenance_verified=True,
+            data_healthy=data_healthy,
+            missing_closed_bars=missing_closed_bars,
         )
         self._final_report = report
         self._finalized = True
