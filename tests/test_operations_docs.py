@@ -35,16 +35,17 @@ def test_operations_runbook_covers_every_runtime_and_emergency_path():
 def test_operations_runbook_describes_identity_bound_oracle_paper_handoff():
     text = (ROOT / "docs" / "OPERATIONS.md").read_text(encoding="utf-8")
     for value in (
-        "paper_candidate_manifest_json",
-        "/var/lib/mastertrd/paper-candidate.json",
-        "/var/lib/mastertrd/paper-session.json",
+        "paper_candidates_json",
+        "/var/lib/mastertrd/paper/<sha>/<genome_hash>/",
+        "/etc/mastertrd/paper/<instance>.env",
+        "MASTERTRD_PAPER_ROTATE_AFTER_SECONDS=600",
         "MASTERTRD_CODE_HASH",
         "Autonomous Research",
         "GITHUB_SHA",
     ):
         assert value in text
     assert "MASTERTRD_EXECUTION_FACTORY" not in text
-    assert "do not reuse an older research manifest" in text.lower()
+    assert "do not reuse an older research artifact" in text.lower()
 
 
 def test_operations_runbook_keeps_oracle_live_activation_owner_controlled():

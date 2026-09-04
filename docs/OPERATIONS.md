@@ -73,7 +73,7 @@ The checked-in `.env.example` lists these names but is not automatically loaded 
 
 The canonical persistent node is a Linux host (Oracle free-tier adapter supported on arm64/aarch64 and amd64/x86_64). The deployment bundle renders:
 
-- systemd unit `/etc/systemd/system/mastertrd.service` running `python -m mastertrd.live_node`;
+- legacy systemd unit `/etc/systemd/system/mastertrd.service` plus the Oracle PAPER template `/etc/systemd/system/mastertrd-paper@.service`, each running `python -m mastertrd.live_node`;
 - external environment file `/etc/mastertrd/mastertrd.env`;
 - persistent PAPER state directory `/var/lib/mastertrd`;
 - health command `/usr/local/bin/mastertrd-health`;
@@ -86,15 +86,15 @@ The service uses `Restart=on-failure`, `NoNewPrivileges=true`, a restrictive uma
 
 1. Create the protected GitHub Environment `oracle` and add the exact transport inputs listed under **Owner inputs**.
 2. Keep the Environment variable `ORACLE_ENABLED=false` until the VM address, SSH key, and pinned known-host entry are verified.
-3. Run **Autonomous Research** on the exact source SHA intended for deployment. Use only a genuine public-safe `PAPER` finalist manifest emitted by that exact run. The handoff contains strategy/genome/code/dataset/lock/recipe provenance but no exchange credential.
-4. Set the Environment variable `ORACLE_ENABLED=true` and manually dispatch **Oracle Deploy**, passing that exact manifest as `paper_candidate_manifest_json`. There is no scheduled or push-triggered Oracle deployment.
-5. Oracle Deploy recomputes the current `uv.lock` hash and rejects stale or mismatched strategy, genome, code, or dependency-lock identities. In particular, the manifest's `code_hash` must equal the workflow's exact `GITHUB_SHA`.
-6. If validation succeeds, the workflow installs only the canonical StrategyGenome payload at `/var/lib/mastertrd/paper-candidate.json`, configures `/var/lib/mastertrd/paper-session.json`, binds `MASTERTRD_CODE_HASH` to the deployed SHA, forces `MASTERTRD_MODE=PAPER` and `LIVE_TRADING_ENABLED=false`, then starts the service and runs `mastertrd-health`.
-7. Verify `mastertrd-health`, service status, and journal logs. Keep the node in PAPER while accumulating real forward evidence.
+3. Run **Autonomous Research** on the exact source SHA intended for deployment. Use only the genuine public-safe `paper_candidates` array emitted by that exact run. Every entry carries strategy/genome/code/dataset/lock/recipe provenance and no exchange credential.
+4. Set the Environment variable `ORACLE_ENABLED=true` and manually dispatch **Oracle Deploy**, passing that exact array as `paper_candidates_json`. There is no scheduled or push-triggered Oracle deployment.
+5. Oracle Deploy recomputes the current `uv.lock` hash and validates the complete candidate set before SSH or host mutation. It rejects stale code/lock identities and duplicate strategy/genome identities; each manifest `code_hash` must equal the workflow's exact `GITHUB_SHA`.
+6. If validation succeeds, the workflow installs each canonical StrategyGenome under `/var/lib/mastertrd/paper/<sha>/<genome_hash>/`, writes a separate root-owned `/etc/mastertrd/paper/<instance>.env`, forces `MASTERTRD_MODE=PAPER` and `LIVE_TRADING_ENABLED=false`, and sets `MASTERTRD_PAPER_ROTATE_AFTER_SECONDS=600`. It then starts `mastertrd-paper@<instance>.service` plus its rotation timer for every validated candidate and health-checks the complete set.
+7. Verify the scheduled **PAPER Status** aggregate, instance service health, and sanitized diagnostics. Keep every instance in PAPER while accumulating independent real forward evidence.
 
 Oracle Deploy checks out the exact GitHub SHA, verifies `uv.lock`, installs from the lock, uses pinned SSH host trust, refuses a dirty tracked checkout, verifies the exact remote SHA, and never copies exchange credentials. If the existing host environment is LIVE-enabled, the workflow fails closed before automated mutation or restart.
 
-A PAPER manifest is SHA-bound. After any code merge that changes the deployable source SHA, do not reuse an older research manifest merely to make deployment pass. Run research on the new exact SHA and use a newly identity-bound PAPER finalist.
+A PAPER candidate set is SHA-bound. After any code merge that changes the deployable source SHA, do not reuse an older research artifact merely to make deployment pass. Run research on the new exact SHA and use its newly identity-bound `paper_candidates` array.
 
 ## Runtime modes
 
@@ -112,7 +112,7 @@ MASTERTRD_CODE_HASH=<exact-deployed-git-sha>
 
 For a non-Oracle local PAPER process, equivalent absolute writable paths may be supplied manually.
 
-PAPER never requires exchange execution credentials. Use it for persistent runtime recovery, journaling, reconciliation logic, and forward-paper evidence. `mastertrd.live_node` constructs the canonical repository-owned PAPER runtime directly and consumes real Binance public market data unless an explicit deterministic fixture is configured.
+PAPER never requires exchange execution credentials. Use it for persistent runtime recovery, journaling, reconciliation logic, and forward-paper evidence. Oracle runs one isolated `mastertrd.live_node` process per validated strategy, all consuming real Binance public market data while keeping journals, archives, rotation requests, and risk/reconciliation state separate. Evidence windows rotate every 600 seconds without restarting the strategy engine; strategy signal timeframes themselves are not rewritten or accelerated.
 
 ### DEMO
 
