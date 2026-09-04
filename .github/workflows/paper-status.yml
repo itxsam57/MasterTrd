@@ -118,7 +118,7 @@ jobs:
           )"
             printf '%s\n' "$state" >> artifacts/paper-status/services.tsv
             service="mastertrd-paper@$instance.service"
-            "${ssh_cmd[@]}" "$target" "sudo journalctl -u '$service' --no-pager -n 500 -o cat" \
+            "${ssh_cmd[@]}" -n "$target" "sudo journalctl -u '$service' --no-pager -n 500 -o cat" \
               | python src/mastertrd/paper_diagnostics.py \
               > "artifacts/paper-status/diagnostics/$instance.json"
           done < artifacts/paper-status/instances.txt

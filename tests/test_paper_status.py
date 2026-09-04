@@ -183,3 +183,8 @@ def test_paper_status_reads_root_owned_strategy_env_with_sudo():
     workflow = Path(".github/workflows/paper-status.yml").read_text(encoding="utf-8")
     assert 'sudo test -r "$env_file"' in workflow
     assert 'sudo awk -F=' in workflow
+
+
+def test_paper_status_journal_ssh_does_not_consume_instance_loop_stdin():
+    workflow = Path(".github/workflows/paper-status.yml").read_text(encoding="utf-8")
+    assert '"${ssh_cmd[@]}" -n "$target" "sudo journalctl' in workflow
