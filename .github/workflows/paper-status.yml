@@ -99,10 +99,10 @@ jobs:
           instance="$1"
           expected_sha="$2"
           env_file="/etc/mastertrd/paper/$instance.env"
-          [[ -r "$env_file" ]] || { echo "Missing PAPER env: $env_file" >&2; exit 1; }
-          mode="$(awk -F= '$1=="MASTERTRD_MODE" {print $2}' "$env_file" | tail -n1)"
-          live="$(awk -F= '$1=="LIVE_TRADING_ENABLED" {print $2}' "$env_file" | tail -n1)"
-          code_hash="$(awk -F= '$1=="MASTERTRD_CODE_HASH" {print $2}' "$env_file" | tail -n1)"
+          sudo test -r "$env_file" || { echo "Missing PAPER env: $env_file" >&2; exit 1; }
+          mode="$(sudo awk -F= '$1=="MASTERTRD_MODE" {print $2}' "$env_file" | tail -n1)"
+          live="$(sudo awk -F= '$1=="LIVE_TRADING_ENABLED" {print $2}' "$env_file" | tail -n1)"
+          code_hash="$(sudo awk -F= '$1=="MASTERTRD_CODE_HASH" {print $2}' "$env_file" | tail -n1)"
           [[ "${mode^^}" == "PAPER" ]] || { echo "Unsafe PAPER mode for $instance" >&2; exit 1; }
           [[ "${live,,}" == "false" ]] || { echo "LIVE_TRADING_ENABLED is not false for $instance" >&2; exit 1; }
           [[ "$code_hash" == "$expected_sha" ]] || { echo "Code identity mismatch for $instance" >&2; exit 1; }

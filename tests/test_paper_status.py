@@ -177,3 +177,9 @@ def test_paper_status_workflow_is_read_only_and_publishes_safe_artifact():
     )
     for token in forbidden:
         assert token not in workflow
+
+
+def test_paper_status_reads_root_owned_strategy_env_with_sudo():
+    workflow = Path(".github/workflows/paper-status.yml").read_text(encoding="utf-8")
+    assert 'sudo test -r "$env_file"' in workflow
+    assert 'sudo awk -F=' in workflow
