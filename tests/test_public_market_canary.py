@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from mastertrd.bar_completeness import BarCompletenessSnapshot
@@ -88,3 +90,43 @@ def test_public_binance_canary_fails_closed_on_incomplete_target_candle():
             clock=lambda: now_seconds,
             source_factory=UnhealthySource,
         )
+
+
+def test_public_binance_canary_workflow_is_bounded_credential_free_and_non_live():
+    path = Path(".github/workflows/public-binance-canary.yml")
+    assert path.exists()
+    workflow = path.read_text(encoding="utf-8")
+
+    required = (
+        "workflow_dispatch:",
+        "push:",
+        "src/mastertrd/public_market_canary.py",
+        "src/mastertrd/binance_stream.py",
+        "src/mastertrd/bar_completeness.py",
+        "tests/test_public_market_canary.py",
+        ".github/workflows/public-binance-canary.yml",
+        "permissions:",
+        "contents: read",
+        "timeout-minutes: 5",
+        "python-version: '3.13'",
+        "uv==0.12.7",
+        "uv lock --check",
+        "uv sync --locked --all-extras",
+        "uv pip check",
+        "MASTERTRD_MODE: PAPER",
+        "LIVE_TRADING_ENABLED: 'false'",
+        "uv run python -m mastertrd.public_market_canary",
+    )
+    for token in required:
+        assert token in workflow
+
+    forbidden = (
+        "secrets.",
+        "environment: oracle",
+        "MASTERTRD_MODE: LIVE",
+        "LIVE_TRADING_ENABLED: 'true'",
+        "systemctl",
+        "oracle-deploy",
+    )
+    for token in forbidden:
+        assert token not in workflow
