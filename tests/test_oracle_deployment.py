@@ -314,6 +314,16 @@ def test_oracle_deploy_reads_root_owned_safety_env_with_sudo():
     assert "sudo awk -F=" in text
 
 
+def test_oracle_deploy_staging_is_readable_by_unprivileged_candidate_validator():
+    text = (ROOT / ".github" / "workflows" / "oracle-deploy.yml").read_text(encoding="utf-8")
+    directory_grant = "chmod 711 '$remote_root' '$remote_root/paper-candidates'"
+    file_grant = "chmod 644 '$remote_root/deployment-index.json' '$remote_root'/paper-candidates/*.json"
+    validator = 'sudo -u mastertrd /opt/mastertrd/.venv/bin/python'
+    assert directory_grant in text
+    assert file_grant in text
+    assert text.index(directory_grant) < text.index(validator)
+
+
 def test_oracle_deploy_checks_current_paper_inputs_not_deleted_factory_knob():
     text = (ROOT / ".github" / "workflows" / "oracle-deploy.yml").read_text(encoding="utf-8")
     upper = text.upper()

@@ -149,6 +149,7 @@ jobs:
           scp "${ssh_opts[@]}" artifacts/oracle/bootstrap.sh "${target}:${remote_root}/bootstrap.sh"
           scp "${ssh_opts[@]}" artifacts/oracle/deployment-index.json "${target}:${remote_root}/deployment-index.json"
           scp "${ssh_opts[@]}" artifacts/oracle/paper-candidates/*.json "${target}:${remote_root}/paper-candidates/"
+          ssh "${ssh_opts[@]}" "$target" "chmod 711 '$remote_root' '$remote_root/paper-candidates' && chmod 644 '$remote_root/deployment-index.json' '$remote_root'/paper-candidates/*.json"
 
           ssh "${ssh_opts[@]}" "$target" \
             "GITHUB_SHA='$GITHUB_SHA' REMOTE_ROOT='$remote_root' bash -s" <<'REMOTE'
