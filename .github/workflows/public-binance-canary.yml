@@ -10,6 +10,8 @@ on:
       - 'pyproject.toml'
       - 'uv.lock'
       - '.github/workflows/public-binance-canary.yml'
+  schedule:
+    - cron: '17 */6 * * *'
   workflow_dispatch:
 
 permissions:
@@ -22,6 +24,7 @@ jobs:
     env:
       MASTERTRD_MODE: PAPER
       LIVE_TRADING_ENABLED: 'false'
+      MASTERTRD_CANARY_RECEIPT: public-binance-canary-receipt.json
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,5 +36,12 @@ jobs:
           uv lock --check
           uv sync --locked --all-extras
           uv pip check
-      - name: Observe one complete public Binance 1m candle
+      - name: Observe three consecutive complete public Binance 1m candles
         run: uv run python -m mastertrd.public_market_canary
+      - name: Upload canary receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-binance-canary-receipt
+          path: public-binance-canary-receipt.json
+          if-no-files-found: error
+          retention-days: 7
