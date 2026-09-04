@@ -37,11 +37,31 @@ def _history(symbol: str, timeframe: str, *, limit: int):
     ]
 
 
+class _MarketClock:
+    def __init__(self) -> None:
+        self.value = 0.0
+
+    def __call__(self) -> float:
+        return self.value
+
+    def observe_ms(self, timestamp_ms: int) -> None:
+        self.value = float(timestamp_ms) / 1_000.0
+
+
 class _FakeSource:
-    def __init__(self, instruments, *, timeframe, first_expected_start_ms, **_kwargs):
+    def __init__(
+        self,
+        instruments,
+        *,
+        timeframe,
+        first_expected_start_ms,
+        market_clock=None,
+        **_kwargs,
+    ):
         self.symbol = str(tuple(instruments)[0]).split(".", 1)[0]
         self.timeframe = timeframe
         self.first_expected_start_ms = int(first_expected_start_ms)
+        self.market_clock = market_clock
         self.completeness_snapshot = BarCompletenessSnapshot(
             expected_closed_bars=0,
             ws_closed_bars=0,
@@ -60,6 +80,8 @@ class _FakeSource:
             start_ms = self.first_expected_start_ms + (count - 1) * width
             close_ms = start_ms + width - 1
             midpoint = 2000.0 + count
+            if self.market_clock is not None:
+                self.market_clock.observe_ms(close_ms - 1_000)
             yield {
                 "event_id": f"tick-{self.timeframe}-{count}",
                 "venue": "BINANCE",
@@ -84,6 +106,8 @@ class _FakeSource:
                 last_recovery_error=None,
                 data_healthy=True,
             )
+            if self.market_clock is not None:
+                self.market_clock.observe_ms(close_ms)
             yield {
                 "event_id": f"bar-{self.timeframe}-{count}",
                 "venue": "BINANCE",
@@ -103,16 +127,24 @@ class _FakeSource:
 
 
 @pytest.mark.parametrize("lane", execution_canary_lanes(), ids=lambda lane: lane.name)
-def test_execution_canary_lane_uses_real_nautilus_risk_and_reconciliation(lane) -> None:
+def test_execution_canary_lane_uses_real_nautilus_risk_and_reconciliation(lane, capfd) -> None:
     from nautilus_trader.test_kit.providers import TestInstrumentProvider
+
+    market_clock = _MarketClock()
+    source_kwargs: dict[str, object] = {}
+
+    def source_factory(*args, **kwargs):
+        source_kwargs.update(kwargs)
+        return _FakeSource(*args, market_clock=market_clock, **kwargs)
 
     result = run_paper_execution_canary_lane(
         lane,
         instrument_loader=lambda _symbol: TestInstrumentProvider.ethusdt_binance(),
         history_loader=_history,
-        source_factory=_FakeSource,
+        source_factory=source_factory,
         code_hash="canary-test-code",
         deadline_seconds=30.0,
+        risk_monotonic_clock=market_clock,
     )
 
     validate_execution_canary_result(lane, result)
@@ -121,3 +153,10 @@ def test_execution_canary_lane_uses_real_nautilus_risk_and_reconciliation(lane) 
     assert result["orders_rejected"] == 0
     assert result["reconciliation_errors"] == 0
     assert result["final_flat"] is True
+    assert int(source_kwargs["max_reconnect_attempts"]) >= 12
+    assert tuple(source_kwargs["reconnect_backoff_seconds"]) == (1.0, 2.0, 5.0)
+    if lane.name == "paper-10m-hold-exit":
+        assert result["real_closed_bars"] == 3
+        assert result["held_source_bars"] == 1
+    captured = capfd.readouterr()
+    assert "InvalidStateTrigger('RUNNING -> START')" not in captured.err

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, ROUND_CEILING
 import hashlib
 from importlib.metadata import version
 import json
@@ -46,7 +46,7 @@ def execution_canary_lanes() -> tuple[ExecutionCanaryLane, ...]:
         ExecutionCanaryLane("paper-1m-long", "1m", 1, ("LONG", "FLAT"), 0, 2, 2, 1),
         ExecutionCanaryLane("paper-3m-short", "3m", 3, ("SHORT", "FLAT"), 0, 2, 2, 1),
         ExecutionCanaryLane("paper-5m-reversal", "5m", 5, ("LONG", "SHORT", "FLAT"), 0, 3, 3, 2),
-        ExecutionCanaryLane("paper-10m-hold-exit", "5m", 10, ("LONG", "HOLD", "HOLD", "FLAT"), 2, 4, 2, 1),
+        ExecutionCanaryLane("paper-10m-hold-exit", "5m", 10, ("LONG", "HOLD", "FLAT"), 1, 3, 2, 1),
     )
 
 
@@ -128,6 +128,16 @@ _TIMEFRAME_COMPONENTS = {
     "3m": "3-MINUTE",
     "5m": "5-MINUTE",
 }
+_TIMEFRAME_SECONDS = {"1m": 60.0, "3m": 180.0, "5m": 300.0}
+
+
+def _default_lane_deadline_seconds(lane: ExecutionCanaryLane) -> float:
+    try:
+        source_seconds = _TIMEFRAME_SECONDS[lane.source_timeframe]
+    except KeyError as exc:
+        raise ValueError(f"unsupported execution-canary timeframe: {lane.source_timeframe}") from exc
+    required_market_seconds = float(lane.minimum_real_closed_bars) * source_seconds
+    return max(360.0, required_market_seconds + 180.0)
 
 
 class _PaperExecutionCanaryStrategyConfig:
@@ -175,11 +185,15 @@ def _build_canary_strategy(*, lane: ExecutionCanaryLane, instrument, risk_runtim
             self._cursor = 0
             self._done = False
             self._last_price = 0.0
+            self._armed = False
             self._configure_risk_runtime(f"TEST-ONLY:{lane.name}", risk_runtime)
 
         @property
         def done(self) -> bool:
             return self._done
+
+        def arm(self) -> None:
+            self._armed = True
 
         def on_start(self) -> None:
             self.instrument = self.cache.instrument(self.config.instrument_id)
@@ -213,6 +227,8 @@ def _build_canary_strategy(*, lane: ExecutionCanaryLane, instrument, risk_runtim
             self._position_side = side
             if not self.observed_sides or self.observed_sides[-1] != side:
                 self.observed_sides.append(side)
+            if self._cursor < len(self.lane.plan) and self.lane.plan[self._cursor] == side:
+                self._cursor += 1
 
         def on_position_changed(self, event) -> None:
             if not self._matches(event):
@@ -222,6 +238,8 @@ def _build_canary_strategy(*, lane: ExecutionCanaryLane, instrument, risk_runtim
                 self._position_side = side
                 if not self.observed_sides or self.observed_sides[-1] != side:
                     self.observed_sides.append(side)
+                if self._cursor < len(self.lane.plan) and self.lane.plan[self._cursor] == side:
+                    self._cursor += 1
 
         def on_position_closed(self, event) -> None:
             if not self._matches(event):
@@ -232,6 +250,27 @@ def _build_canary_strategy(*, lane: ExecutionCanaryLane, instrument, risk_runtim
                 self._cursor += 1
                 self._done = self._cursor == len(self.lane.plan)
 
+        def _canary_order_quantity(self):
+            if self.instrument is None:
+                raise RuntimeError("execution canary instrument is unavailable")
+            if self._last_price <= 0.0:
+                raise RuntimeError("execution canary reference price is unavailable")
+
+            configured = Decimal(self.config.trade_size)
+            minimum_notional = getattr(self.instrument, "min_notional", None)
+            if minimum_notional is None:
+                return self.instrument.make_qty(configured)
+
+            # This TEST-ONLY canary must exercise the venue's genuine order
+            # validation path. Size just above minimum notional rather than
+            # weakening validation or hard-coding a quantity which can stale.
+            notional_floor = Decimal(minimum_notional.as_decimal()) * Decimal("1.05")
+            required = notional_floor / Decimal(str(self._last_price))
+            target = max(configured, required)
+            increment = Decimal(self.instrument.size_increment.as_decimal())
+            steps = (target / increment).to_integral_value(rounding=ROUND_CEILING)
+            return self.instrument.make_qty(steps * increment)
+
         def _submit_side(self, side: str) -> None:
             if self.instrument is None:
                 raise RuntimeError("execution canary instrument is unavailable")
@@ -239,7 +278,7 @@ def _build_canary_strategy(*, lane: ExecutionCanaryLane, instrument, risk_runtim
             order = self.order_factory.market(
                 instrument_id=self.config.instrument_id,
                 order_side=order_side,
-                quantity=self.instrument.make_qty(self.config.trade_size),
+                quantity=self._canary_order_quantity(),
             )
             self.submit_order(order)
 
@@ -251,25 +290,25 @@ def _build_canary_strategy(*, lane: ExecutionCanaryLane, instrument, risk_runtim
                         raise RuntimeError("execution canary cannot HOLD while flat")
                     self.held_source_bars += 1
                     self._cursor += 1
-                    if self.held_source_bars < self.lane.hold_source_bars:
-                        return
-                    continue
+                    return
 
                 if action == "LONG":
                     if self._position_side == "LONG":
                         self._cursor += 1
-                        continue
+                        return
                     if self._position_side == "SHORT":
                         self.close_all_positions(self.config.instrument_id)
+                        return
                     self._submit_side("LONG")
                     return
 
                 if action == "SHORT":
                     if self._position_side == "SHORT":
                         self._cursor += 1
-                        continue
+                        return
                     if self._position_side == "LONG":
                         self.close_all_positions(self.config.instrument_id)
+                        return
                     self._submit_side("SHORT")
                     return
 
@@ -286,8 +325,10 @@ def _build_canary_strategy(*, lane: ExecutionCanaryLane, instrument, risk_runtim
         def on_bar(self, bar) -> None:
             if bar.bar_type != self.config.bar_type:
                 return
-            self.real_closed_bars += 1
             self._last_price = float(bar.close.as_double())
+            if not self._armed:
+                return
+            self.real_closed_bars += 1
             self._drive_plan()
 
         def on_stop(self) -> None:
@@ -298,7 +339,14 @@ def _build_canary_strategy(*, lane: ExecutionCanaryLane, instrument, risk_runtim
 
 
 class _CanaryPaperBridge:
-    def __init__(self, *, lane: ExecutionCanaryLane, instrument, risk_runtime: RiskRuntime) -> None:
+    def __init__(
+        self,
+        *,
+        lane: ExecutionCanaryLane,
+        instrument,
+        bootstrap_bar,
+        risk_runtime: RiskRuntime,
+    ) -> None:
         from .nautilus_backtest import _build_binance_spot_engine
 
         base = str(instrument.base_currency)
@@ -314,7 +362,21 @@ class _CanaryPaperBridge:
             risk_runtime=risk_runtime,
         )
         self._engine.add_strategy(self.strategy)
+        bootstrap_close_ms = int(
+            bootstrap_bar.extras.get(
+                "source_kline_close_ms",
+                int(bootstrap_bar.timestamp.timestamp() * 1_000),
+            ),
+        )
+        bootstrap_event = MarketStreamEvent(
+            event_id=f"bootstrap-{lane.name}",
+            data=bootstrap_bar,
+            timestamp_ns=bootstrap_close_ms * 1_000_000,
+        )
+        self._engine.add_data([self._bar(bootstrap_event)])
         self._engine.run(streaming=True)
+        self._engine.clear_data()
+        self.strategy.arm()
         self._closed = False
 
     def _bar(self, event: MarketStreamEvent):
@@ -398,6 +460,36 @@ HistoryLoader = Callable[..., Sequence[object]]
 SourceFactory = Callable[..., object]
 
 
+def _coalesced_canary_stream(source):
+    """Bound quote replay while preserving risk/reconciliation heartbeats.
+
+    The Binance source still consumes every public book update so completeness
+    recovery and quote-derived metadata remain authoritative. Nautilus receives
+    the latest real quote before each closed bar plus a real quote heartbeat at
+    most 30 seconds apart, keeping the strict 60-second reconciliation-age gate
+    healthy without replaying thousands of intermediate quotes.
+    """
+    heartbeat_ns = 30_000_000_000
+    latest_tick: MarketStreamEvent | None = None
+    heartbeat_anchor_ns: int | None = None
+    for raw in source:
+        event = raw if isinstance(raw, MarketStreamEvent) else MarketStream.normalize(raw)
+        if event.kind == "tick":
+            latest_tick = event
+            if heartbeat_anchor_ns is None:
+                heartbeat_anchor_ns = event.timestamp_ns
+            elif event.timestamp_ns - heartbeat_anchor_ns >= heartbeat_ns:
+                yield event
+                heartbeat_anchor_ns = event.timestamp_ns
+                latest_tick = None
+            continue
+        if latest_tick is not None and latest_tick.timestamp_ns <= event.timestamp_ns:
+            yield latest_tick
+            heartbeat_anchor_ns = latest_tick.timestamp_ns
+            latest_tick = None
+        yield event
+
+
 def run_paper_execution_canary_lane(
     lane: ExecutionCanaryLane,
     *,
@@ -406,6 +498,7 @@ def run_paper_execution_canary_lane(
     source_factory: SourceFactory = BinancePublicMarketSource,
     code_hash: str | None = None,
     deadline_seconds: float | None = None,
+    risk_monotonic_clock: Callable[[], float] | None = None,
 ) -> dict[str, object]:
     symbol = "ETHUSDT.BINANCE"
     instrument = instrument_loader(symbol)
@@ -419,7 +512,8 @@ def run_paper_execution_canary_lane(
         timeframe=lane.source_timeframe,
         first_expected_start_ms=first_expected_start_ms,
         recovery_grace_ms=3_000,
-        max_reconnect_attempts=1,
+        reconnect_backoff_seconds=(1.0, 2.0, 5.0),
+        max_reconnect_attempts=20,
     )
 
     provider = RiskStateProvider()
@@ -433,7 +527,11 @@ def run_paper_execution_canary_lane(
         leverage=0.0,
         correlated_exposure=0.0,
     )
-    risk_runtime = RiskRuntime(_paper_risk_limits(), state_provider=provider)
+    risk_runtime = RiskRuntime(
+        _paper_risk_limits(),
+        monotonic_clock=risk_monotonic_clock or time.monotonic,
+        state_provider=provider,
+    )
     risk_runtime.update_api_health(
         venue="BINANCE",
         healthy=True,
@@ -441,7 +539,12 @@ def run_paper_execution_canary_lane(
         latency_ms=0.0,
     )
 
-    bridge = _CanaryPaperBridge(lane=lane, instrument=instrument, risk_runtime=risk_runtime)
+    bridge = _CanaryPaperBridge(
+        lane=lane,
+        instrument=instrument,
+        bootstrap_bar=history[-1],
+        risk_runtime=risk_runtime,
+    )
     effective_code_hash = code_hash or os.environ.get("GITHUB_SHA") or "TEST-ONLY-PAPER-EXECUTION-CANARY"
     lane_payload = json.dumps(
         {
@@ -466,7 +569,7 @@ def run_paper_execution_canary_lane(
     )
 
     if deadline_seconds is None:
-        deadline_seconds = max(360.0, lane.target_minutes * 60.0 + 480.0)
+        deadline_seconds = _default_lane_deadline_seconds(lane)
     if deadline_seconds <= 0.0:
         raise ValueError("deadline_seconds must be positive")
 
@@ -488,7 +591,7 @@ def run_paper_execution_canary_lane(
             engine_state=state,
             venue_state=state,
             dispatch=bridge.dispatch,
-            stream=MarketStream(source),
+            stream=MarketStream(_coalesced_canary_stream(source)),
             finalizer=bridge.close,
         )
         started = time.monotonic()
@@ -505,8 +608,10 @@ def run_paper_execution_canary_lane(
 
         try:
             run_report = runtime.run(stop_requested=stop_requested)
-            if timed_out or not bridge.strategy.done:
+            if timed_out:
                 raise RuntimeError("execution canary deadline reached before the lane completed")
+            if not bridge.strategy.done:
+                raise RuntimeError("execution canary market stream ended before the lane completed")
             final_state = state()
             snapshot = getattr(source, "completeness_snapshot", None)
             if snapshot is None:
