@@ -309,6 +309,11 @@ def test_oracle_deploy_workflow_is_manual_environment_gated_and_fail_closed():
     assert "BINANCE_LIVE_API_SECRET" not in upper
 
 
+def test_oracle_deploy_reads_root_owned_safety_env_with_sudo():
+    text = (ROOT / ".github" / "workflows" / "oracle-deploy.yml").read_text(encoding="utf-8")
+    assert "sudo awk -F=" in text
+
+
 def test_oracle_deploy_checks_current_paper_inputs_not_deleted_factory_knob():
     text = (ROOT / ".github" / "workflows" / "oracle-deploy.yml").read_text(encoding="utf-8")
     upper = text.upper()

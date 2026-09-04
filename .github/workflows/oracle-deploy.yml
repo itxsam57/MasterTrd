@@ -163,8 +163,8 @@ jobs:
             local env_file="$1"
             [[ -f "$env_file" ]] || return 0
             local mode live
-            mode="$(awk -F= '$1=="MASTERTRD_MODE" {print $2}' "$env_file" | tail -n1)"
-            live="$(awk -F= '$1=="LIVE_TRADING_ENABLED" {print $2}' "$env_file" | tail -n1)"
+            mode="$(sudo awk -F= '$1=="MASTERTRD_MODE" {print $2}' "$env_file" | tail -n1)"
+            live="$(sudo awk -F= '$1=="LIVE_TRADING_ENABLED" {print $2}' "$env_file" | tail -n1)"
             if [[ "${mode^^}" == "LIVE" || "${live,,}" == "true" ]]; then
               echo "Oracle host is configured for LIVE in $env_file; refusing automated mutation or restart." >&2
               exit 1
