@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from .genome import StrategyGenome
@@ -86,6 +86,39 @@ def validate_paper_candidate_manifest(
         raise ValueError("Oracle PAPER runtime currently requires a BINANCE instrument")
     return candidate
 
+
+
+def validate_paper_candidate_manifests(
+    payloads: object,
+    *,
+    expected_code_hash: str,
+    expected_lock_hash: str,
+) -> tuple[StrategyGenome, ...]:
+    """Validate one atomic Oracle PAPER candidate deployment set."""
+    if not isinstance(payloads, list):
+        raise TypeError("paper candidate manifests must be a list")
+    if not payloads:
+        raise ValueError("paper candidate manifest list must be non-empty")
+
+    candidates: list[StrategyGenome] = []
+    strategy_ids: set[str] = set()
+    genome_hashes: set[str] = set()
+    for payload in payloads:
+        if not isinstance(payload, Mapping):
+            raise TypeError("paper candidate manifest must be an object")
+        candidate = validate_paper_candidate_manifest(
+            payload,
+            expected_code_hash=expected_code_hash,
+            expected_lock_hash=expected_lock_hash,
+        )
+        if candidate.strategy_id in strategy_ids:
+            raise ValueError(f"duplicate strategy_id in PAPER candidate set: {candidate.strategy_id}")
+        if candidate.genome_hash in genome_hashes:
+            raise ValueError(f"duplicate genome_hash in PAPER candidate set: {candidate.genome_hash}")
+        strategy_ids.add(candidate.strategy_id)
+        genome_hashes.add(candidate.genome_hash)
+        candidates.append(candidate)
+    return tuple(candidates)
 
 def render_env_template() -> str:
     return """# MasterTrd host environment template

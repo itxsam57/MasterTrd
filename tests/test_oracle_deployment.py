@@ -165,6 +165,46 @@ def test_oracle_paper_candidate_manifest_rejects_unsupported_runtime_universe():
         validator(wrong_venue, expected_code_hash="code-v1", expected_lock_hash="lock-v1")
 
 
+
+def test_oracle_paper_candidate_set_validates_multiple_unique_exact_source_candidates():
+    first = paper_candidate_manifest()
+    raw_second = dict(first["candidate"])
+    raw_second["strategy_id"] = "R-oracle-paper-2"
+    raw_second["entry"] = {"kind": "ema_cross", "fast_period": 5, "slow_period": 13, "trade_size": "0.01"}
+    second_candidate = StrategyGenome(**raw_second)
+    second = dict(first)
+    second["candidate"] = second_candidate.canonical_payload()
+    second["strategy_id"] = second_candidate.strategy_id
+    second["genome_hash"] = second_candidate.genome_hash
+
+    candidates = oracle_module.validate_paper_candidate_manifests(
+        [first, second],
+        expected_code_hash="code-v1",
+        expected_lock_hash="lock-v1",
+    )
+
+    assert [candidate.strategy_id for candidate in candidates] == [
+        "R-oracle-paper",
+        "R-oracle-paper-2",
+    ]
+
+
+def test_oracle_paper_candidate_set_fails_closed_on_invalid_or_duplicate_members():
+    validator = oracle_module.validate_paper_candidate_manifests
+    manifest = paper_candidate_manifest()
+
+    for payloads in (None, {}, "not-a-list", []):
+        with pytest.raises((TypeError, ValueError), match="candidate|list|non-empty"):
+            validator(payloads, expected_code_hash="code-v1", expected_lock_hash="lock-v1")
+
+    stale = dict(manifest)
+    stale["code_hash"] = "stale"
+    with pytest.raises(ValueError, match="code_hash"):
+        validator([manifest, stale], expected_code_hash="code-v1", expected_lock_hash="lock-v1")
+
+    with pytest.raises(ValueError, match="duplicate.*strategy|strategy.*duplicate"):
+        validator([manifest, dict(manifest)], expected_code_hash="code-v1", expected_lock_hash="lock-v1")
+
 def test_systemd_unit_restarts_and_loads_protected_environment():
     unit = render_systemd_unit(spec())
     assert "User=mastertrd" in unit
