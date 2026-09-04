@@ -20,6 +20,15 @@ _STRATEGY_TELEMETRY_FIELDS = (
     "orders_allowed",
     "orders_rejected",
     "last_risk_rejection",
+    "expected_closed_bars",
+    "ws_closed_bars",
+    "rest_recovered_bars",
+    "missing_closed_bars",
+    "recovery_failures",
+    "last_closed_bar_ms",
+    "last_expected_close_ms",
+    "last_recovery_error",
+    "data_healthy",
 )
 
 
