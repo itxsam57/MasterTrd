@@ -140,14 +140,14 @@ _EXECUTABLE_RECIPES: tuple[StrategyRecipe, ...] = (
     _exact("long-trend-futures", "Long-Horizon Trend Futures", "position", "long_horizon_trend", "trailing_atr", assets=(AssetClass.FUTURES, AssetClass.COMMODITY, AssetClass.RATES), horizons=(TradingHorizon.POSITION,)),
     _exact("pairs-cointegration-balanced", "Cointegration Pairs Balanced", "stat_arb", "cointegration_spread", "spread_mean_exit", sources=("mastertrd-native", "gatev-pairs")),
     _exact("pairs-cointegration-slow", "Cointegration Pairs Slow", "stat_arb", "cointegration_spread", "spread_mean_exit", horizons=(TradingHorizon.SWING, TradingHorizon.POSITION), sources=("mastertrd-native", "gatev-pairs")),
-    _exact("crypto-funding-basis", "Crypto Funding Basis", "funding_basis", "funding_basis", "edge_decay", assets=(AssetClass.CRYPTO,), sources=("mastertrd-native", "koijen-carry")),
-    _exact("crypto-hedged-basis", "Crypto Hedged Basis", "delta_neutral", "hedged_basis", "rebalance", assets=(AssetClass.CRYPTO,), sources=("mastertrd-native", "koijen-carry")),
     _exact("multi-asset-rotation", "Multi-Asset Momentum Rotation", "portfolio", "strategy_rotation", "rebalance", assets=(AssetClass.MULTI_ASSET,), horizons=(TradingHorizon.SWING, TradingHorizon.POSITION), sources=("mastertrd-native", "asness-value-momentum")),
     _exact("crypto-rotation", "Crypto Momentum Rotation", "portfolio", "strategy_rotation", "rebalance", assets=(AssetClass.CRYPTO,), sources=("mastertrd-native", "crypto-factors")),
 )
 
 
 _SPECIALIST_RECIPES: tuple[StrategyRecipe, ...] = (
+    _blocked("crypto-funding-basis", "Crypto Funding Basis", "funding_basis", assets=(AssetClass.CRYPTO,), horizons=(TradingHorizon.INTRADAY, TradingHorizon.SWING), readiness=RecipeReadiness.SPECIALIST_DATA_REQUIRED, sources=("mastertrd-native", "koijen-carry"), blocker="qualifying_funding_basis_market_state_required", entry="funding_basis", exit_kind="edge_decay"),
+    _blocked("crypto-hedged-basis", "Crypto Hedged Basis", "delta_neutral", assets=(AssetClass.CRYPTO,), horizons=(TradingHorizon.INTRADAY, TradingHorizon.SWING), readiness=RecipeReadiness.SPECIALIST_DATA_REQUIRED, sources=("mastertrd-native", "koijen-carry"), blocker="qualifying_hedge_drift_market_state_required", entry="hedged_basis", exit_kind="rebalance"),
     _blocked("options-iv-rv-defined-risk", "Options IV/RV Defined-Risk", "options", assets=(AssetClass.OPTIONS,), horizons=(TradingHorizon.SWING,), readiness=RecipeReadiness.SPECIALIST_DATA_REQUIRED, sources=("mastertrd-native",), blocker="qualifying_option_chain_and_greeks_data_required", entry="volatility_signal", exit_kind="greeks_or_time_exit"),
     _blocked("crypto-micro-momentum", "Crypto Micro Momentum Scalper", "scalping", assets=(AssetClass.CRYPTO,), horizons=(TradingHorizon.SCALP,), readiness=RecipeReadiness.SPECIALIST_DATA_REQUIRED, sources=("mastertrd-native", "hummingbot"), blocker="qualifying_real_tick_evidence_required", entry="micro_momentum", exit_kind="ticks_or_timeout"),
     _blocked("crypto-dynamic-grid", "Crypto Dynamic Grid", "grid", assets=(AssetClass.CRYPTO,), horizons=(TradingHorizon.SCALP, TradingHorizon.INTRADAY), readiness=RecipeReadiness.SPECIALIST_DATA_REQUIRED, sources=("mastertrd-native", "hummingbot"), blocker="qualifying_real_tick_evidence_required", entry="dynamic_grid", exit_kind="inventory_exit"),

@@ -78,3 +78,14 @@ def test_strategy_recipe_lookup_and_filters_are_deterministic() -> None:
 
     with pytest.raises(ValueError, match="unknown strategy recipe"):
         strategy_recipe("missing-recipe")
+
+
+def test_basis_recipes_require_admitted_specialist_market_state() -> None:
+    expected = {
+        "crypto-funding-basis": "qualifying_funding_basis_market_state_required",
+        "crypto-hedged-basis": "qualifying_hedge_drift_market_state_required",
+    }
+    for recipe_id, blocker in expected.items():
+        recipe = strategy_recipe(recipe_id)
+        assert recipe.readiness is RecipeReadiness.SPECIALIST_DATA_REQUIRED
+        assert recipe.blocker == blocker
