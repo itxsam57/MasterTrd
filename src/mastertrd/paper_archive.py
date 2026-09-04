@@ -20,14 +20,18 @@ class JsonPaperReportArchive:
     def _canonical_reports(reports: Iterable[PaperForwardReport]) -> list[dict[str, object]]:
         return [asdict(report) for report in reports]
 
-    @classmethod
-    def _hash_reports(cls, reports: Iterable[PaperForwardReport]) -> str:
+    @staticmethod
+    def _hash_raw_reports(reports: list[object]) -> str:
         encoded = json.dumps(
-            cls._canonical_reports(reports),
+            reports,
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
         return hashlib.sha256(encoded).hexdigest()
+
+    @classmethod
+    def _hash_reports(cls, reports: Iterable[PaperForwardReport]) -> str:
+        return cls._hash_raw_reports(list(cls._canonical_reports(reports)))
 
     @staticmethod
     def _validate_collection(reports: list[PaperForwardReport]) -> None:
@@ -88,6 +92,8 @@ class JsonPaperReportArchive:
         archive_hash = envelope.get("archive_hash")
         if not isinstance(raw_reports, list) or not isinstance(archive_hash, str):
             raise ValueError("paper report archive integrity check failed")
+        if self._hash_raw_reports(raw_reports) != archive_hash:
+            raise ValueError("paper report archive integrity check failed")
         try:
             reports = [
                 PaperForwardReport(**raw)
@@ -97,8 +103,6 @@ class JsonPaperReportArchive:
         except (TypeError, ValueError) as exc:
             raise ValueError("paper report archive integrity check failed") from exc
         if len(reports) != len(raw_reports):
-            raise ValueError("paper report archive integrity check failed")
-        if self._hash_reports(reports) != archive_hash:
             raise ValueError("paper report archive integrity check failed")
         self._validate_collection(reports)
         return tuple(reports)
