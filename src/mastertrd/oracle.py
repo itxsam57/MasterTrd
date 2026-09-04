@@ -183,11 +183,50 @@ WantedBy=multi-user.target
 """
 
 
+def render_paper_systemd_template(spec: OracleDeploymentSpec) -> str:
+    return f"""[Unit]
+Description=MasterTrd PAPER strategy %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={spec.service_user}
+WorkingDirectory={spec.app_dir}
+EnvironmentFile=/etc/mastertrd/paper/%i.env
+ExecStart={spec.python_bin} -m {spec.module}
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGINT
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths={spec.app_dir} /var/lib/mastertrd /var/log/mastertrd
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
 def render_health_script() -> str:
     return """#!/usr/bin/env bash
 set -euo pipefail
-systemctl is-active --quiet mastertrd.service
-systemctl show mastertrd.service --property=NRestarts --value
+service_name="${1:-mastertrd.service}"
+case "$service_name" in
+  mastertrd.service|mastertrd-paper@*.service) ;;
+  *) echo "Unsupported MasterTrd service: $service_name" >&2; exit 2 ;;
+esac
+systemctl is-active --quiet "$service_name"
+systemctl show "$service_name" --property=NRestarts --value
 """
 
 
@@ -206,6 +245,7 @@ def render_logrotate_config() -> str:
 def render_bootstrap_script(spec: OracleDeploymentSpec) -> str:
     env_template = render_env_template().rstrip()
     unit = render_systemd_unit(spec).rstrip()
+    paper_unit = render_paper_systemd_template(spec).rstrip()
     health = render_health_script().rstrip()
     logrotate = render_logrotate_config().rstrip()
     return f'''#!/usr/bin/env bash
@@ -232,7 +272,7 @@ apt-get update
 apt-get install -y python3 python3-venv git curl logrotate ca-certificates
 
 id -u {spec.service_user} >/dev/null 2>&1 || useradd --system --home {spec.app_dir} --shell /usr/sbin/nologin {spec.service_user}
-mkdir -p {spec.app_dir} /etc/mastertrd /var/lib/mastertrd /var/lib/mastertrd/paper /var/log/mastertrd
+mkdir -p {spec.app_dir} /etc/mastertrd /etc/mastertrd/paper /var/lib/mastertrd /var/lib/mastertrd/paper /var/log/mastertrd
 chown -R {spec.service_user}:{spec.service_user} {spec.app_dir} /var/lib/mastertrd /var/log/mastertrd
 
 if [[ ! -f {spec.env_file} ]]; then
@@ -247,6 +287,10 @@ cat > /etc/systemd/system/mastertrd.service <<'MASTERTRD_SERVICE'
 {unit}
 MASTERTRD_SERVICE
 
+cat > /etc/systemd/system/mastertrd-paper@.service <<'MASTERTRD_PAPER_SERVICE'
+{paper_unit}
+MASTERTRD_PAPER_SERVICE
+
 cat > /usr/local/bin/mastertrd-health <<'MASTERTRD_HEALTH'
 {health}
 MASTERTRD_HEALTH
@@ -255,7 +299,11 @@ chmod 755 /usr/local/bin/mastertrd-health
 cat > /usr/local/bin/mastertrd-paper-rotate-request <<'MASTERTRD_ROTATE_REQUEST'
 #!/usr/bin/env bash
 set -euo pipefail
-ENV_FILE={spec.env_file}
+instance="${{1:-}}"
+case "$instance" in
+  ''|*[!A-Za-z0-9_.-]*) echo 'Invalid PAPER instance name' >&2; exit 2 ;;
+esac
+ENV_FILE="/etc/mastertrd/paper/${{instance}}.env"
 [[ -r "$ENV_FILE" ]] || exit 0
 
 mode="$(awk -F= '$1=="MASTERTRD_MODE" {{print $2}}' "$ENV_FILE" | tail -n1)"
@@ -294,14 +342,14 @@ fi
 MASTERTRD_ROTATE_REQUEST
 chmod 755 /usr/local/bin/mastertrd-paper-rotate-request
 
-cat > /etc/systemd/system/mastertrd-paper-rotate.service <<'MASTERTRD_ROTATE_SERVICE'
+cat > /etc/systemd/system/mastertrd-paper-rotate@.service <<'MASTERTRD_ROTATE_SERVICE'
 [Unit]
-Description=Request MasterTrd in-process PAPER evidence rotation
-After=mastertrd.service
+Description=Request MasterTrd PAPER evidence rotation for %i
+After=mastertrd-paper@%i.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/mastertrd-paper-rotate-request
+ExecStart=/usr/local/bin/mastertrd-paper-rotate-request %i
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
@@ -309,15 +357,15 @@ ProtectSystem=strict
 ReadWritePaths=/var/lib/mastertrd
 MASTERTRD_ROTATE_SERVICE
 
-cat > /etc/systemd/system/mastertrd-paper-rotate.timer <<'MASTERTRD_ROTATE_TIMER'
+cat > /etc/systemd/system/mastertrd-paper-rotate@.timer <<'MASTERTRD_ROTATE_TIMER'
 [Unit]
-Description=Check whether MasterTrd PAPER evidence window should rotate
+Description=Check MasterTrd PAPER evidence rotation for %i
 
 [Timer]
 OnBootSec=1m
 OnUnitActiveSec=1m
 Persistent=true
-Unit=mastertrd-paper-rotate.service
+Unit=mastertrd-paper-rotate@%i.service
 
 [Install]
 WantedBy=timers.target
@@ -329,10 +377,8 @@ MASTERTRD_LOGROTATE
 chmod 644 /etc/logrotate.d/mastertrd
 
 systemctl daemon-reload
-systemctl enable mastertrd.service
-systemctl enable --now mastertrd-paper-rotate.timer
 
-echo "Oracle adapter installed with safe defaults."
+echo "Oracle adapter installed with safe multi-instance PAPER defaults."
 echo "The host environment file is preserved on repeat runs; repository deployment never overwrites credentials."
 echo "PAPER evidence rotation is requested in-process and never restarts the execution engine."
 echo "Use the identity-checked Oracle Deploy workflow to configure and start PAPER."

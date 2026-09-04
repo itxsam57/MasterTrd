@@ -229,12 +229,41 @@ def test_bootstrap_targets_arm64_or_amd64_linux_and_installs_health_recovery_hoo
     script = render_bootstrap_script(spec())
     assert "uname -s" in script
     assert "aarch64|arm64|x86_64|amd64" in script
-    assert "systemctl enable mastertrd.service" in script
+    assert "systemctl enable mastertrd.service" not in script
+    assert "/etc/systemd/system/mastertrd-paper@.service" in script
     assert "logrotate" in script
     assert "mastertrd-health" in script
     assert "chmod 600 /etc/mastertrd/mastertrd.env" in script
     assert "ORACLE_ENABLED=false" in script
 
+
+
+def test_oracle_paper_systemd_template_isolates_each_strategy_environment():
+    unit = oracle_module.render_paper_systemd_template(spec())
+    assert "EnvironmentFile=/etc/mastertrd/paper/%i.env" in unit
+    assert "ExecStart=/opt/mastertrd/.venv/bin/python -m mastertrd.live_node" in unit
+    assert "Restart=on-failure" in unit
+    assert "NoNewPrivileges=true" in unit
+    assert "ProtectSystem=strict" in unit
+    assert "ReadWritePaths=/opt/mastertrd /var/lib/mastertrd /var/log/mastertrd" in unit
+
+
+def test_oracle_bootstrap_installs_multi_instance_paper_service_and_rotation_templates():
+    script = render_bootstrap_script(spec())
+    assert "/etc/mastertrd/paper" in script
+    assert "/etc/systemd/system/mastertrd-paper@.service" in script
+    assert "/etc/systemd/system/mastertrd-paper-rotate@.service" in script
+    assert "/etc/systemd/system/mastertrd-paper-rotate@.timer" in script
+    assert "mastertrd-paper-rotate-request" in script
+    assert 'ENV_FILE="/etc/mastertrd/paper/${instance}.env"' in script
+    assert "systemctl enable mastertrd.service" not in script
+
+
+def test_oracle_health_script_accepts_only_mastertrd_paper_instance_units():
+    script = oracle_module.render_health_script()
+    assert 'service_name="${1:-mastertrd.service}"' in script
+    assert "mastertrd-paper@*.service" in script
+    assert 'systemctl is-active --quiet "$service_name"' in script
 
 def test_render_oracle_bundle_exposes_every_operator_artifact_without_credentials():
     bundle = render_oracle_bundle(spec())
