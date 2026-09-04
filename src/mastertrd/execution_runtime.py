@@ -65,6 +65,15 @@ class ExecutionRuntime:
     def _execution_state_is_flat(state: ExecutionState) -> bool:
         return not state.open_order_ids and all(quantity == 0 for quantity in state.positions.values())
 
+    def _available_event_id(self, base: str) -> str:
+        """Return a deterministic unused journal id for a restartable receipt."""
+        if not self._journal.has_event(base):
+            return base
+        suffix = 1
+        while self._journal.has_event(f"{base}:restart:{suffix}"):
+            suffix += 1
+        return f"{base}:restart:{suffix}"
+
     def _refresh_market_risk_state(self, event: MarketStreamEvent) -> None:
         extras = event.data.extras
         volatility_raw = extras.get("realized_volatility")
@@ -190,6 +199,9 @@ class ExecutionRuntime:
         for event in active_stream:
             if should_stop():
                 break
+            # A persisted market-event identity means the previous PAPER process
+            # reached the post-dispatch reconciliation/save boundary. Events that
+            # crashed before that durable boundary are intentionally replayed.
             if self._journal.has_event(event.event_id):
                 duplicate_events += 1
                 continue
@@ -200,9 +212,10 @@ class ExecutionRuntime:
                 if not startup_reconciliation.ok:
                     reconciliation_errors += 1
                 startup_timestamp = max(event.timestamp_ns, self._journal.latest_timestamp_ns)
+                startup_id = self._available_event_id(f"reconcile:startup:{event.event_id}")
                 self._record_reconciliation(
                     reconciliation=startup_reconciliation,
-                    reconciliation_id=f"reconcile:startup:{event.event_id}",
+                    reconciliation_id=startup_id,
                     timestamp_ns=startup_timestamp,
                 )
                 if not startup_reconciliation.ok:
@@ -211,17 +224,21 @@ class ExecutionRuntime:
                     break
                 self._startup_reconciled = True
 
-            # Persist identity before dispatch. A crash may suppress this event on
-            # restart, but it can never cause the same market event to submit twice.
-            self._journal.record_market_event(event.event_id, timestamp_ns=event.timestamp_ns)
-            self._session_store.save(self._journal)
-
             # Fresh market state must exist before a strategy can submit against
             # this event. Missing or malformed required metrics remain absent and
             # therefore fail closed in RiskStateProvider.
             self._refresh_market_risk_state(event)
             self._dispatch(event)
             processed_events += 1
+
+            # Nautilus PAPER execution is in-process. Its strategy/order/fill
+            # effects are not restart-durable until the reconciled execution
+            # checkpoint below is atomically saved. Record the market-event
+            # identity only after dispatch, in the same journal transaction that
+            # is persisted by _record_reconciliation. A crash before that save
+            # therefore replays the event instead of silently losing a signal.
+            commit_timestamp = max(event.timestamp_ns, self._journal.latest_timestamp_ns)
+            self._journal.record_market_event(event.event_id, timestamp_ns=commit_timestamp)
 
             reconciliation = self._reconcile()
             reconciliation_checks += 1
