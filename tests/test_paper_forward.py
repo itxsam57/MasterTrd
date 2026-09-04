@@ -105,6 +105,24 @@ def test_unverified_or_unreconciled_forward_reports_cannot_promote():
     assert paper_minimum_evidence(candidate, unreconciled, policy()).passed is False
 
 
+def test_data_unhealthy_forward_session_cannot_promote():
+    candidate = genome()
+    unhealthy = replace(
+        report(candidate, "session-1"),
+        data_healthy=False,
+        missing_closed_bars=1,
+    )
+    evidence = paper_minimum_evidence(
+        candidate,
+        [unhealthy, report(candidate, "session-2")],
+        policy(),
+    )
+
+    assert evidence.passed is False
+    assert evidence.metrics["data_healthy_sessions"] == 1.0
+    assert evidence.metrics["missing_closed_bars"] == 1.0
+
+
 def test_mixed_code_hashes_cannot_be_combined_into_paper_evidence():
     candidate = genome()
     with pytest.raises(ValueError, match="code_hash"):
