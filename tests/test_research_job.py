@@ -455,3 +455,14 @@ def test_scheduled_research_prices_in_normal_and_stressed_execution_costs():
         "stressed_fees": 0.0020,
         "stressed_slippage": 0.0020,
     }
+
+
+def test_scheduled_validation_depth_covers_slow_strategy_warmup_and_hidden_folds():
+    from mastertrd.research_job import _archive_months_for_recipe, _scheduled_validation_window
+
+    assert _scheduled_validation_window("ema-cross-balanced") >= 150
+    assert _archive_months_for_recipe("ema-cross-balanced") >= 6
+    assert _scheduled_validation_window("pullback-balanced") >= 150
+    assert _archive_months_for_recipe("pullback-balanced") >= 26
+    assert _scheduled_validation_window("long-trend-balanced") >= 350
+    assert _archive_months_for_recipe("long-trend-balanced") >= 60

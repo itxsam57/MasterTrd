@@ -131,14 +131,22 @@ def _default_runnable_recipe_ids(runnable_families: tuple[str, ...]) -> tuple[st
     return selected
 
 
+def _scheduled_validation_window(recipe_id: str) -> int:
+    """Give each robustness slice enough bars to warm up its slowest recipe family."""
+
+    return 350 if strategy_recipe(recipe_id).family == "position" else 150
+
+
 def _archive_months_for_recipe(recipe_id: str) -> int:
-    """Give slow families enough stable monthly data for their generated lookbacks."""
+    """Supply five validation slices at the slowest timeframe a recipe may generate."""
 
     family = strategy_recipe(recipe_id).family
     if family == "position":
-        return 18
+        return 60
     if family == "swing":
-        return 9
+        return 26
+    if family in {"trend", "volatility"}:
+        return 6
     return 2
 
 
@@ -574,7 +582,7 @@ def run_research_job(
                     validation_budget=len(plan.instruments),
                     paper_queue_cap=1,
                     hidden_fraction=0.20,
-                    validation_window=50,
+                    validation_window=_scheduled_validation_window(recipe_id) if recipe_id is not None else 150,
                     trade_size="0.01000",
                     starting_balances=("10 ETH", "10 BTC", "100000 USDT"),
                     recipe_ids=(recipe_id,) if recipe_id is not None else (),
