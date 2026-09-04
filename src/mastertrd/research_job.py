@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta, timezone
+from enum import Enum
 import hashlib
 import json
 import os
@@ -11,14 +12,18 @@ from typing import Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
+from .advanced_validation import AdvancedValidationPolicy
+from .asset_transfer import AssetTransferPolicy
 from .contracts import StrategyState
 from .data.archive import ArchiveReadResult, dataset_hash_for_bars, read_binance_archive
 from .data.binance_public import binance_kline_url
 from .genome import StrategyGenome
+from .hidden_gate import HiddenGatePolicy
 from .memory_duckdb import DuckDbResearchMemory
 from .nautilus_paper import load_public_binance_spot_instrument
 from .research.generator import generate_candidate
 from .research_brain import ResearchBrainConfig, ResearchDataset, run_research_brain
+from .robustness import RobustnessPolicy
 from .strategy_families import DataLevel, FAMILIES, family_spec
 from .strategy_universe import (
     AssetClass,
@@ -26,6 +31,11 @@ from .strategy_universe import (
     STRATEGY_RECIPES,
     strategy_recipe,
 )
+
+
+class ResearchProfile(str, Enum):
+    SMOKE = "smoke"
+    PRODUCTION = "production"
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +205,80 @@ def research_job_plan_for_recipe(recipe_id: str) -> ResearchJobPlan:
         seed_stop=base.seed_stop,
         archive_months=_archive_months_for_recipe(recipe_id),
         runnable_recipe_ids=(recipe_id,),
+    )
+
+
+def research_brain_config_for_run(
+    *,
+    plan: ResearchJobPlan,
+    family: str,
+    seed: int,
+    recipe_id: str | None,
+    profile: ResearchProfile = ResearchProfile.SMOKE,
+) -> ResearchBrainConfig:
+    """Build one explicit research policy so smoke and candidate production cannot drift."""
+    common = dict(
+        families=(family,),
+        instruments=plan.instruments,
+        seed_start=seed,
+        seed_stop=seed + 1,
+        validation_budget=len(plan.instruments),
+        paper_queue_cap=1,
+        hidden_fraction=0.20,
+        validation_window=50,
+        trade_size="0.01000",
+        starting_balances=("10 ETH", "10 BTC", "100000 USDT"),
+        recipe_ids=(recipe_id,) if recipe_id is not None else (),
+    )
+    if profile is ResearchProfile.SMOKE:
+        return ResearchBrainConfig(
+            screening_min_return=-1.0,
+            optimization_trials=2,
+            evolution_generations=1,
+            evolution_population=4,
+            **common,
+        )
+    if profile is not ResearchProfile.PRODUCTION:
+        raise ValueError(f"unsupported research profile: {profile!r}")
+    return ResearchBrainConfig(
+        screening_min_return=0.0,
+        optimization_trials=24,
+        evolution_generations=8,
+        evolution_population=16,
+        fees=0.001,
+        slippage=0.0005,
+        stressed_fees=0.002,
+        stressed_slippage=0.001,
+        robustness_policy=RobustnessPolicy(
+            min_trades_per_slice=5,
+            min_profitable_slice_ratio=0.50,
+            max_drawdown=0.25,
+            min_stressed_return=0.0,
+            max_return_degradation=0.50,
+            min_stable_neighbor_ratio=0.50,
+        ),
+        advanced_policy=AdvancedValidationPolicy(
+            min_evaluations=1,
+            min_trades_per_evaluation=5,
+            min_positive_ratio=1.0,
+            max_drawdown=0.25,
+            min_monte_carlo_survival_ratio=1.0,
+            max_monte_carlo_loss=-0.10,
+        ),
+        asset_transfer_policy=AssetTransferPolicy(
+            min_transfer_assets=1,
+            min_trades_per_asset=5,
+            min_pass_ratio=1.0,
+            min_total_return=0.0,
+            max_drawdown=0.25,
+        ),
+        hidden_policy=HiddenGatePolicy(
+            min_trades_per_evaluation=5,
+            min_total_return=0.0,
+            max_drawdown=0.25,
+            min_regime_pass_ratio=0.67,
+        ),
+        **common,
     )
 
 
@@ -488,6 +572,7 @@ def run_research_job(
     artifact_dir: Path,
     code_hash: str,
     lock_hash: str,
+    profile: ResearchProfile = ResearchProfile.SMOKE,
 ) -> dict[str, object]:
     if not code_hash or not lock_hash:
         raise ValueError("code_hash and lock_hash are required")
@@ -529,22 +614,12 @@ def run_research_job(
                         data_dir=data_dir,
                     )
                 dataset, manifests = dataset_cache[timeframe]
-                config = ResearchBrainConfig(
-                    families=(family,),
-                    instruments=plan.instruments,
-                    seed_start=seed,
-                    seed_stop=seed + 1,
-                    screening_min_return=-1.0,
-                    optimization_trials=2,
-                    evolution_generations=1,
-                    evolution_population=4,
-                    validation_budget=len(plan.instruments),
-                    paper_queue_cap=1,
-                    hidden_fraction=0.20,
-                    validation_window=50,
-                    trade_size="0.01000",
-                    starting_balances=("10 ETH", "10 BTC", "100000 USDT"),
-                    recipe_ids=(recipe_id,) if recipe_id is not None else (),
+                config = research_brain_config_for_run(
+                    plan=plan,
+                    family=family,
+                    seed=seed,
+                    recipe_id=recipe_id,
+                    profile=profile,
                 )
                 report = run_research_brain(
                     config,
@@ -577,6 +652,7 @@ def run_research_job(
 
     return {
         "schema_version": 1,
+        "research_profile": profile.value,
         "source": "binance-public-data",
         "code_hash": code_hash,
         "lock_hash": lock_hash,
@@ -608,12 +684,18 @@ def main() -> int:
     lock_hash = hashlib.sha256(lock_path.read_bytes()).hexdigest()
 
     recipe_id = os.environ.get("MASTERTRD_RESEARCH_RECIPE_ID", "").strip()
+    raw_profile = os.environ.get("MASTERTRD_RESEARCH_PROFILE", ResearchProfile.SMOKE.value).strip().lower()
+    try:
+        profile = ResearchProfile(raw_profile)
+    except ValueError as exc:
+        raise RuntimeError(f"invalid MASTERTRD_RESEARCH_PROFILE: {raw_profile!r}") from exc
     plan = research_job_plan_for_recipe(recipe_id) if recipe_id else default_research_job_plan()
     report = run_research_job(
         plan,
         artifact_dir=artifact_dir,
         code_hash=code_hash,
         lock_hash=lock_hash,
+        profile=profile,
     )
     report_path = artifact_dir / "research-report.json"
     report_path.write_text(
