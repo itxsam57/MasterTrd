@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/paper-status.yml'
+      - 'src/mastertrd/oracle_paper_status.py'
       - 'src/mastertrd/paper_status.py'
       - 'src/mastertrd/paper_diagnostics.py'
   schedule:
@@ -21,7 +22,7 @@ concurrency:
 jobs:
   status:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     environment: oracle
     env:
       ORACLE_ENABLED: ${{ vars.ORACLE_ENABLED }}
@@ -55,95 +56,109 @@ jobs:
           printf '%s\n' "$ORACLE_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
 
-      - name: Read sanitized PAPER status without mutating Oracle
+      - name: Read sanitized multi-strategy PAPER status without mutating Oracle
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          mkdir -p artifacts/paper-status
+          mkdir -p artifacts/paper-status/diagnostics
           target="${ORACLE_SSH_USER}@${ORACLE_HOST}"
           ssh_cmd=(ssh -i "$HOME/.ssh/oracle_key" -o BatchMode=yes)
-
-          mode="$("${ssh_cmd[@]}" "$target" "sudo awk -F= '\$1==\"MASTERTRD_MODE\" {print \$2}' /etc/mastertrd/mastertrd.env | tail -n1")"
-          live_enabled="$("${ssh_cmd[@]}" "$target" "sudo awk -F= '\$1==\"LIVE_TRADING_ENABLED\" {print \$2}' /etc/mastertrd/mastertrd.env | tail -n1")"
-          session_state="$("${ssh_cmd[@]}" "$target" "sudo awk -F= '\$1==\"MASTERTRD_SESSION_STATE\" {print \$2}' /etc/mastertrd/mastertrd.env | tail -n1")"
-          runtime_code_hash="$("${ssh_cmd[@]}" "$target" "sudo awk -F= '\$1==\"MASTERTRD_CODE_HASH\" {print \$2}' /etc/mastertrd/mastertrd.env | tail -n1")"
           remote_sha="$("${ssh_cmd[@]}" "$target" "sudo -u mastertrd git -C /opt/mastertrd rev-parse HEAD")"
-
-          if [[ "${mode^^}" != "PAPER" || "${live_enabled,,}" != "false" ]]; then
-            echo 'Oracle is not in safe PAPER mode; refusing status collection.' >&2
-            exit 1
-          fi
-          if [[ -z "$session_state" || -z "$runtime_code_hash" ]]; then
-            echo 'Oracle PAPER runtime identity is incomplete.' >&2
-            exit 1
-          fi
-          if [[ "$remote_sha" != "$runtime_code_hash" ]]; then
-            echo 'Oracle PAPER runtime code identity does not match the deployed checkout.' >&2
-            exit 1
-          fi
-
-          session_arg="$(printf '%q' "$session_state")"
+          paper_root="/var/lib/mastertrd/paper/$remote_sha"
+          paper_root_q="$(printf '%q' "$paper_root")"
           "${ssh_cmd[@]}" "$target" \
-            "sudo -u mastertrd /opt/mastertrd/.venv/bin/python - --session-state ${session_arg}" \
-            < src/mastertrd/paper_status.py \
+            "sudo -u mastertrd /opt/mastertrd/.venv/bin/python -m mastertrd.oracle_paper_status --paper-root ${paper_root_q}" \
             > artifacts/paper-status/paper-status.json
 
-          # Raw journal text is never written to disk or uploaded. It flows
-          # directly through the repository-owned sanitizer and only the safe
-          # fingerprint below is persisted in the status artifact.
-          "${ssh_cmd[@]}" "$target" \
-            "sudo journalctl -u mastertrd.service --no-pager -n 1000 -o cat" \
-            | python src/mastertrd/paper_diagnostics.py \
-            > artifacts/paper-status/paper-diagnostics.json
-
-          service_active="$("${ssh_cmd[@]}" "$target" "sudo systemctl is-active mastertrd.service" || true)"
-          service_props="$("${ssh_cmd[@]}" "$target" "sudo systemctl show mastertrd.service --no-pager --property=NRestarts --property=Result --property=ExecMainCode --property=ExecMainStatus")"
-          if "${ssh_cmd[@]}" "$target" "sudo /usr/local/bin/mastertrd-health >/dev/null 2>&1"; then
-            health_ok=true
-          else
-            health_ok=false
-          fi
-
           export PAPER_STATUS_PATH="artifacts/paper-status/paper-status.json"
-          export PAPER_STATUS_DIAGNOSTICS_PATH="artifacts/paper-status/paper-diagnostics.json"
           export PAPER_STATUS_REMOTE_SHA="$remote_sha"
-          export PAPER_STATUS_SERVICE_ACTIVE="$service_active"
-          export PAPER_STATUS_SERVICE_PROPS="$service_props"
-          export PAPER_STATUS_HEALTH_OK="$health_ok"
           python - <<'PY'
           import json
           import os
           from pathlib import Path
 
           path = Path(os.environ["PAPER_STATUS_PATH"])
-          diagnostics_path = Path(os.environ["PAPER_STATUS_DIAGNOSTICS_PATH"])
           payload = json.loads(path.read_text(encoding="utf-8"))
-          diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
           if payload.get("code_hash") != os.environ["PAPER_STATUS_REMOTE_SHA"]:
               raise SystemExit("PAPER status code identity mismatch")
-
-          properties = {}
-          for line in os.environ["PAPER_STATUS_SERVICE_PROPS"].splitlines():
-              if "=" in line:
-                  key, value = line.split("=", 1)
-                  properties[key] = value
-
-          restart_raw = properties.get("NRestarts", "0")
-          status_raw = properties.get("ExecMainStatus", "")
-          payload.update(
-              {
-                  "remote_git_sha": os.environ["PAPER_STATUS_REMOTE_SHA"],
-                  "service_active": os.environ["PAPER_STATUS_SERVICE_ACTIVE"] == "active",
-                  "service_restarts": int(restart_raw or "0"),
-                  "service_result": properties.get("Result") or None,
-                  "service_exec_main_code": properties.get("ExecMainCode") or None,
-                  "service_exec_main_status": int(status_raw) if status_raw.isdigit() else None,
-                  "health_ok": os.environ["PAPER_STATUS_HEALTH_OK"] == "true",
-                  "crash_diagnostics": diagnostics,
-              }
-          )
-          path.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
-          diagnostics_path.unlink(missing_ok=True)
+          instances = []
+          for row in payload.get("strategies", []):
+              instance = row.get("instance")
+              if not isinstance(instance, str) or not instance.startswith("g-"):
+                  raise SystemExit("PAPER status instance identity is invalid")
+              instances.append(instance)
+          if len(instances) != payload.get("strategy_count"):
+              raise SystemExit("PAPER status strategy count mismatch")
+          Path("artifacts/paper-status/instances.txt").write_text("\n".join(instances) + "\n", encoding="utf-8")
           PY
+
+          : > artifacts/paper-status/services.tsv
+          while IFS= read -r instance; do
+            [[ "$instance" =~ ^g-[0-9a-f]{16}$ ]] || { echo "Invalid PAPER instance: $instance" >&2; exit 1; }
+            state="$("${ssh_cmd[@]}" "$target" "bash -s -- '$instance' '$remote_sha'" <<'REMOTE_STATUS'
+          set -euo pipefail
+          instance="$1"
+          expected_sha="$2"
+          env_file="/etc/mastertrd/paper/$instance.env"
+          [[ -r "$env_file" ]] || { echo "Missing PAPER env: $env_file" >&2; exit 1; }
+          mode="$(awk -F= '$1=="MASTERTRD_MODE" {print $2}' "$env_file" | tail -n1)"
+          live="$(awk -F= '$1=="LIVE_TRADING_ENABLED" {print $2}' "$env_file" | tail -n1)"
+          code_hash="$(awk -F= '$1=="MASTERTRD_CODE_HASH" {print $2}' "$env_file" | tail -n1)"
+          [[ "${mode^^}" == "PAPER" ]] || { echo "Unsafe PAPER mode for $instance" >&2; exit 1; }
+          [[ "${live,,}" == "false" ]] || { echo "LIVE_TRADING_ENABLED is not false for $instance" >&2; exit 1; }
+          [[ "$code_hash" == "$expected_sha" ]] || { echo "Code identity mismatch for $instance" >&2; exit 1; }
+          service="mastertrd-paper@$instance.service"
+          active="$(systemctl is-active "$service" 2>/dev/null || true)"
+          restarts="$(systemctl show "$service" --property=NRestarts --value 2>/dev/null || echo 0)"
+          result="$(systemctl show "$service" --property=Result --value 2>/dev/null || true)"
+          main_code="$(systemctl show "$service" --property=ExecMainCode --value 2>/dev/null || true)"
+          main_status="$(systemctl show "$service" --property=ExecMainStatus --value 2>/dev/null || true)"
+          if /usr/local/bin/mastertrd-health "$service" >/dev/null 2>&1; then health=true; else health=false; fi
+          printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$instance" "$active" "$restarts" "$result" "$main_code" "$main_status" "$health"
+          REMOTE_STATUS
+          )"
+            printf '%s\n' "$state" >> artifacts/paper-status/services.tsv
+            service="mastertrd-paper@$instance.service"
+            "${ssh_cmd[@]}" "$target" "sudo journalctl -u '$service' --no-pager -n 500 -o cat" \
+              | python src/mastertrd/paper_diagnostics.py \
+              > "artifacts/paper-status/diagnostics/$instance.json"
+          done < artifacts/paper-status/instances.txt
+
+          export PAPER_STATUS_SERVICES="artifacts/paper-status/services.tsv"
+          export PAPER_STATUS_DIAGNOSTICS_DIR="artifacts/paper-status/diagnostics"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["PAPER_STATUS_PATH"])
+          payload = json.loads(path.read_text(encoding="utf-8"))
+          services = {}
+          for line in Path(os.environ["PAPER_STATUS_SERVICES"]).read_text(encoding="utf-8").splitlines():
+              instance, active, restarts, result, main_code, main_status, health = line.split("\t")
+              services[instance] = {
+                  "service_active": active == "active",
+                  "service_restarts": int(restarts or "0"),
+                  "service_result": result or None,
+                  "service_exec_main_code": main_code or None,
+                  "service_exec_main_status": int(main_status) if main_status.isdigit() else None,
+                  "health_ok": health == "true",
+              }
+          diagnostics_root = Path(os.environ["PAPER_STATUS_DIAGNOSTICS_DIR"])
+          for row in payload["strategies"]:
+              instance = row["instance"]
+              if instance not in services:
+                  raise SystemExit(f"Missing PAPER service status for {instance}")
+              row.update(services[instance])
+              diagnostic_path = diagnostics_root / f"{instance}.json"
+              row["crash_diagnostics"] = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+          payload["remote_git_sha"] = os.environ["PAPER_STATUS_REMOTE_SHA"]
+          payload["all_services_active"] = all(row["service_active"] for row in payload["strategies"])
+          payload["all_health_ok"] = all(row["health_ok"] for row in payload["strategies"])
+          path.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
+          PY
+
+          rm -f artifacts/paper-status/instances.txt artifacts/paper-status/services.tsv
+          rm -rf artifacts/paper-status/diagnostics
 
       - name: Upload sanitized PAPER status
         if: always()

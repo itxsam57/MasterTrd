@@ -238,3 +238,17 @@ def test_oracle_deploy_requires_atomic_candidate_matrix_and_minute_scale_paper_w
     assert "/var/lib/mastertrd/paper/$github_sha" in lower
     assert "live_trading_enabled=false" in lower
     assert "configured for live" in lower
+
+
+def test_paper_status_reads_oracle_matrix_without_mutating_services():
+    text, workflow = _load("paper-status.yml")
+    lower = text.lower()
+    assert "mastertrd.oracle_paper_status" in lower
+    assert "/var/lib/mastertrd/paper/$remote_sha" in lower
+    assert "/etc/mastertrd/paper" in lower
+    assert "mastertrd-paper@" in lower
+    assert "live_trading_enabled" in lower
+    assert "mastertrd_mode" in lower
+    assert "systemctl restart" not in lower
+    assert "systemctl stop" not in lower
+    assert "systemctl disable" not in lower

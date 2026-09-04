@@ -154,15 +154,17 @@ def test_paper_status_workflow_is_read_only_and_publishes_safe_artifact():
     assert "push:" in workflow
     assert "branches: [main]" in workflow
     assert "src/mastertrd/paper_status.py" in workflow
+    assert "src/mastertrd/oracle_paper_status.py" in workflow
     assert "src/mastertrd/paper_diagnostics.py" in workflow
     assert "environment: oracle" in workflow
     assert "actions/upload-artifact@v4" in workflow
     assert "paper-status.json" in workflow
     assert "systemctl show" in workflow
-    assert "journalctl -u mastertrd.service" in workflow
+    assert "mastertrd-paper@" in workflow
+    assert "journalctl" in workflow
     assert "ExecMainCode" in workflow
     assert "ExecMainStatus" in workflow
-    assert "PAPER_STATUS_DIAGNOSTICS_PATH" in workflow
+    assert "PAPER_STATUS_DIAGNOSTICS_DIR" in workflow
 
     forbidden = (
         "systemctl restart",
@@ -171,7 +173,7 @@ def test_paper_status_workflow_is_read_only_and_publishes_safe_artifact():
         "MASTERTRD_MODE=LIVE",
         "sed -i",
         "tee -a /etc/mastertrd",
-        "journalctl -u mastertrd.service > artifacts",
+        "journalctl -u mastertrd.service",
     )
     for token in forbidden:
         assert token not in workflow
