@@ -90,3 +90,14 @@ def test_oracle_paper_status_fails_closed_on_index_or_session_identity_mismatch(
     (root / "deployment-index.json").write_text(json.dumps(bad_index), encoding="utf-8")
     with pytest.raises(RuntimeError, match="code"):
         oracle_paper_status_payload(root, observed_ns=1_020 * NANOSECOND)
+
+
+def test_oracle_paper_status_uses_fresh_observation_per_live_session(tmp_path):
+    root = tmp_path / "code-matrix"
+    _write_matrix(root)
+    observed = iter((1_013 * NANOSECOND, 1_014 * NANOSECOND))
+
+    payload = oracle_paper_status_payload(root, observed_ns=None, clock_ns=lambda: next(observed))
+
+    assert payload["strategy_count"] == 2
+    assert [row["duration_seconds"] for row in payload["strategies"]] == [13, 14]

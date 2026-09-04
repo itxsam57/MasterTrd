@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 import time
 
@@ -59,7 +59,12 @@ def _deployment_index(root: Path) -> tuple[str, tuple[dict[str, str], ...]]:
     return code_hash, tuple(normalized)
 
 
-def oracle_paper_status_payload(root: Path, *, observed_ns: int) -> dict[str, object]:
+def oracle_paper_status_payload(
+    root: Path,
+    *,
+    observed_ns: int | None,
+    clock_ns: Callable[[], int] | None = None,
+) -> dict[str, object]:
     root = Path(root)
     code_hash, rows = _deployment_index(root)
     strategies: list[dict[str, object]] = []
@@ -84,7 +89,12 @@ def oracle_paper_status_payload(root: Path, *, observed_ns: int) -> dict[str, ob
             or journal.code_hash != code_hash
         ):
             raise RuntimeError(f"Oracle PAPER session identity mismatch for {row['instance']}")
-        status = paper_status_payload(journal, observed_ns=int(observed_ns))
+        effective_observed_ns = (
+            int(observed_ns)
+            if observed_ns is not None
+            else int((clock_ns or time.time_ns)())
+        )
+        status = paper_status_payload(journal, observed_ns=effective_observed_ns)
         status.update(
             {
                 "instance": row["instance"],
@@ -107,7 +117,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Emit sanitized aggregate Oracle PAPER status")
     parser.add_argument("--paper-root", required=True)
     args = parser.parse_args()
-    payload = oracle_paper_status_payload(Path(args.paper_root), observed_ns=time.time_ns())
+    payload = oracle_paper_status_payload(Path(args.paper_root), observed_ns=None)
     print(json.dumps(payload, sort_keys=True))
 
 
