@@ -1,5 +1,6 @@
+import hashlib
 import json
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import pytest
 
@@ -83,3 +84,28 @@ def test_archive_tampering_fails_closed(tmp_path):
 
     with pytest.raises(ValueError, match="integrity"):
         JsonPaperReportArchive(path).load()
+
+
+def test_archive_loads_legacy_v1_hash_before_data_health_fields(tmp_path):
+    path = tmp_path / "paper-reports.json"
+    legacy_report = asdict(report("session-legacy"))
+    legacy_report.pop("data_healthy")
+    legacy_report.pop("missing_closed_bars")
+    reports = [legacy_report]
+    archive_hash = hashlib.sha256(
+        json.dumps(reports, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    path.write_text(
+        json.dumps(
+            {"version": 1, "reports": reports, "archive_hash": archive_hash},
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+
+    restored = JsonPaperReportArchive(path).load()
+
+    assert len(restored) == 1
+    assert restored[0].data_healthy is True
+    assert restored[0].missing_closed_bars == 0

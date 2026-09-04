@@ -68,6 +68,50 @@ def test_paper_status_snapshot_is_read_only_and_reports_current_evidence():
     assert journal.finalized_report is None
 
 
+def test_paper_status_reports_integrity_covered_closed_bar_completeness():
+    started = 1_500 * NANOSECOND
+    journal = PaperSessionJournal(_receipt(), code_hash="code-completeness", started_ns=started)
+    journal.record_strategy_telemetry(
+        {
+            "bars_seen": 42,
+            "bars_required": 34,
+            "warmup_remaining": 0,
+            "bootstrap_bars": 34,
+            "live_bars": 8,
+            "last_signal": "FLAT",
+            "last_signal_reason": "atr_breakout_flat",
+            "last_exit_reason": None,
+            "orders_attempted": 0,
+            "orders_allowed": 0,
+            "orders_rejected": 0,
+            "last_risk_rejection": None,
+            "expected_closed_bars": 8,
+            "ws_closed_bars": 7,
+            "rest_recovered_bars": 1,
+            "missing_closed_bars": 0,
+            "recovery_failures": 1,
+            "last_closed_bar_ms": 1_788_436_799_999,
+            "last_expected_close_ms": 1_788_436_799_999,
+            "last_recovery_error": None,
+            "data_healthy": True,
+        },
+        timestamp_ns=started + NANOSECOND,
+    )
+
+    module = importlib.import_module("mastertrd.paper_status")
+    payload = module.paper_status_payload(journal, observed_ns=started + 2 * NANOSECOND)
+
+    assert payload["expected_closed_bars"] == 8
+    assert payload["ws_closed_bars"] == 7
+    assert payload["rest_recovered_bars"] == 1
+    assert payload["missing_closed_bars"] == 0
+    assert payload["recovery_failures"] == 1
+    assert payload["last_closed_bar_ms"] == 1_788_436_799_999
+    assert payload["last_expected_close_ms"] == 1_788_436_799_999
+    assert payload["last_recovery_error"] is None
+    assert payload["data_healthy"] is True
+
+
 def test_paper_status_accepts_pre_telemetry_legacy_journal_shape():
     started = 2_000 * NANOSECOND
     current = PaperSessionJournal(_receipt(), code_hash="legacy-code", started_ns=started)
@@ -95,6 +139,8 @@ def test_paper_status_accepts_pre_telemetry_legacy_journal_shape():
     assert payload["reconciliation_errors"] == 0
     assert "bars_seen" not in payload
     assert "warmup_remaining" not in payload
+    assert "expected_closed_bars" not in payload
+    assert "data_healthy" not in payload
 
 
 def test_paper_status_workflow_is_read_only_and_publishes_safe_artifact():

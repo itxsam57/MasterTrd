@@ -40,6 +40,34 @@ def test_forward_report_metrics_are_derived_from_append_only_session_events():
     assert report.provenance_verified is True
     assert len(report.session_event_hash) == 64
     assert report.completed is True
+    assert report.data_healthy is True
+    assert report.missing_closed_bars == 0
+
+
+def test_forward_report_carries_integrity_covered_data_health():
+    started = 1_500 * NANOSECOND
+    journal = PaperSessionJournal(receipt(), code_hash="code-v1", started_ns=started)
+    journal.record_strategy_telemetry(
+        {
+            "bars_seen": 10,
+            "bars_required": 8,
+            "warmup_remaining": 0,
+            "last_signal": "FLAT",
+            "last_signal_reason": "no_signal",
+            "orders_attempted": 0,
+            "orders_rejected": 0,
+            "last_risk_rejection": None,
+            "data_healthy": False,
+            "missing_closed_bars": 1,
+        },
+        timestamp_ns=started + 10 * NANOSECOND,
+    )
+    journal.record_reconciliation("recon-health", ok=True, timestamp_ns=started + 20 * NANOSECOND)
+
+    report = journal.finalize(ended_ns=started + 60 * NANOSECOND)
+
+    assert report.data_healthy is False
+    assert report.missing_closed_bars == 1
 
 
 def test_duplicate_trade_or_out_of_window_event_cannot_inflate_paper_report():

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import asdict
 import json
 import os
 from pathlib import Path
 import time
 
+from .bar_completeness import timeframe_milliseconds
 from .binance_stream import BinancePublicMarketSource
-from .contracts import RuntimeMode
+from .contracts import MarketBar, RuntimeMode
 from .credentials import load_binance_credentials
 from .execution import build_binance_execution_profile
 from .execution_runtime import ExecutionRuntime
@@ -210,6 +212,40 @@ def _configured_new_paper_start_ns(environ: Mapping[str, str]) -> int:
     return started_ns
 
 
+def _public_paper_first_expected_start_ms(
+    initial_bars: Sequence[MarketBar],
+    *,
+    timeframe: str,
+) -> int:
+    """Return the first live candle start after authoritative bootstrap history."""
+
+    if not initial_bars:
+        raise RuntimeError("public PAPER bootstrap closed-bar identity is unavailable")
+    latest = initial_bars[-1]
+    raw_close_ms = latest.extras.get("source_kline_close_ms")
+    if isinstance(raw_close_ms, bool):
+        raise RuntimeError("public PAPER bootstrap closed-bar identity is invalid")
+    try:
+        close_ms = int(raw_close_ms)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("public PAPER bootstrap closed-bar identity is invalid") from exc
+    if close_ms < 0:
+        raise RuntimeError("public PAPER bootstrap closed-bar identity is invalid")
+
+    timestamp_ms = int(round(latest.timestamp.timestamp() * 1_000.0))
+    if timestamp_ms != close_ms:
+        raise RuntimeError("public PAPER bootstrap closed-bar identity does not match history")
+
+    try:
+        width_ms = timeframe_milliseconds(timeframe)
+    except ValueError as exc:
+        raise RuntimeError("public PAPER completeness requires a fixed Binance timeframe") from exc
+    first_expected_start_ms = close_ms + 1
+    if first_expected_start_ms % width_ms != 0:
+        raise RuntimeError("public PAPER bootstrap closed-bar identity is not timeframe-aligned")
+    return first_expected_start_ms
+
+
 def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> ExecutionRuntime:
     candidate = _load_candidate(_required(environ, "MASTERTRD_CANDIDATE_MANIFEST"))
     session_path = Path(_required(environ, "MASTERTRD_SESSION_STATE"))
@@ -222,12 +258,9 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
     if len(candidate.instruments) != 1:
         raise RuntimeError("PAPER runtime currently requires one instrument")
 
-    # Resolve authoritative metadata and, for the real public path, sufficient
-    # closed-bar warmup history before touching durable session state. A metadata
-    # or history failure must not leave behind a session file that falsely looks
-    # like a successfully initialized PAPER process.
     fixture_path = environ.get("MASTERTRD_PUBLIC_FEED_FIXTURE", "").strip()
-    initial_bars = ()
+    initial_bars: Sequence[MarketBar] = ()
+    first_expected_start_ms: int | None = None
     if fixture_path:
         instrument = fixture_binance_spot_instrument(candidate.instruments[0])
     else:
@@ -243,6 +276,10 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
                 f"public PAPER history is insufficient for strategy warmup: "
                 f"{len(initial_bars)}/{minimum_history} closed bars"
             )
+        first_expected_start_ms = _public_paper_first_expected_start_ms(
+            initial_bars,
+            timeframe=candidate.timeframe,
+        )
 
     archive: JsonPaperReportArchive | None = None
     history_dir: Path | None = None
@@ -268,10 +305,6 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
                 archive=archive,
                 history_dir=history_dir,
             )
-            # Consume the request before replacing the official current state.
-            # If the process dies after this point, restart recovery still sees
-            # the finalized current session and advances it automatically. This
-            # prevents a stale request from immediately rotating the fresh window.
             if rotation_request_path is not None:
                 rotation_request_path.unlink(missing_ok=True)
             session = _open_replacement_paper_session(
@@ -304,23 +337,22 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
         )
 
     journal_ref = {"journal": session.journal}
+    public_source: BinancePublicMarketSource | None = None
     if fixture_path:
         stream = MarketStream(_fixture_source(fixture_path))
-        # Recorded fixtures replay historical exchange timestamps. Tie freshness
-        # to the active append-only journal clock so rotated evidence windows do
-        # not accidentally fall back to the original session's timestamp.
         state_provider = RiskStateProvider(
             clock=lambda: journal_ref["journal"].latest_timestamp_ns / 1_000_000_000.0,
         )
     else:
-        stream = MarketStream(
-            BinancePublicMarketSource(
-                candidate.instruments,
-                timeframe=candidate.timeframe,
-            )
+        if first_expected_start_ms is None:
+            raise RuntimeError("public PAPER completeness anchor is unavailable")
+        public_source = BinancePublicMarketSource(
+            candidate.instruments,
+            timeframe=candidate.timeframe,
+            first_expected_start_ms=first_expected_start_ms,
+            recovery_grace_ms=0,
         )
-        # Real public PAPER uses wall-clock freshness. Missing or stale market
-        # observations therefore remain fail-closed in RiskStateProvider.
+        stream = MarketStream(public_source)
         state_provider = RiskStateProvider()
 
     for symbol in candidate.instruments:
@@ -342,19 +374,22 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
         latency_ms=0.0,
     )
 
+    telemetry_provider = None
+    if public_source is not None:
+        def telemetry_provider() -> Mapping[str, object] | None:
+            snapshot = public_source.completeness_snapshot
+            return None if snapshot is None else asdict(snapshot)
+
     execution = NautilusStreamingPaperExecution(
         candidate=candidate,
         risk_runtime=risk_runtime,
         journal=session.journal,
         instrument=instrument,
         initial_bars=initial_bars,
+        telemetry_provider=telemetry_provider,
     )
     account_id_ref = {"value": f"paper:{session.journal.session_id}"}
 
-    # During an active PAPER process Nautilus is both the authoritative engine
-    # and simulated venue. A resumed session additionally carries the last
-    # integrity-covered engine checkpoint from the prior process; that snapshot
-    # is used only for startup recovery reconciliation before any new dispatch.
     engine_state = lambda: execution.execution_state(account_id=account_id_ref["value"])
     venue_state = lambda: execution.execution_state(account_id=account_id_ref["value"])
     recovery_state = session.journal.execution_state_checkpoint if resume else None
@@ -378,9 +413,6 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
                 archive=archive,
                 history_dir=history_dir,
             )
-            # Once finalization and archival are durable, the request has been
-            # fulfilled. Remove it before state replacement so a crash cannot
-            # carry the old request into the next evidence window.
             rotation_request_path.unlink(missing_ok=True)
             replacement = _open_replacement_paper_session(
                 candidate,
@@ -416,14 +448,6 @@ def _exchange_runtime(
     runtime: RuntimeConfig,
     environ: Mapping[str, str],
 ) -> NautilusLiveExecutionRuntime:
-    """Build the real Nautilus Binance transport/reconciliation boundary.
-
-    Exchange modes own their market-data and execution clients inside one
-    ``TradingNode``. Candidate strategy promotion/identity binding remains a
-    separate gate; this factory never silently selects or invents a strategy,
-    but it does constrain the live node to the candidate's exact instrument
-    universe so startup reconciliation cannot drift onto unrelated products.
-    """
     if runtime.mode not in (RuntimeMode.DEMO, RuntimeMode.TESTNET, RuntimeMode.LIVE):
         raise RuntimeError(f"{runtime.mode} mode is not an exchange execution mode")
     if runtime.mode is RuntimeMode.LIVE and not runtime.live_trading_enabled:
@@ -478,14 +502,6 @@ def build_execution_runtime(
     runtime: RuntimeConfig,
     environ: Mapping[str, str],
 ) -> ExecutionRuntime | NautilusLiveExecutionRuntime:
-    """Build the canonical repository-owned persistent execution runtime.
-
-    PAPER uses Binance public market data plus Nautilus sandbox execution.
-    DEMO/TESTNET/LIVE use one repository-owned Nautilus ``TradingNode`` with
-    mode-specific Binance credentials and mandatory startup reconciliation.
-    No execution mode may silently fall back to another mode.
-    """
-
     if runtime.mode is RuntimeMode.PAPER:
         return _paper_runtime(runtime, environ)
     if runtime.mode in (RuntimeMode.DEMO, RuntimeMode.TESTNET, RuntimeMode.LIVE):

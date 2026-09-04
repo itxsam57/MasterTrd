@@ -1,0 +1,47 @@
+name: Public Binance Closed-Bar Canary
+
+on:
+  push:
+    paths:
+      - 'src/mastertrd/public_market_canary.py'
+      - 'src/mastertrd/binance_stream.py'
+      - 'src/mastertrd/bar_completeness.py'
+      - 'tests/test_public_market_canary.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/public-binance-canary.yml'
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-binance-closed-bar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      MASTERTRD_MODE: PAPER
+      LIVE_TRADING_ENABLED: 'false'
+      MASTERTRD_CANARY_RECEIPT: public-binance-canary-receipt.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install locked execution stack
+        run: |
+          python -m pip install --disable-pip-version-check 'uv==0.12.7'
+          uv lock --check
+          uv sync --locked --all-extras
+          uv pip check
+      - name: Observe three consecutive complete public Binance 1m candles
+        run: uv run python -m mastertrd.public_market_canary
+      - name: Upload canary receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-binance-canary-receipt
+          path: public-binance-canary-receipt.json
+          if-no-files-found: error
+          retention-days: 7
