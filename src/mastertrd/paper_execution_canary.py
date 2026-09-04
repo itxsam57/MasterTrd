@@ -46,7 +46,7 @@ def execution_canary_lanes() -> tuple[ExecutionCanaryLane, ...]:
     return (
         ExecutionCanaryLane("paper-1m-long", "1m", 1, ("LONG", "FLAT"), 0, 2, 2, 1),
         ExecutionCanaryLane("paper-3m-short", "3m", 3, ("SHORT", "FLAT"), 0, 2, 2, 1),
-        ExecutionCanaryLane("paper-5m-reversal", "5m", 5, ("LONG", "SHORT", "FLAT"), 0, 3, 3, 2),
+        ExecutionCanaryLane("paper-5m-reversal", "5m", 5, ("LONG", "SHORT", "FLAT"), 0, 4, 4, 2),
         ExecutionCanaryLane("paper-10m-hold-exit", "5m", 10, ("LONG", "HOLD", "FLAT"), 1, 3, 2, 1),
     )
 

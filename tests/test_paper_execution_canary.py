@@ -359,3 +359,13 @@ def test_execution_canary_result_requires_consistent_realized_pnl():
     bad["closed_trade_returns"] = []
     with pytest.raises(RuntimeError, match="closed_trade_returns"):
         validate_execution_canary_result(lane, bad)
+
+
+def test_reversal_lane_budget_covers_close_then_opposite_entry_then_final_exit() -> None:
+    reversal = execution_canary_lanes()[2]
+
+    # Safe reversal is four orders/bars in this canary: enter LONG, close LONG,
+    # enter SHORT on the next closed bar, then close SHORT on the following bar.
+    assert reversal.minimum_real_closed_bars >= 4
+    assert reversal.minimum_orders >= 4
+    assert _default_lane_deadline_seconds(reversal) >= (4 * 5 * 60) + 180
