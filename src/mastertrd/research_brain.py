@@ -366,6 +366,10 @@ def _parameter_space(genome: StrategyGenome) -> dict[str, object]:
             numeric = int(value)
             low = max(1, numeric - max(1, abs(numeric) // 4))
             high = max(low, numeric + max(1, abs(numeric) // 4))
+            kind = str(genome.entry.get("kind", genome.entry.get("type", "")))
+            if kind == "rsi_momentum" and key == "threshold":
+                low = max(51, low)
+                high = min(100, high)
             space[f"entry.{key}"] = (low, high)
         else:
             numeric = float(value)

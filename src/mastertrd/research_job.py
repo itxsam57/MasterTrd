@@ -142,6 +142,17 @@ def _archive_months_for_recipe(recipe_id: str) -> int:
     return 2
 
 
+def _scheduled_execution_costs() -> dict[str, float]:
+    """Conservative public-Binance PAPER research cost assumptions."""
+
+    return {
+        "fees": 0.0010,
+        "slippage": 0.0005,
+        "stressed_fees": 0.0020,
+        "stressed_slippage": 0.0020,
+    }
+
+
 def _scheduled_validation_policies() -> tuple[
     RobustnessPolicy,
     AdvancedValidationPolicy,
@@ -550,6 +561,7 @@ def run_research_job(
                     )
                 dataset, manifests = dataset_cache[timeframe]
                 robust_policy, advanced_policy, transfer_policy, hidden_policy = _scheduled_validation_policies()
+                execution_costs = _scheduled_execution_costs()
                 config = ResearchBrainConfig(
                     families=(family,),
                     instruments=plan.instruments,
@@ -566,6 +578,10 @@ def run_research_job(
                     trade_size="0.01000",
                     starting_balances=("10 ETH", "10 BTC", "100000 USDT"),
                     recipe_ids=(recipe_id,) if recipe_id is not None else (),
+                    fees=execution_costs["fees"],
+                    slippage=execution_costs["slippage"],
+                    stressed_fees=execution_costs["stressed_fees"],
+                    stressed_slippage=execution_costs["stressed_slippage"],
                     robustness_policy=robust_policy,
                     advanced_policy=advanced_policy,
                     asset_transfer_policy=transfer_policy,

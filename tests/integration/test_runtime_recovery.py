@@ -240,6 +240,7 @@ def test_execution_runtime_refreshes_owned_market_reconciliation_and_api_state(t
         engine_state=lambda: stable_state,
         venue_state=lambda: stable_state,
         dispatch=lambda event: None,
+        reconciliation_clock=lambda: START_MS / 1_000.0,
     )
 
     runtime.run(MarketStream([tick("market-t1", 0)]))
@@ -264,3 +265,31 @@ def test_execution_runtime_refreshes_owned_market_reconciliation_and_api_state(t
     assert snapshot.venue_healthy is True
     assert snapshot.api_error_rate == 0.01
     assert snapshot.api_latency_ms == 25.0
+
+
+def test_reconciliation_freshness_uses_check_time_not_replayed_market_time(tmp_path):
+    now_seconds = START_MS / 1_000.0 + 120.0
+    provider = RiskStateProvider(clock=lambda: now_seconds, max_market_age_seconds=300.0)
+    provider.update_account_state(
+        symbol="BTCUSDT.BINANCE", portfolio_id="default", symbol_exposure=0.0,
+        portfolio_exposure=0.0, daily_pnl=0.0, drawdown=0.0, leverage=0.0,
+        correlated_exposure=0.0,
+    )
+    risk = RiskRuntime(limits(), state_provider=provider)
+    risk.update_api_health(venue="BINANCE", healthy=True, error_rate=0.0, latency_ms=0.0)
+    store = JsonPaperSessionStore(tmp_path / "paper-session.json")
+    journal = PaperSessionJournal(receipt(), code_hash="code-v1", started_ns=START_NS)
+    store.save(journal)
+    stable = state()
+    runtime = ExecutionRuntime(
+        journal=journal, session_store=store, risk_runtime=risk, reconciler=Reconciler(),
+        engine_state=lambda: stable, venue_state=lambda: stable, dispatch=lambda event: None,
+        reconciliation_clock=lambda: now_seconds,
+    )
+    runtime.run(MarketStream([tick("replayed-old-tick", 0)]))
+    snapshot = risk.snapshot_for_order(
+        OrderIntent("S-recovery", "BTCUSDT.BINANCE", "BINANCE", "BUY", 0.01, "MARKET"),
+        reference_price=50_005.0,
+    )
+    assert snapshot.reconciliation_ok is True
+    assert snapshot.reconciliation_age_seconds == 0.0

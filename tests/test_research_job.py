@@ -442,3 +442,16 @@ def test_scheduled_research_uses_promotion_grade_validation_policies():
     assert hidden.min_total_return == 0.0
     assert hidden.max_drawdown == 0.20
     assert hidden.min_regime_pass_ratio == 0.67
+
+
+def test_scheduled_research_prices_in_normal_and_stressed_execution_costs():
+    from mastertrd.research_job import _scheduled_execution_costs
+
+    costs = _scheduled_execution_costs()
+
+    assert costs == {
+        "fees": 0.0010,
+        "slippage": 0.0005,
+        "stressed_fees": 0.0020,
+        "stressed_slippage": 0.0020,
+    }

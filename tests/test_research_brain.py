@@ -54,3 +54,19 @@ def test_research_optimizer_rejects_semantically_invalid_bar_genomes():
 
     assert _valid_genome(valid) is True
     assert _valid_genome(invalid) is False
+
+
+def test_research_parameter_space_respects_rsi_threshold_contract():
+    from mastertrd.research_brain import _parameter_space
+    from mastertrd.strategy_universe import compile_strategy_recipe
+
+    genome = compile_strategy_recipe(
+        "rsi-momentum-slow",
+        instruments=("BTCUSDT.BINANCE",),
+        seed=41,
+        trade_size="0.01000",
+    )
+
+    low, high = _parameter_space(genome)["entry.threshold"]
+    assert low >= 51
+    assert high <= 100

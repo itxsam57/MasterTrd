@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from math import isfinite
+import time
 
 from .paper_session import JsonPaperSessionStore, PaperSessionJournal
 from .reconciliation import ExecutionState, Reconciler, ReconciliationResult
@@ -34,6 +35,7 @@ class ExecutionRuntime:
         stream: MarketStream | None = None,
         finalizer: Callable[[], object] | None = None,
         startup_expected_state: Callable[[], ExecutionState] | None = None,
+        reconciliation_clock: Callable[[], float] = time.time,
         rotation_requested: Callable[[], bool] | None = None,
         rotate_session: Callable[[int], tuple[PaperSessionJournal, JsonPaperSessionStore]] | None = None,
     ) -> None:
@@ -49,6 +51,7 @@ class ExecutionRuntime:
         self._stream = stream
         self._finalizer = finalizer
         self._startup_expected_state = startup_expected_state
+        self._reconciliation_clock = reconciliation_clock
         self._rotation_requested = rotation_requested
         self._rotate_session = rotate_session
         self._closed = False
@@ -130,7 +133,7 @@ class ExecutionRuntime:
     ) -> None:
         self._risk_runtime.update_reconciliation_state(
             ok=reconciliation.ok,
-            observed_at=timestamp_ns / 1_000_000_000.0,
+            observed_at=float(self._reconciliation_clock()),
         )
         self._journal.record_reconciliation(
             reconciliation_id,
