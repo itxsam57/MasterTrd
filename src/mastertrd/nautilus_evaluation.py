@@ -186,11 +186,24 @@ def run_nautilus_evaluation(
         engine.add_strategy(strategy)
         engine.run()
 
-        closed_positions = engine.cache.positions_closed()
-        raw_returns = [float(position.realized_return) for position in closed_positions]
+        record_reader = getattr(strategy, "realized_trade_records", None)
+        if callable(record_reader):
+            records = list(record_reader())
+            seen = {key for key, _value in records}
+            for position in engine.cache.positions_closed():
+                key = (str(position.id), int(position.ts_opened), int(position.ts_closed))
+                if key not in seen:
+                    records.append((key, float(position.realized_return)))
+                    seen.add(key)
+            raw_returns = [float(value) for _key, value in records]
+        else:
+            raw_returns = [
+                float(position.realized_return)
+                for position in engine.cache.positions_closed()
+            ]
         stress_drag = float(fees) + float(slippage)
         stressed_returns = [value - stress_drag for value in raw_returns]
-        trade_count = len(closed_positions)
+        trade_count = len(raw_returns)
 
         total_return, sharpe, sortino, max_drawdown, profit_factor = _return_metrics(stressed_returns)
         expectancy = mean(stressed_returns) if stressed_returns else 0.0

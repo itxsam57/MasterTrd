@@ -65,5 +65,5 @@ def test_generated_candidate_reaches_real_nautilus_evaluation():
     assert result.strategy_id == candidate.strategy_id
     assert result.genome_hash == candidate.genome_hash
     assert result.engine == "nautilus_trader"
-    assert result.trade_count >= 1
+    assert result.trade_count == 3
     assert result.scores["execution_backtest"] == 1.0

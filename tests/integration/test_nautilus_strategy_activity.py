@@ -72,8 +72,8 @@ def test_compiled_genome_generates_real_simulated_orders_and_fills():
 
     assert summary.engine == "nautilus_trader"
     assert summary.event_count == len(bars)
-    assert summary.order_count >= 1
-    assert summary.fill_count >= 1
+    assert summary.order_count == 6
+    assert summary.fill_count == 6
 
 
 def test_generated_bar_strategy_executes_atr_target_in_nautilus() -> None:

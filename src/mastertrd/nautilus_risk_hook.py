@@ -26,6 +26,8 @@ class NautilusRiskMixin:
         self._risk_orders_allowed = 0
         self._risk_orders_rejected = 0
         self._risk_last_rejection: str | None = None
+        self._risk_realized_trade_records: list[tuple[tuple[str, int, int], float]] = []
+        self._risk_realized_trade_keys: set[tuple[str, int, int]] = set()
 
     def _risk_reference_price(self, instrument_id) -> float:
         return 0.0
@@ -53,6 +55,22 @@ class NautilusRiskMixin:
             quantity=self._numeric_quantity(order),
             order_type=getattr(order_type, "name", str(order_type)),
         )
+
+    def _record_position_closed(self, event: Any) -> None:
+        key = (str(event.position_id), int(event.ts_opened), int(event.ts_closed))
+        if key in self._risk_realized_trade_keys:
+            return
+        self._risk_realized_trade_keys.add(key)
+        self._risk_realized_trade_records.append((key, float(event.realized_return)))
+
+    def realized_trade_records(self) -> tuple[tuple[tuple[str, int, int], float], ...]:
+        return tuple(self._risk_realized_trade_records)
+
+    def realized_trade_returns(self) -> tuple[float, ...]:
+        return tuple(value for _key, value in self._risk_realized_trade_records)
+
+    def on_position_closed(self, event: Any) -> None:
+        self._record_position_closed(event)
 
     def risk_telemetry(self) -> dict[str, object]:
         return {

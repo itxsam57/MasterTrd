@@ -146,6 +146,7 @@ class GeneratedBarStrategy(NautilusRiskMixin, Strategy):
 
     def on_position_closed(self, event) -> None:
         if self._position_event_matches(event):
+            self._record_position_closed(event)
             self._position_state = PositionState(SignalDirection.FLAT, 0.0, 0.0, 0.0, 0)
 
     def _advance_position_state(self, bar: MarketBar) -> None:
@@ -199,7 +200,8 @@ class GeneratedBarStrategy(NautilusRiskMixin, Strategy):
             return
         instrument_id = self.config.instrument_id
 
-        if decision.close_position and not self.portfolio.is_flat(instrument_id):
+        close_requested = decision.close_position and not self.portfolio.is_flat(instrument_id)
+        if close_requested:
             self.close_all_positions(instrument_id)
 
         if decision.direction is SignalDirection.FLAT:
@@ -207,17 +209,17 @@ class GeneratedBarStrategy(NautilusRiskMixin, Strategy):
         if decision.direction is SignalDirection.LONG:
             if self.portfolio.is_net_long(instrument_id):
                 return
-            if self.portfolio.is_net_short(instrument_id):
+            if self.portfolio.is_net_short(instrument_id) and not close_requested:
                 self.close_all_positions(instrument_id)
             self._submit_market(OrderSide.BUY)
             return
         if not self.genome.allow_short:
-            if self.portfolio.is_net_long(instrument_id):
+            if self.portfolio.is_net_long(instrument_id) and not close_requested:
                 self.close_all_positions(instrument_id)
             return
         if self.portfolio.is_net_short(instrument_id):
             return
-        if self.portfolio.is_net_long(instrument_id):
+        if self.portfolio.is_net_long(instrument_id) and not close_requested:
             self.close_all_positions(instrument_id)
         self._submit_market(OrderSide.SELL)
 
