@@ -28,6 +28,8 @@ class PaperForwardReport:
     reconciliation_checks: int = 0
     session_event_hash: str = ""
     provenance_verified: bool = False
+    data_healthy: bool = True
+    missing_closed_bars: int = 0
 
     def __post_init__(self) -> None:
         identity = (
@@ -45,8 +47,11 @@ class PaperForwardReport:
             or self.closed_trades < 0
             or self.reconciliation_errors < 0
             or self.reconciliation_checks < 0
+            or self.missing_closed_bars < 0
         ):
             raise ValueError("paper forward counts cannot be negative")
+        if not isinstance(self.data_healthy, bool):
+            raise ValueError("data_healthy must be a boolean")
         if not isfinite(float(self.total_return)) or not isfinite(float(self.max_drawdown)):
             raise ValueError("paper forward metrics must be finite")
         if self.total_return < -1.0:
@@ -120,6 +125,8 @@ def paper_minimum_evidence(
     closed_trades = sum(record.closed_trades for record in records)
     reconciliation_errors = sum(record.reconciliation_errors for record in records)
     max_drawdown = max((record.max_drawdown for record in records), default=0.0)
+    data_healthy_sessions = sum(1 for record in records if record.data_healthy)
+    missing_closed_bars = sum(record.missing_closed_bars for record in records)
 
     growth = 1.0
     for record in records:
@@ -139,6 +146,8 @@ def paper_minimum_evidence(
         and code_identity_valid
         and verified_sessions == len(records)
         and reconciled_sessions == len(records)
+        and data_healthy_sessions == len(records)
+        and missing_closed_bars == 0
     )
 
     report_hash = _reports_hash(records)
@@ -161,5 +170,7 @@ def paper_minimum_evidence(
             "completed_sessions": float(sum(1 for record in records if record.completed)),
             "verified_sessions": float(verified_sessions),
             "reconciled_sessions": float(reconciled_sessions),
+            "data_healthy_sessions": float(data_healthy_sessions),
+            "missing_closed_bars": float(missing_closed_bars),
         },
     )
