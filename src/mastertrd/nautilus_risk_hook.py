@@ -93,7 +93,6 @@ class NautilusRiskMixin:
                 logger.warning(f"Risk rejected order: {decision.action} {decision.reason}")
             return None
         self._risk_orders_allowed += 1
-        self._risk_last_rejection = None
         return super().submit_order(order, *args, **kwargs)
 
 

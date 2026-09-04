@@ -146,3 +146,60 @@ def test_nautilus_risk_hook_blocks_from_nonzero_owned_account_state() -> None:
     assert harness.submitted == []
     assert runtime.decisions[-1].action is RiskAction.BLOCK_ORDER
     assert "order risk" in runtime.decisions[-1].reason
+
+
+def test_risk_telemetry_retains_last_rejection_after_later_allow() -> None:
+    provider = RiskStateProvider(clock=lambda: 1_000.0, max_market_age_seconds=5.0)
+    provider.update_account_state(
+        symbol="ETHUSDT.BINANCE", portfolio_id="default",
+        symbol_exposure=19_900.0, portfolio_exposure=19_900.0,
+        daily_pnl=0.0, drawdown=0.0, leverage=1.0, correlated_exposure=0.0,
+    )
+    provider.update_market_state(
+        symbol="ETHUSDT.BINANCE", spread_bps=5.0,
+        realized_volatility=0.05, observed_at=999.0,
+    )
+    provider.update_reconciliation(ok=True, observed_at=999.0)
+    provider.update_venue_state(
+        venue="BINANCE", healthy=True, api_error_rate=0.0, api_latency_ms=20.0,
+    )
+    runtime = RiskRuntime(RiskLimits(10_000, 20_000, 50_000, 2_000, 0.25, 30), state_provider=provider)
+
+    class VenueId:
+        value = "BINANCE"
+    class InstrumentId:
+        value = "ETHUSDT.BINANCE"
+        venue = VenueId()
+    class Order:
+        instrument_id = InstrumentId()
+        quantity = 0.10
+        side = "BUY"
+        order_type = "MARKET"
+    class Sink:
+        def __init__(self) -> None:
+            self.submitted = 0
+        def submit_order(self, order, *args, **kwargs):
+            self.submitted += 1
+            return "submitted"
+    class Harness(NautilusRiskMixin, Sink):
+        def __init__(self) -> None:
+            Sink.__init__(self)
+            self._configure_risk_runtime("retain-rejection", runtime)
+        def _risk_reference_price(self, instrument_id) -> float:
+            return 2_100.0
+
+    harness = Harness()
+    assert harness.submit_order(Order()) is None
+    rejected = harness.risk_telemetry()["last_risk_rejection"]
+    assert rejected is not None
+    provider.update_account_state(
+        symbol="ETHUSDT.BINANCE", portfolio_id="default",
+        symbol_exposure=0.0, portfolio_exposure=0.0,
+        daily_pnl=0.0, drawdown=0.0, leverage=1.0, correlated_exposure=0.0,
+    )
+
+    assert harness.submit_order(Order()) == "submitted"
+    telemetry = harness.risk_telemetry()
+    assert telemetry["orders_rejected"] == 1
+    assert telemetry["orders_allowed"] == 1
+    assert telemetry["last_risk_rejection"] == rejected
