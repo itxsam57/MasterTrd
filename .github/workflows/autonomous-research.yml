@@ -60,6 +60,7 @@ jobs:
           - long-trend-slow
     env:
       MASTERTRD_RESEARCH_RECIPE_ID: ${{ matrix.recipe_id }}
+      MASTERTRD_RESEARCH_PROFILE: production
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
