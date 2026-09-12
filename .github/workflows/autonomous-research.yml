@@ -13,8 +13,6 @@ on:
       - 'src/mastertrd/strategy_universe.py'
       - 'src/mastertrd/nautilus_paper.py'
       - 'src/mastertrd/binance_stream.py'
-  schedule:
-    - cron: '17 3 * * 1'
   workflow_dispatch:
 
 permissions:

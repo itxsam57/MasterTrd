@@ -9,8 +9,6 @@ on:
       - 'src/mastertrd/oracle_paper_status.py'
       - 'src/mastertrd/paper_status.py'
       - 'src/mastertrd/paper_diagnostics.py'
-  schedule:
-    - cron: '*/5 * * * *'
 
 permissions:
   contents: read

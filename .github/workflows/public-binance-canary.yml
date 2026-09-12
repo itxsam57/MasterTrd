@@ -10,8 +10,6 @@ on:
       - 'pyproject.toml'
       - 'uv.lock'
       - '.github/workflows/public-binance-canary.yml'
-  schedule:
-    - cron: '17 */6 * * *'
   workflow_dispatch:
 
 permissions:

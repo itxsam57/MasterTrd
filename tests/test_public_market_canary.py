@@ -110,8 +110,6 @@ def test_public_binance_canary_workflow_is_bounded_credential_free_and_non_live(
 
     required = (
         "workflow_dispatch:",
-        "schedule:",
-        "cron:",
         "push:",
         "src/mastertrd/public_market_canary.py",
         "src/mastertrd/binance_stream.py",
@@ -135,6 +133,9 @@ def test_public_binance_canary_workflow_is_bounded_credential_free_and_non_live(
     )
     for token in required:
         assert token in workflow
+
+    assert "schedule:" not in workflow
+    assert "cron:" not in workflow
 
     forbidden = (
         "secrets.",

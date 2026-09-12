@@ -148,8 +148,8 @@ def test_paper_status_workflow_is_read_only_and_publishes_safe_artifact():
     assert path.exists()
     workflow = path.read_text(encoding="utf-8")
 
-    assert "schedule:" in workflow
-    assert "*/5 * * * *" in workflow
+    assert "schedule:" not in workflow
+    assert "*/5 * * * *" not in workflow
     assert "workflow_dispatch:" in workflow
     assert "push:" in workflow
     assert "branches: [main]" in workflow

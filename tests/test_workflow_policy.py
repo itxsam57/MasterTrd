@@ -31,10 +31,10 @@ def _jobs(workflow: dict) -> dict:
     return jobs
 
 
-def test_autonomous_research_is_scheduled_public_safe_and_cancellable():
+def test_autonomous_research_is_manual_public_safe_and_cancellable():
     text, workflow = _load("autonomous-research.yml")
     triggers = _on(workflow)
-    assert "schedule" in triggers
+    assert "schedule" not in triggers
     assert "workflow_dispatch" in triggers
     assert workflow.get("permissions") == {"contents": "read"}
     assert workflow.get("concurrency", {}).get("cancel-in-progress") is True
