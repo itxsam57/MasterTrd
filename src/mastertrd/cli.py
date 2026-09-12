@@ -7,7 +7,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from .app_service import AppService
+from .trading_service import TradingService
 from .local_jobs import launch_research_job, list_local_jobs
 from .local_scheduler import run_scheduler
 
@@ -23,6 +23,7 @@ def _parser() -> argparse.ArgumentParser:
     jobs = subcommands.add_parser("jobs", help="List local research jobs")
     jobs.add_argument("--root", default="artifacts/local-jobs")
     subcommands.add_parser("app", help="Open the local MasterTrd app")
+    subcommands.add_parser("trading", help="Run the persistent local trading worker")
     scheduler = subcommands.add_parser("scheduler", help="Run local recurring checks and research")
     scheduler.add_argument("--poll-seconds", type=float, default=60.0)
     return parser
@@ -30,7 +31,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    service = AppService()
+    service = TradingService()
     if args.command == "status":
         payload = service.snapshot()
     elif args.command == "strategies":
@@ -45,6 +46,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return int(result.returncode)
     elif args.command == "scheduler":
         run_scheduler(poll_seconds=args.poll_seconds)
+        return 0
+    elif args.command == "trading":
+        service.run_forever(
+            heartbeat=lambda state: print(f"MasterTrd heartbeat: {state}", file=sys.stderr, flush=True)
+        )
         return 0
     else:  # pragma: no cover - argparse enforces valid commands
         raise RuntimeError(f"unsupported command: {args.command}")

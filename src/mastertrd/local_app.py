@@ -4,7 +4,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from mastertrd.app_service import AppService
+from mastertrd.trading_service import TradingService
 from mastertrd.local_jobs import launch_research_job, list_local_jobs
 
 
@@ -13,7 +13,7 @@ JOB_ROOT = Path("artifacts/local-jobs")
 
 def render_app() -> None:
     st.set_page_config(page_title="MasterTrd", layout="wide")
-    service = AppService()
+    service = TradingService()
     snapshot = service.snapshot()
     strategies = service.strategy_rows()
     jobs = list_local_jobs(JOB_ROOT)
