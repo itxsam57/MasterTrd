@@ -8,14 +8,14 @@
 
 1. **Research before capital.** The platform must be useful with $0 trading capital.
 2. **One execution engine.** NautilusTrader owns order lifecycle, positions, accounts, reconciliation, sandbox/demo/testnet/live execution.
-3. **No secret in git.** Exchange API keys, private keys, seed phrases, account identifiers, balances, and sensitive live state never enter the public repository. GitHub Environments/Secrets or host environment variables are required.
+3. **No secret in git.** Exchange API keys, private keys, seed phrases, account identifiers, balances, and sensitive live state never enter the public repository. Local environment variables or an OS secret store are required; remote CI secrets are optional and never part of the trading runtime.
 4. **Live is disabled by default.** `LIVE_TRADING_ENABLED=false` is the default and there is no automatic fallback from paper/demo/testnet to live.
 5. **No withdrawal permission.** Exchange keys used by the system must not have withdrawal permissions.
 6. **Cumulative gates.** Every added dependency or subsystem must keep all previous tests green.
 7. **No backtest-only promotion.** The Promotion Governor alone can promote strategies.
 8. **Reproducibility.** Champion results record code SHA, dependency lock hash, dataset hash, genome hash, engine versions, seed, and parameter set.
 9. **Public-repo safe.** Public artifacts use hashes/opaque IDs for experiment organization, but security depends on secret isolation and least privilege—not obscurity.
-10. **Portable live node.** The same execution service must support local Linux/Windows development and an optional Oracle Always Free ARM64 deployment adapter.
+10. **Portable local node.** The same execution service must support local Linux/Windows operation for PAPER, TESTNET, and provider-gated LIVE trading.
 
 ## Trading coverage
 
@@ -191,14 +191,11 @@ Live mode additionally requires `LIVE_TRADING_ENABLED=true` plus an explicit liv
 
 ## Execution targets
 
-### GitHub Actions
-Use public standard runners for research, testing, optimization, validation, reports and coarse paper-state jobs. GitHub scheduled jobs are not treated as a low-latency execution server.
-
 ### Local execution node
-A lightweight local node may run market streams, signals, orders, reconciliation and risk controls. Heavy research remains off the low-powered PC.
+The local PC is the product runtime. It runs the Streamlit control app, isolated research workers, market streams, signals, orders, reconciliation, risk controls, and local scheduling. Research workers and the trading worker are separate processes so heavy backtests cannot freeze execution.
 
-### Oracle adapter
-Build and test but leave disabled by default. Target Linux ARM64/Ampere A1 with bootstrap, systemd, health check, restart/recovery, log rotation, environment loader and deployment workflow. `ORACLE_ENABLED=false` until host details are supplied.
+### GitHub
+GitHub is source control, backup, release storage, and optional CI. GitHub-hosted runners and schedules are never required for backtesting, PAPER monitoring, or LIVE runtime.
 
 ## Secret and public-repository policy
 
@@ -224,7 +221,7 @@ Public fixtures must be synthetic/redacted. CI runs secret scanning and dependen
 - `src/mastertrd/validation/` — robustness and specialist gates
 - `src/mastertrd/execution/` — Nautilus adapters and modes
 - `src/mastertrd/storage/` — DuckDB/Parquet persistence
-- `src/mastertrd/adapters/` — data/venue/GitHub/Oracle/local integrations
+- `src/mastertrd/adapters/` — data/venue/local integrations
 - `tests/` — unit/integration/contract/regression tests
 - `.github/workflows/` — cumulative CI/research/security workflows
 - `docs/` — architecture, operations and implementation plans
@@ -257,7 +254,7 @@ MasterTrd is not complete because code compiles. Completion requires evidence fo
 - supported venue demo/testnet smoke tests when credentials are available
 - reconciliation and kill switch tests
 - secret/public-repo audit
-- ARM64/Oracle deployment artifact
+- one-command local consumer startup and portable local execution artifact
 - cumulative green CI
 
 Live execution may be code-complete without risking material money; first live activation must use an owner-selected minimal size, one strategy/instrument, strict caps and automatic kill switches.
@@ -265,7 +262,7 @@ Live execution may be code-complete without risking material money; first live a
 ## Owner inputs still required later
 
 - Exchange names/accounts to connect.
-- API credentials entered directly into GitHub/host secrets, never chat or git.
-- Oracle hostname/user once Always Free access exists; SSH private material goes into secrets, never chat or repository.
+- API credentials entered directly into the local machine environment/secret store, never chat or git.
+- Provider/account identifiers needed for TESTNET or LIVE admission.
 
 This file is the canonical MasterTrd product specification. Implementation changes may strengthen it, but may not silently weaken or remove these requirements.
