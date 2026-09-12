@@ -127,9 +127,9 @@ def test_strategy_telemetry_is_integrity_covered_and_survives_restart(tmp_path):
     restored = store.load()
     assert restored.strategy_telemetry == journal.strategy_telemetry
 
-    from mastertrd.paper_status import paper_status_payload
+    from mastertrd.trading_service import TradingService
 
-    status = paper_status_payload(restored, observed_ns=started + 2 * NS)
+    status = TradingService.paper_status_payload(restored, observed_ns=started + 2 * NS)
     assert status["strategy_id"] == candidate.strategy_id
     assert status["code_hash"] == "code-hardening"
     assert status["bars_seen"] == 34

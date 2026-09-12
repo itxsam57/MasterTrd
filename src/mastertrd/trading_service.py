@@ -5,11 +5,15 @@ from collections.abc import Callable, Mapping
 from enum import StrEnum
 import os
 import signal
+import time
+from pathlib import Path
 from threading import Event
 from typing import Any
 
 from .contracts import RuntimeMode
 from .credentials import load_binance_credentials
+from .paper_session import JsonPaperSessionStore
+from .paper_status import paper_status_payload as _paper_status_payload
 from .runtime import RuntimeConfig
 from .runtime_factory import build_execution_runtime
 from .strategy_universe import STRATEGY_RECIPES
@@ -25,14 +29,17 @@ RuntimeFactory = Callable[[RuntimeConfig, Mapping[str, str]], Any]
 
 
 class TradingService:
+    paper_status_payload = staticmethod(_paper_status_payload)
     def __init__(
         self,
         environ: Mapping[str, str] | None = None,
         *,
         runtime_factory: RuntimeFactory = build_execution_runtime,
+        clock_ns: Callable[[], int] = time.time_ns,
     ) -> None:
         self._environ = environ
         self._runtime_factory = runtime_factory
+        self._clock_ns = clock_ns
 
     def _environment(self) -> Mapping[str, str]:
         return os.environ if self._environ is None else self._environ
@@ -89,12 +96,20 @@ class TradingService:
     def snapshot(self) -> dict[str, Any]:
         runtime = self._runtime_config()
         readiness = Counter(recipe.readiness.value for recipe in STRATEGY_RECIPES)
-        return {
+        payload: dict[str, Any] = {
             "mode": runtime.mode.value,
             "live_enabled": runtime.live_trading_enabled,
             "strategy_count": len(STRATEGY_RECIPES),
             "readiness": dict(sorted(readiness.items())),
         }
+        session_path = self._environment().get("MASTERTRD_SESSION_STATE", "").strip()
+        if runtime.mode is RuntimeMode.PAPER and session_path and Path(session_path).is_file():
+            journal = JsonPaperSessionStore(session_path).load()
+            payload["paper"] = self.paper_status_payload(
+                journal,
+                observed_ns=self._clock_ns(),
+            )
+        return payload
 
     def strategy_rows(self) -> list[dict[str, Any]]:
         return [

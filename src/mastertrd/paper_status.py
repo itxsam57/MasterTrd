@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import argparse
-import json
-import time
 
 from mastertrd.paper_session import JsonPaperSessionStore, PaperSessionJournal
 
@@ -87,9 +84,3 @@ def paper_status_payload(
     return payload
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Emit a sanitized read-only PAPER runtime status snapshot")
-    parser.add_argument("--session-state", required=True)
-    args = parser.parse_args()
-    journal = JsonPaperSessionStore(args.session_state).load()
-    print(json.dumps(paper_status_payload(journal, observed_ns=time.time_ns()), sort_keys=True))

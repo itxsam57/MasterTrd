@@ -1,14 +1,10 @@
-import pytest
 
-from mastertrd.contracts import RuntimeMode
 from mastertrd.execution_runtime import ExecutionRuntime
-from mastertrd.live_node import NodeReadiness, run_node
 from mastertrd.paper_evidence import PaperStartReceipt
 from mastertrd.paper_session import JsonPaperSessionStore, PaperSessionJournal
 from mastertrd.reconciliation import ExecutionState, Reconciler
 from mastertrd.risk import RiskLimits
 from mastertrd.risk_runtime import RiskRuntime
-from mastertrd.runtime import RuntimeConfig
 
 
 START_NS = 1_700_400_000_000_000_000
@@ -64,32 +60,3 @@ def test_execution_runtime_close_finalizes_once_without_breaking_reusable_run(tm
     assert finalized == ["closed"]
 
 
-def test_run_node_closes_execution_runtime_when_run_raises():
-    calls: list[str] = []
-
-    class CrashingExecutionRuntime:
-        def run(self, *, stop_requested):
-            calls.append("run")
-            assert stop_requested() is False
-            raise RuntimeError("execution failed")
-
-        def close(self):
-            calls.append("close")
-
-    runtime = RuntimeConfig(
-        mode=RuntimeMode.PAPER,
-        live_trading_enabled=False,
-    )
-
-    with pytest.raises(RuntimeError, match="execution failed"):
-        run_node(
-            runtime,
-            {},
-            stop_requested=lambda: False,
-            sleep=lambda _seconds: pytest.fail("runtime-backed node must not sleep"),
-            heartbeat=lambda state: calls.append(state.value),
-            interval_seconds=5.0,
-            execution_runtime=CrashingExecutionRuntime(),
-        )
-
-    assert calls == [NodeReadiness.PAPER_READY.value, "run", "close"]

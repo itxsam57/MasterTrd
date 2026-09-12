@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +8,7 @@ import pytest
 from mastertrd.paper_evidence import PaperStartReceipt
 from mastertrd.paper_session import PaperSessionJournal
 from mastertrd.reconciliation import ExecutionState
+from mastertrd.trading_service import TradingService
 
 
 NANOSECOND = 1_000_000_000
@@ -44,8 +44,7 @@ def test_paper_status_snapshot_is_read_only_and_reports_current_evidence():
         timestamp_ns=started + 45 * NANOSECOND,
     )
 
-    module = importlib.import_module("mastertrd.paper_status")
-    payload = module.paper_status_payload(journal, observed_ns=started + 60 * NANOSECOND)
+    payload = TradingService.paper_status_payload(journal, observed_ns=started + 60 * NANOSECOND)
 
     assert payload == {
         "schema_version": 1,
@@ -98,8 +97,7 @@ def test_paper_status_reports_integrity_covered_closed_bar_completeness():
         timestamp_ns=started + NANOSECOND,
     )
 
-    module = importlib.import_module("mastertrd.paper_status")
-    payload = module.paper_status_payload(journal, observed_ns=started + 2 * NANOSECOND)
+    payload = TradingService.paper_status_payload(journal, observed_ns=started + 2 * NANOSECOND)
 
     assert payload["expected_closed_bars"] == 8
     assert payload["ws_closed_bars"] == 7
@@ -130,8 +128,7 @@ def test_paper_status_accepts_pre_telemetry_legacy_journal_shape():
         finalized_report=current.finalized_report,
     )
 
-    module = importlib.import_module("mastertrd.paper_status")
-    payload = module.paper_status_payload(legacy, observed_ns=started + 3 * NANOSECOND)
+    payload = TradingService.paper_status_payload(legacy, observed_ns=started + 3 * NANOSECOND)
 
     assert payload["strategy_id"] == "S-paper-status"
     assert payload["code_hash"] == "legacy-code"

@@ -166,3 +166,56 @@ def test_run_forever_registers_sigint_and_sigterm_before_runtime_start():
     assert signal.SIGINT in handlers
     assert signal.SIGTERM in handlers
     assert observed_stop == [False]
+
+
+def test_live_node_is_only_a_compatibility_entrypoint():
+    from pathlib import Path
+
+    source = Path("src/mastertrd/live_node.py").read_text(encoding="utf-8")
+    assert "TradingService" in source
+    assert "def preflight_node" not in source
+    assert "def run_node" not in source
+    assert "def run_service" not in source
+
+
+def test_paper_status_module_has_no_standalone_operator_cli():
+    from pathlib import Path
+
+    source = Path("src/mastertrd/paper_status.py").read_text(encoding="utf-8")
+    assert "argparse" not in source
+    assert 'if __name__ == "__main__"' not in source
+
+
+def test_snapshot_includes_persisted_paper_session_status(tmp_path):
+    from mastertrd.paper_evidence import PaperStartReceipt
+    from mastertrd.paper_session import JsonPaperSessionStore, PaperSessionJournal
+    from mastertrd.trading_service import TradingService
+
+    started = 1_000_000_000_000
+    path = tmp_path / "paper-session.json"
+    receipt = PaperStartReceipt(
+        strategy_id="snapshot-paper",
+        genome_hash="a" * 64,
+        session_id="snapshot-session",
+        venue="SANDBOX",
+        engine="nautilus_trader",
+        engine_version="1.231.0",
+        connected=True,
+    )
+    journal = PaperSessionJournal(receipt, code_hash="snapshot-code", started_ns=started)
+    journal.record_market_event("bar-1", timestamp_ns=started + 1_000_000_000)
+    JsonPaperSessionStore(path).save(journal)
+
+    snapshot = TradingService(
+        {
+            "MASTERTRD_MODE": "PAPER",
+            "LIVE_TRADING_ENABLED": "false",
+            "MASTERTRD_SESSION_STATE": str(path),
+        },
+        clock_ns=lambda: started + 2_000_000_000,
+    ).snapshot()
+
+    assert snapshot["paper"]["strategy_id"] == "snapshot-paper"
+    assert snapshot["paper"]["session_id"] == "snapshot-session"
+    assert snapshot["paper"]["market_events"] == 1
+    assert snapshot["paper"]["duration_seconds"] == 2
