@@ -13,8 +13,8 @@ from mastertrd.live_node import (
 from mastertrd.runtime import RuntimeConfig
 
 
-def runtime(mode: RuntimeMode, *, live: bool = False, oracle: bool = False) -> RuntimeConfig:
-    return RuntimeConfig(mode=mode, live_trading_enabled=live, oracle_enabled=oracle)
+def runtime(mode: RuntimeMode, *, live: bool = False) -> RuntimeConfig:
+    return RuntimeConfig(mode=mode, live_trading_enabled=live)
 
 
 def test_paper_node_is_ready_without_exchange_credentials():
@@ -134,7 +134,6 @@ def test_run_service_can_build_concrete_execution_runtime_from_factory():
         {
             "MASTERTRD_MODE": "PAPER",
             "LIVE_TRADING_ENABLED": "false",
-            "ORACLE_ENABLED": "false",
         },
         register_signal=lambda sig, handler: handlers.__setitem__(sig, handler),
         sleep=lambda _seconds: pytest.fail("runtime-backed service must not heartbeat-sleep"),
@@ -183,7 +182,6 @@ def test_run_service_builds_runtime_and_stops_cleanly_on_sigterm():
         {
             "MASTERTRD_MODE": "PAPER",
             "LIVE_TRADING_ENABLED": "false",
-            "ORACLE_ENABLED": "false",
         },
         register_signal=register,
         sleep=lambda seconds: sleeps.append(seconds),

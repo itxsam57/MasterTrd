@@ -112,7 +112,6 @@ def test_paper_factory_builds_persistent_runtime_from_candidate_and_public_feed_
     runtime = RuntimeConfig(
         mode=RuntimeMode.PAPER,
         live_trading_enabled=False,
-        oracle_enabled=False,
     )
     built = build_execution_runtime(runtime, _factory_environment(candidate_path, feed_path, session_path))
 
@@ -148,7 +147,6 @@ def test_paper_factory_resume_reconciles_persisted_execution_checkpoint_before_d
     runtime = RuntimeConfig(
         mode=RuntimeMode.PAPER,
         live_trading_enabled=False,
-        oracle_enabled=False,
     )
     environ = _factory_environment(candidate_path, feed_path, session_path)
     initial = build_execution_runtime(runtime, environ)
@@ -189,7 +187,6 @@ def test_paper_factory_routes_public_feed_through_real_nautilus_strategy_and_rec
     runtime = RuntimeConfig(
         mode=RuntimeMode.PAPER,
         live_trading_enabled=False,
-        oracle_enabled=False,
     )
     built = build_execution_runtime(runtime, _factory_environment(candidate_path, feed_path, session_path))
     report = built.run()
@@ -222,7 +219,6 @@ def test_paper_factory_defaults_to_checked_in_binance_public_stream_without_fixt
     runtime = RuntimeConfig(
         mode=RuntimeMode.PAPER,
         live_trading_enabled=False,
-        oracle_enabled=False,
     )
     built = build_execution_runtime(runtime, _public_stream_environment(candidate_path, session_path))
 
@@ -271,7 +267,6 @@ def test_testnet_factory_routes_candidate_instruments_into_repository_owned_naut
     runtime = RuntimeConfig(
         mode=RuntimeMode.TESTNET,
         live_trading_enabled=False,
-        oracle_enabled=False,
     )
     built = build_execution_runtime(
         runtime,
@@ -306,8 +301,7 @@ def test_exchange_factory_fails_closed_without_explicit_product_or_live_enable(t
             RuntimeConfig(
                 mode=RuntimeMode.TESTNET,
                 live_trading_enabled=False,
-                oracle_enabled=False,
-            ),
+                ),
             testnet_env,
         )
 
@@ -316,7 +310,6 @@ def test_exchange_factory_fails_closed_without_explicit_product_or_live_enable(t
             RuntimeConfig(
                 mode=RuntimeMode.LIVE,
                 live_trading_enabled=False,
-                oracle_enabled=False,
-            ),
+                ),
             _exchange_environment(candidate_path, mode="LIVE"),
         )

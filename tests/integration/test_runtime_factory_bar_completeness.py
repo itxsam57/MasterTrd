@@ -87,7 +87,6 @@ def test_real_paper_factory_anchors_completeness_to_first_bar_after_bootstrap(tm
         RuntimeConfig(
             mode=RuntimeMode.PAPER,
             live_trading_enabled=False,
-            oracle_enabled=False,
         ),
         _environment(candidate_path, session_path),
     )
@@ -130,8 +129,7 @@ def test_real_paper_factory_fails_before_session_creation_without_bootstrap_clos
             RuntimeConfig(
                 mode=RuntimeMode.PAPER,
                 live_trading_enabled=False,
-                oracle_enabled=False,
-            ),
+                ),
             _environment(candidate_path, session_path),
         )
 

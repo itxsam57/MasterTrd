@@ -79,7 +79,6 @@ def test_run_node_closes_execution_runtime_when_run_raises():
     runtime = RuntimeConfig(
         mode=RuntimeMode.PAPER,
         live_trading_enabled=False,
-        oracle_enabled=False,
     )
 
     with pytest.raises(RuntimeError, match="execution failed"):
