@@ -7,7 +7,7 @@ This is a migration map, not a deletion command. **DELETE** means delete only af
 | `src/mastertrd/__init__.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
 | `src/mastertrd/acceptance.py` | **REPLACE** | Replace operator/cloud-specific wrapper with local app/service/scheduler path while preserving core behavior. |
 | `src/mastertrd/advanced_validation.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/asset_transfer.py` | **DELETE** | Remove if confirmed unused after call-site/parity check; not part of consumer runtime. |
+| `src/mastertrd/asset_transfer.py` | **KEEP** | Active research dependency imported by `research_brain.py`, `research_job.py`, and `robustness_cycle.py`. |
 | `src/mastertrd/bar_completeness.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
 | `src/mastertrd/binance_stream.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
 | `src/mastertrd/capability_matrix.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
@@ -46,13 +46,13 @@ This is a migration map, not a deletion command. **DELETE** means delete only af
 | `src/mastertrd/nautilus_risk_hook.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
 | `src/mastertrd/nautilus_strategy.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
 | `src/mastertrd/options_validation.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/oracle.py` | **REPLACE** | Replace operator/cloud-specific wrapper with local app/service/scheduler path while preserving core behavior. |
-| `src/mastertrd/oracle_paper_status.py` | **REPLACE** | Replace operator/cloud-specific wrapper with local app/service/scheduler path while preserving core behavior. |
+| `src/mastertrd/oracle.py` | **DELETE** | Superseded Oracle-only deployment wrapper; zero active source call-sites. |
+| `src/mastertrd/oracle_paper_status.py` | **DELETE** | Superseded Oracle-only aggregate status wrapper; zero active source call-sites. |
 | `src/mastertrd/paper.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
 | `src/mastertrd/paper_archive.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
 | `src/mastertrd/paper_challenger.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
 | `src/mastertrd/paper_cycle.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/paper_diagnostics.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
+| `src/mastertrd/paper_diagnostics.py` | **DELETE** | Used only by the legacy hosted Oracle PAPER status workflow. |
 | `src/mastertrd/paper_events.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
 | `src/mastertrd/paper_evidence.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
 | `src/mastertrd/paper_execution_canary.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
@@ -91,8 +91,8 @@ This is a migration map, not a deletion command. **DELETE** means delete only af
 | `.github/workflows/execution-stack.yml` | **KEEP** | Optional CI/security/release verification; not required for local runtime. |
 | `.github/workflows/full-stack.yml` | **KEEP** | Optional CI/security/release verification; not required for local runtime. |
 | `.github/workflows/lockfile.yml` | **KEEP** | Optional CI/security/release verification; not required for local runtime. |
-| `.github/workflows/oracle-deploy.yml` | **REPLACE** | Keep optional/manual verification where useful; remove runtime dependence and recurring hosted scheduling. |
-| `.github/workflows/paper-status.yml` | **REPLACE** | Keep optional/manual verification where useful; remove runtime dependence and recurring hosted scheduling. |
+| `.github/workflows/oracle-deploy.yml` | **DELETE** | Superseded Oracle deployment path; local runtime is authoritative. |
+| `.github/workflows/paper-status.yml` | **DELETE** | Superseded remote Oracle status path; local app/status replaces it. |
 | `.github/workflows/public-binance-canary.yml` | **REPLACE** | Keep optional/manual verification where useful; remove runtime dependence and recurring hosted scheduling. |
 | `.github/workflows/research-stack.yml` | **KEEP** | Optional CI/security/release verification; not required for local runtime. |
 | `.github/workflows/security.yml` | **KEEP** | Optional CI/security/release verification; not required for local runtime. |
