@@ -9,6 +9,9 @@ description = "Autonomous quantitative research and controlled trading platform"
 requires-python = ">=3.13,<3.14"
 dependencies = []
 
+[project.scripts]
+mastertrd = "mastertrd.cli:main"
+
 [project.optional-dependencies]
 dev = [
   "pytest>=9.0.3,<10",
