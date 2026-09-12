@@ -17,3 +17,30 @@ def test_strategies_command_prints_catalog(capsys):
     payload = json.loads(capsys.readouterr().out)
     assert len(payload) >= 189
     assert payload[0]["recipe_id"]
+
+
+def test_backtest_command_launches_local_job(capsys, monkeypatch, tmp_path):
+    from mastertrd.local_jobs import LocalJobReceipt
+
+    receipt = LocalJobReceipt(
+        job_id="job-1",
+        kind="RESEARCH",
+        recipe_id="ema-cross-fast",
+        status="RUNNING",
+        pid=123,
+        created_at="2026-09-12T00:00:00+00:00",
+        finished_at=None,
+        job_dir=str(tmp_path / "job-1"),
+        error=None,
+    )
+    monkeypatch.setattr("mastertrd.cli.launch_research_job", lambda recipe, root: receipt)
+    assert main(["backtest", "--recipe", "ema-cross-fast", "--root", str(tmp_path)]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["job_id"] == "job-1"
+    assert payload["status"] == "RUNNING"
+
+
+def test_jobs_command_lists_local_receipts(capsys, monkeypatch, tmp_path):
+    monkeypatch.setattr("mastertrd.cli.list_local_jobs", lambda root: [])
+    assert main(["jobs", "--root", str(tmp_path)]) == 0
+    assert json.loads(capsys.readouterr().out) == []
