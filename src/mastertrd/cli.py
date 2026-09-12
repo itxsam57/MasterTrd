@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -19,6 +21,7 @@ def _parser() -> argparse.ArgumentParser:
     backtest.add_argument("--root", default="artifacts/local-jobs")
     jobs = subcommands.add_parser("jobs", help="List local research jobs")
     jobs.add_argument("--root", default="artifacts/local-jobs")
+    subcommands.add_parser("app", help="Open the local MasterTrd app")
     return parser
 
 
@@ -33,6 +36,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         payload = launch_research_job(args.recipe, Path(args.root)).to_dict()
     elif args.command == "jobs":
         payload = [receipt.to_dict() for receipt in list_local_jobs(Path(args.root))]
+    elif args.command == "app":
+        app_path = Path(__file__).with_name("local_app.py")
+        result = subprocess.run([sys.executable, "-m", "streamlit", "run", str(app_path), "--server.address", "127.0.0.1"], check=False)
+        return int(result.returncode)
     else:  # pragma: no cover - argparse enforces valid commands
         raise RuntimeError(f"unsupported command: {args.command}")
     print(json.dumps(payload, sort_keys=True))

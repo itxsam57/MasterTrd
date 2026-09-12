@@ -44,3 +44,17 @@ def test_jobs_command_lists_local_receipts(capsys, monkeypatch, tmp_path):
     monkeypatch.setattr("mastertrd.cli.list_local_jobs", lambda root: [])
     assert main(["jobs", "--root", str(tmp_path)]) == 0
     assert json.loads(capsys.readouterr().out) == []
+
+
+def test_app_command_delegates_to_streamlit(monkeypatch):
+    launched = {}
+
+    def fake_run(argv, **kwargs):
+        launched["argv"] = argv
+        launched["kwargs"] = kwargs
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr("mastertrd.cli.subprocess.run", fake_run)
+    assert main(["app"]) == 0
+    assert launched["argv"][1:4] == ["-m", "streamlit", "run"]
+    assert launched["argv"][-2:] == ["--server.address", "127.0.0.1"]

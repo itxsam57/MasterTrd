@@ -48,6 +48,9 @@ data-fallback = [
 indicators = [
   "TA-Lib>=0.6,<0.7",
 ]
+app = [
+  "streamlit>=1.40,<2",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
