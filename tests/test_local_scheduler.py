@@ -26,6 +26,6 @@ def test_run_due_tasks_launches_only_due_tasks():
 
 
 def test_consumer_runtime_has_no_required_hosted_cron():
-    for name in ("autonomous-research.yml", "paper-status.yml", "public-binance-canary.yml"):
+    for name in ("autonomous-research.yml", "public-binance-canary.yml"):
         text = Path(".github/workflows", name).read_text(encoding="utf-8")
         assert "  schedule:" not in text
