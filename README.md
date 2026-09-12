@@ -49,6 +49,30 @@ uv sync --locked --all-extras
 uv run pytest -q
 ```
 
+
+## Local consumer app
+
+MasterTrd is local-first. The consumer control plane runs on your PC; Vercel, PostHog, Neon, Oracle, and GitHub-hosted Actions are not required for normal runtime.
+
+```bash
+uv sync --locked --all-extras
+uv run mastertrd status
+uv run mastertrd app
+```
+
+Useful local commands:
+
+```bash
+uv run mastertrd strategies
+uv run mastertrd backtest --recipe ema-cross-fast
+uv run mastertrd jobs
+uv run mastertrd scheduler
+```
+
+Backtests launch in separate local worker processes under `artifacts/local-jobs/`, so heavy research does not run inside the UI process. Recurring canary/research work is owned by the optional local scheduler rather than required GitHub cron.
+
+PAPER remains the safe default. LIVE still requires `MASTERTRD_MODE=LIVE`, `LIVE_TRADING_ENABLED=true`, provider admission, credentials, reconciliation, risk controls, restart/recovery evidence, and the Promotion Governor; the local app does not bypass those gates.
+
 ## Runtime modes
 
 `RESEARCH`, `BACKTEST`, `PAPER`, `DEMO`, `TESTNET`, `LIVE`.

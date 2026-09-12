@@ -16,22 +16,22 @@ Local-first research, backtesting, PAPER, and provider-gated LIVE trading from o
 
 ## Current slice
 
-**Thin-core foundation:** one consumer command, local app, isolated local research jobs, and local scheduling.
+**Thin-core cleanup:** foundation is complete; next slice consolidates duplicated PAPER/runtime/operator wrappers behind the local app and shared trading service boundary.
 
 ## Completed slices
 
 - [x] Approved local-first thin-core architecture (`ee04dd2`)
 - [x] Foundation implementation plan (`b1511a9`)
-- [ ] Durable progress ledger and cleanup inventory
-- [ ] Consumer command + application service
-- [ ] Isolated local research jobs
-- [ ] Local Streamlit app
-- [ ] Local scheduler / hosted-cron removal
-- [ ] Full foundation regression
+- [x] Durable progress ledger and cleanup inventory (`6c88a2a`)
+- [x] Consumer command + application service (`28c7043`)
+- [x] Isolated local research jobs (`61c9077`, env-isolation fix `1ff3bc1`)
+- [x] Local Streamlit app (`a2f6ae6`)
+- [x] Local scheduler / hosted-cron removal (`43b8852`)
+- [x] Full foundation regression (`748 passed, 4 warnings`)
 
 ## Next incomplete slice
 
-Complete durable progress ledger and cleanup inventory, then build the consumer command/service.
+Consolidate PAPER/runtime/operator wrappers into one local trading-service boundary, then delete superseded wrappers only after parity tests pass.
 
 ## Known blockers
 
@@ -41,5 +41,8 @@ Complete durable progress ledger and cleanup inventory, then build the consumer 
 ## Evidence
 
 - Full baseline: `uv run pytest -q` -> `730 passed, 4 warnings`
+- Foundation regression: `uv run pytest -q` -> `748 passed, 4 warnings`
+- Consumer smoke: `tests/test_consumer_local_smoke.py` -> PASS
+- Worker environment isolation regression: PASS
 - Lock/deps: `uv lock --check && uv pip check`
 - Workspace: `/home/ubuntu/projects/MasterTrd-thin-core-20260912`
