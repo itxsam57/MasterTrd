@@ -18,6 +18,12 @@ def run_research_worker(job_dir: Path, *, recipe_id: str, code_hash: str) -> int
     receipt = load_receipt(receipt_path)
     artifact_dir = job_dir / "research"
     artifact_dir.mkdir(parents=True, exist_ok=True)
+    env_keys = (
+        "MASTERTRD_RESEARCH_RECIPE_ID",
+        "MASTERTRD_RESEARCH_ARTIFACT_DIR",
+        "MASTERTRD_CODE_HASH",
+    )
+    previous_env = {key: os.environ.get(key) for key in env_keys}
     os.environ["MASTERTRD_RESEARCH_RECIPE_ID"] = recipe_id
     os.environ["MASTERTRD_RESEARCH_ARTIFACT_DIR"] = str(artifact_dir)
     os.environ["MASTERTRD_CODE_HASH"] = code_hash
@@ -25,27 +31,34 @@ def run_research_worker(job_dir: Path, *, recipe_id: str, code_hash: str) -> int
     stdout_path = job_dir / "stdout.log"
     stderr_path = job_dir / "stderr.log"
     try:
-        with stdout_path.open("a", encoding="utf-8") as stdout, stderr_path.open("a", encoding="utf-8") as stderr:
-            with redirect_stdout(stdout), redirect_stderr(stderr):
-                exit_code = int(research_job.main())
-        status = "SUCCEEDED" if exit_code == 0 else "FAILED"
-        error = None if exit_code == 0 else f"exit_code={exit_code}"
-    except Exception as exc:  # worker boundary must preserve failure evidence
-        with stderr_path.open("a", encoding="utf-8") as stderr:
-            traceback.print_exc(file=stderr)
-        status = "FAILED"
-        error = f"{type(exc).__name__}: {exc}"
-        exit_code = 1
+        try:
+            with stdout_path.open("a", encoding="utf-8") as stdout, stderr_path.open("a", encoding="utf-8") as stderr:
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    exit_code = int(research_job.main())
+            status = "SUCCEEDED" if exit_code == 0 else "FAILED"
+            error = None if exit_code == 0 else f"exit_code={exit_code}"
+        except Exception as exc:  # worker boundary must preserve failure evidence
+            with stderr_path.open("a", encoding="utf-8") as stderr:
+                traceback.print_exc(file=stderr)
+            status = "FAILED"
+            error = f"{type(exc).__name__}: {exc}"
+            exit_code = 1
 
-    save_receipt(
-        replace(
-            receipt,
-            status=status,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            error=error,
+        save_receipt(
+            replace(
+                receipt,
+                status=status,
+                finished_at=datetime.now(timezone.utc).isoformat(),
+                error=error,
+            )
         )
-    )
-    return exit_code
+        return exit_code
+    finally:
+        for key, value in previous_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def main() -> int:

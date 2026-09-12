@@ -66,11 +66,17 @@ def test_worker_updates_receipt_to_succeeded(tmp_path, monkeypatch):
         return 0
 
     monkeypatch.setattr(local_job_worker.research_job, "main", fake_main)
+    monkeypatch.setenv("MASTERTRD_RESEARCH_RECIPE_ID", "prior-recipe")
+    monkeypatch.delenv("MASTERTRD_RESEARCH_ARTIFACT_DIR", raising=False)
+    monkeypatch.setenv("MASTERTRD_CODE_HASH", "prior-hash")
     assert local_job_worker.run_research_worker(
         Path(receipt.job_dir),
         recipe_id="ema-cross-fast",
         code_hash="abc123",
     ) == 0
+    assert __import__("os").environ["MASTERTRD_RESEARCH_RECIPE_ID"] == "prior-recipe"
+    assert "MASTERTRD_RESEARCH_ARTIFACT_DIR" not in __import__("os").environ
+    assert __import__("os").environ["MASTERTRD_CODE_HASH"] == "prior-hash"
     final = list_local_jobs(tmp_path)[0]
     assert final.status == "SUCCEEDED"
     assert seen["recipe"] == "ema-cross-fast"
