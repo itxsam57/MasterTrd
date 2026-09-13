@@ -12,7 +12,7 @@ from typing import Any
 
 from .contracts import RuntimeMode
 from .credentials import load_binance_credentials
-from .paper_session import JsonPaperSessionStore
+from .paper_session import JsonPaperSessionStore, PaperSessionJournal
 from .paper_status import paper_status_payload as _paper_status_payload
 from .runtime import RuntimeConfig
 from .runtime_factory import build_execution_runtime
@@ -110,6 +110,14 @@ class TradingService:
                 observed_ns=self._clock_ns(),
             )
         return payload
+
+    def start_paper_cycle(self, *, candidate: Any, session_nonce: str) -> Any:
+        from .paper_cycle import start_generated_paper_cycle
+        return start_generated_paper_cycle(candidate=candidate, session_nonce=session_nonce)
+
+    def finalize_paper_session(self, *, journal: PaperSessionJournal, session_store: JsonPaperSessionStore, archive: Any, ended_ns: int | None = None) -> Any:
+        from .paper_cycle import finalize_forward_paper_session
+        return finalize_forward_paper_session(journal=journal, session_store=session_store, archive=archive, ended_ns=self._clock_ns() if ended_ns is None else ended_ns)
 
     def strategy_rows(self) -> list[dict[str, Any]]:
         return [
