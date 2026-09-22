@@ -73,6 +73,12 @@ jobs:
             tests/test_specialist_orchestrator.py \
             tests/test_testnet_workflow_candidate_bundle.py \
             tests/test_operations_docs.py \
+            tests/test_local_runtime_contract.py \
+            tests/test_local_app_contract.py \
+            tests/test_local_jobs.py \
+            tests/test_local_scheduler.py \
+            tests/test_source_identity.py \
+            tests/integration/test_paper_portfolio_runtime.py \
             tests/integration/test_research_all_families.py \
             tests/integration/test_generated_strategy_execution_contract.py \
             tests/integration/test_nautilus_family_compilers.py \

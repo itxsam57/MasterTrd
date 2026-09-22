@@ -72,9 +72,8 @@ This is a **checked-in provenance snapshot** of a verified implementation baseli
 
 ## Owner input blockers
 
-- `testnet_smoke`: supply the approved Binance TESTNET key/secret/account ID through the protected `testnet` GitHub Environment, with no withdrawal permission, then manually run the `Testnet Smoke` workflow. The workflow now performs the real bounded Nautilus venue probe and emits the exact-SHA JSON receipt.
+- `testnet_smoke`: supply the approved Binance TESTNET key/secret/account ID through a protected local environment/OS secret source (or the optional protected `testnet` GitHub Environment), with no withdrawal permission, then run the real bounded TESTNET smoke. No simulated result is accepted.
 - Promotion Governor approval remains false until the coherent live-evidence bundle, including real TESTNET venue evidence, is complete.
-- Oracle deployment requires the owner-controlled host/environment inputs documented in `docs/OPERATIONS.md` if that deployment target is chosen.
 - Any later LIVE activation is a separate deliberate owner action after TESTNET evidence and Governor approval; implementation completion does not activate LIVE.
 
 ## Safety conclusion

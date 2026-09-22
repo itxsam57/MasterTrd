@@ -10,6 +10,8 @@ import sys
 import time
 from typing import Callable, Mapping, Sequence
 
+from .source_identity import git_head as _source_git_head
+
 
 @dataclass(frozen=True, slots=True)
 class ScheduledTask:
@@ -46,14 +48,7 @@ def _project_root() -> Path:
 
 
 def _git_head() -> str:
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=_project_root(),
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip()
+    return _source_git_head()
 
 
 def _launch_task(task: ScheduledTask, artifact_root: Path) -> subprocess.Popen[bytes]:

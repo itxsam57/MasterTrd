@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import signal
-import subprocess
 import time
 from pathlib import Path
 from threading import Event
@@ -19,6 +18,7 @@ from .paper_session import JsonPaperSessionStore, PaperSessionJournal
 from .genome import StrategyGenome
 from .runtime import RuntimeConfig
 from .runtime_factory import build_execution_runtime
+from .source_identity import git_head as _source_git_head, lock_hash as _source_lock_hash
 from .strategy_universe import STRATEGY_RECIPES
 
 
@@ -183,6 +183,9 @@ class TradingService:
             "MASTERTRD_PORTFOLIO_MANIFEST",
             "MASTERTRD_SESSION_STATE",
             "MASTERTRD_CODE_HASH",
+            "MASTERTRD_PAPER_ARCHIVE",
+            "MASTERTRD_PAPER_HISTORY_DIR",
+            "MASTERTRD_PAPER_ROTATION_REQUEST",
         }
     )
 
@@ -260,6 +263,9 @@ class TradingService:
                 "MASTERTRD_PORTFOLIO_MANIFEST",
                 "MASTERTRD_SESSION_STATE",
                 "MASTERTRD_CODE_HASH",
+                "MASTERTRD_PAPER_ARCHIVE",
+                "MASTERTRD_PAPER_HISTORY_DIR",
+                "MASTERTRD_PAPER_ROTATION_REQUEST",
             ):
                 if existing.get(key):
                     payload[key] = existing[key]
@@ -268,24 +274,16 @@ class TradingService:
     def _current_code_hash(self) -> str:
         source = os.environ if self._environ is None else self._environ
         explicit = source.get("MASTERTRD_CODE_HASH", "").strip()
-        if explicit:
-            return explicit
-        root = Path(__file__).resolve().parents[2]
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=root,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return result.stdout.strip()
+        current = _source_git_head()
+        if explicit and explicit != current:
+            raise RuntimeError(
+                "MASTERTRD_CODE_HASH does not match the clean MasterTrd checkout"
+            )
+        return current
 
     @staticmethod
     def _current_lock_hash() -> str:
-        lock_path = Path(__file__).resolve().parents[2] / "uv.lock"
-        if not lock_path.is_file():
-            raise RuntimeError("uv.lock is required")
-        return hashlib.sha256(lock_path.read_bytes()).hexdigest()
+        return _source_lock_hash()
 
     def configure_paper_portfolio(
         self,
@@ -360,6 +358,9 @@ class TradingService:
             "MASTERTRD_PORTFOLIO_MANIFEST": str(manifest_path),
             "MASTERTRD_SESSION_STATE": str(state_path),
             "MASTERTRD_CODE_HASH": code_hash,
+            "MASTERTRD_PAPER_ARCHIVE": str(root_path / f"{portfolio_id}-reports.json"),
+            "MASTERTRD_PAPER_HISTORY_DIR": str(root_path / f"{portfolio_id}-history"),
+            "MASTERTRD_PAPER_ROTATION_REQUEST": str(root_path / f"{portfolio_id}-rotate.request"),
         }
         self._write_local_settings(settings)
         return {
@@ -396,6 +397,31 @@ class TradingService:
         if runtime.mode is RuntimeMode.LIVE:
             raise RuntimeError("cannot clear emergency stop while LIVE")
         self._emergency_stop_path().unlink(missing_ok=True)
+
+    def paper_evidence_rotation_requested(self) -> bool:
+        raw = self._environment().get("MASTERTRD_PAPER_ROTATION_REQUEST", "").strip()
+        return bool(raw and Path(raw).is_file())
+
+    def request_paper_evidence_rotation(self) -> Path:
+        runtime = self._runtime_config()
+        if runtime.mode is not RuntimeMode.PAPER:
+            raise RuntimeError("PAPER evidence rotation requires PAPER mode")
+        environ = self._environment()
+        raw = environ.get("MASTERTRD_PAPER_ROTATION_REQUEST", "").strip()
+        if not raw:
+            raise RuntimeError("PAPER evidence rotation is not configured")
+        state = environ.get("MASTERTRD_SESSION_STATE", "").strip()
+        if not state or not Path(state).is_file():
+            raise RuntimeError("PAPER evidence session has not started")
+        path = Path(raw)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.tmp")
+        temporary.write_text(
+            f"requested_ns={self._clock_ns()}\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+        return path
 
     def preflight(self) -> TradingReadiness:
         if self.emergency_stop_active():
@@ -457,6 +483,7 @@ class TradingService:
             "strategy_count": len(STRATEGY_RECIPES),
             "readiness": dict(sorted(readiness.items())),
             "emergency_stop": self.emergency_stop_active(),
+            "paper_rotation_requested": self.paper_evidence_rotation_requested(),
         }
         session_path = self._environment().get("MASTERTRD_SESSION_STATE", "").strip()
         portfolio_manifest = self._environment().get("MASTERTRD_PORTFOLIO_MANIFEST", "").strip()

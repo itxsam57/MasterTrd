@@ -9,6 +9,7 @@ import subprocess
 import sys
 from uuid import uuid4
 
+from .source_identity import git_head as _source_git_head
 from .strategy_universe import RecipeReadiness, strategy_recipe, strategy_recipe_timeframes
 
 
@@ -51,14 +52,7 @@ def load_receipt(path: Path) -> LocalJobReceipt:
 
 
 def _git_head() -> str:
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=Path(__file__).resolve().parents[2],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip()
+    return _source_git_head()
 
 
 def launch_research_job(

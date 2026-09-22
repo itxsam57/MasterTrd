@@ -1,15 +1,18 @@
 # MasterTrd Local Operations Runbook
 
-MasterTrd is **local-first**. The PC running MasterTrd owns the consumer app, research workers, scheduler, market connections, PAPER state, and provider-gated trading worker. Vercel, PostHog, Neon, and GitHub-hosted Actions are not required; they may be used only as optional external services.
+MasterTrd is **local-first**. The local PC owns the app, research workers, scheduler,
+market connections, PAPER state, and provider-gated trading worker. Vercel, PostHog,
+Neon, and GitHub-hosted Actions are optional and are not in the runtime critical path.
 
 ## Safety defaults
 
 - `MASTERTRD_MODE=PAPER`
 - `LIVE_TRADING_ENABLED=false`
-- Exchange keys must have **no withdrawal permission**.
-- Secrets never go in git, chat, screenshots, logs, or research artifacts.
-- LIVE requires explicit provider admission, credentials, risk approval, reconciliation, recovery evidence, and Promotion Governor approval.
-- There is no automatic PAPER/TESTNET-to-LIVE fallback.
+- Exchange keys must have **no withdrawal permission**
+- Secrets never go in git, chat, screenshots, logs, app settings, or research artifacts
+- There is no PAPER/DEMO/TESTNET fallback to LIVE
+- LIVE requires provider admission, credentials, reconciliation/recovery evidence,
+  risk approval, kill-switch evidence, and Promotion Governor approval
 
 ## Install and start
 
@@ -24,33 +27,195 @@ uv run mastertrd status
 uv run mastertrd app
 ```
 
-`mastertrd app` opens the local Streamlit control plane on `127.0.0.1`. The app does not submit exchange orders directly; it delegates to the shared MasterTrd/Nautilus execution path.
+Run the persistent trading worker separately:
 
-Useful commands:
+```bash
+uv run mastertrd trading
+```
+
+Other commands:
 
 ```bash
 uv run mastertrd strategies
-uv run mastertrd backtest --recipe ema-cross-fast
 uv run mastertrd jobs
 uv run mastertrd scheduler
+uv run mastertrd config --mode PAPER --product SPOT
 ```
 
-Research jobs run in separate local processes under `artifacts/local-jobs/`. The optional scheduler runs recurring research/canary work locally, so GitHub cron is not required.
+The app is a control/read surface. It never submits exchange orders directly.
+
+## Backtest Lab
+
+Backtest Lab launches isolated local worker processes under
+`artifacts/local-jobs/<job-id>/`. Matrix dimensions include executable strategy
+recipes, admitted instruments, supported timeframes, seeds, and history horizon.
+
+Every cell uses the normal ResearchBrain path; the UI does not offer a switch to bypass
+robustness, hidden/OOS, transfer, cost/slippage, or required specialist validation.
+
+Each job keeps:
+
+- `receipt.json`
+- `stdout.log` and `stderr.log`
+- `research/research.duckdb`
+- `research/research-report.json`
+- `research/public-data/` data/provenance artifacts, including Parquet where produced
+
+Failed and losing trials remain visible in the app.
+
+## PAPER and shared portfolios
+
+PAPER is credential-free and is the safe default.
+
+Research output may contain public-safe `paper_candidates` only for finalists that
+reached `StrategyState.PAPER`. In the Trading tab, select at least two validated
+finalists and choose **Prepare shared PAPER portfolio**.
+
+MasterTrd then verifies:
+
+1. each handoff explicitly says `state=PAPER`;
+2. strategy/genome identity matches the embedded StrategyGenome;
+3. every finalist uses the current code identity;
+4. every finalist uses the current `uv.lock` hash.
+
+The app writes a non-secret portfolio manifest and session path under
+`artifacts/trading/`, then stores only these safe settings outside the repository in
+`~/.mastertrd/runtime.json` by default:
+
+```text
+MASTERTRD_MODE=PAPER
+LIVE_TRADING_ENABLED=false
+MASTERTRD_BINANCE_PRODUCT=SPOT
+MASTERTRD_PORTFOLIO_MANIFEST=<local path>
+MASTERTRD_SESSION_STATE=<local path>
+MASTERTRD_CODE_HASH=<exact code identity>
+MASTERTRD_PAPER_ARCHIVE=<per-strategy archive base>
+MASTERTRD_PAPER_HISTORY_DIR=<finalized session history directory>
+MASTERTRD_PAPER_ROTATION_REQUEST=<local rotation request marker>
+```
+
+Start or restart:
+
+```bash
+uv run mastertrd trading
+```
+
+The worker uses one Nautilus sandbox account/engine and one shared risk runtime for the
+portfolio. Per-strategy journals remain evidence views inside one atomic portfolio
+state. Mixed timeframes share one public Binance websocket with exact kline
+subscriptions and separate closed-bar completeness trackers.
+
+To close a forward-evidence window, use **Close PAPER evidence window** in the Trading
+tab. The app writes only a local request marker. The trading worker waits until the
+shared account has no open orders or positions, finalizes every strategy journal,
+archives one provenance-verified PaperForwardReport per strategy, and atomically
+opens fresh portfolio sessions without restarting Nautilus. Numeric promotion policy
+is deliberately not invented by the app; the existing Promotion Governor evaluates
+these archives under the explicitly configured PAPER/champion policy.
+
+## Local settings and credentials
+
+Non-secret mode/product settings may be changed with:
+
+```bash
+uv run mastertrd config --mode PAPER --product SPOT
+uv run mastertrd config --mode TESTNET --product SPOT
+```
+
+The app/CLI cannot configure LIVE.
+
+Credentials stay in an OS secret store, protected environment injection, or a
+user-owned environment file outside the repository. They are never persisted by
+MasterTrd's local config.
+
+### Binance TESTNET
+
+```text
+BINANCE_TESTNET_API_KEY
+BINANCE_TESTNET_API_SECRET
+BINANCE_TESTNET_ACCOUNT_ID
+```
+
+Missing TESTNET credentials fail closed. A real candidate-bound TESTNET smoke is an
+external receipt and cannot be simulated into PASS.
+
+### Binance LIVE
+
+```text
+BINANCE_LIVE_API_KEY
+BINANCE_LIVE_API_SECRET
+BINANCE_LIVE_ACCOUNT_ID
+```
+
+LIVE additionally requires both:
+
+```bash
+MASTERTRD_MODE=LIVE
+LIVE_TRADING_ENABLED=true
+```
+
+Setting those variables is not sufficient by itself. The candidate must already be
+LIVE-eligible through the Governor and the coherent TESTNET/risk/reconciliation/kill
+evidence bundle must exist. First activation uses owner-selected minimal size and
+strict caps.
+
+## Accounts / Providers
+
+The app reads `docs/MARKET_PROVIDER_MATRIX.md`'s corresponding code registry and shows
+admission/blocker state. Binance is currently the only admitted execution provider.
+Other Nautilus integrations stay `NOT_ADMITTED` until their provider-specific
+execution, reconciliation, risk, credential isolation, PAPER/test, and Governor
+requirements are implemented.
+
+The UI reports whether required credential variable **names** are configured; it never
+shows credential values.
+
+## Emergency kill
+
+The Trading tab has a persistent **EMERGENCY STOP**. Activating it creates a local stop
+marker; `TradingService.preflight()` refuses worker start while it exists, and a
+running `mastertrd trading` worker observes the same marker in its stop predicate.
+
+For an unsafe or unknown state:
+
+1. press **EMERGENCY STOP** or stop the supervised process;
+2. verify the trading worker is no longer active;
+3. inspect provider open orders/positions directly when credentials/capital are involved;
+4. keep `LIVE_TRADING_ENABLED=false`;
+5. reconcile local journal state with provider state;
+6. diagnose/fix the cause and rerun PAPER/TESTNET evidence before any LIVE return.
+
+The app can clear the marker only when the configured mode is not LIVE. LIVE recovery
+requires deliberate external/operator review.
+
+## Recovery
+
+After a crash, reboot, network loss, or provider outage:
+
+1. keep LIVE disabled;
+2. verify the exact git/code identity and `uv lock --check`;
+3. inspect `mastertrd status`, job logs, PAPER portfolio/session state, and data freshness;
+4. reconcile expected orders/positions against the provider where applicable;
+5. restart in PAPER or TESTNET;
+6. verify risk, reconciliation, and completeness telemetry;
+7. return to LIVE only after provider-specific evidence and Governor approval.
+
+Portfolio replay is idempotent: the durable journal records market events and one shared
+execution-state checkpoint before resumed risk is accepted.
 
 ## Linux
 
-Use a normal user-owned checkout and virtual environment. For a persistent trading worker, launch the repository-owned node from a process supervisor you control:
+Use a normal user-owned checkout/virtual environment. A local supervisor may run:
 
 ```bash
-MASTERTRD_MODE=PAPER LIVE_TRADING_ENABLED=false \
-  uv run mastertrd trading
+uv run mastertrd trading
 ```
 
-Keep the checkout, `.venv`, and writable `artifacts/` directories on local storage. Do not run the trading worker from a temporary CI runner.
+Do not use a temporary CI runner as the persistent execution host.
 
 ## Windows
 
-Use PowerShell from the repository root:
+From PowerShell:
 
 ```powershell
 $env:MASTERTRD_MODE = "PAPER"
@@ -59,123 +224,44 @@ uv run mastertrd app
 uv run mastertrd trading
 ```
 
-Use Windows Task Scheduler or another local supervisor only if persistent auto-start is desired. The runtime safety variables stay identical across Windows and Linux.
-
-## PAPER
-
-PAPER is the default operating mode and requires no exchange execution credentials. It is the required proving ground for strategy execution, risk rejection, reconciliation, restart/recovery, and multi-strategy behavior.
-
-```bash
-MASTERTRD_MODE=PAPER
-LIVE_TRADING_ENABLED=false
-```
-
-PAPER evidence, session journals, research receipts, logs, and result artifacts stay local. Failed strategies and losing trials remain recorded.
-
-## DEMO and TESTNET
-
-DEMO/TESTNET use the same execution/risk path but require provider-specific sandbox credentials. For the currently implemented Binance TESTNET path, provide locally:
-
-```text
-BINANCE_TESTNET_API_KEY
-BINANCE_TESTNET_API_SECRET
-BINANCE_TESTNET_ACCOUNT_ID
-```
-
-Never copy these values into source files. Missing credentials must fail closed rather than silently falling back to another mode.
-
-## LIVE
-
-LIVE is deliberately harder to start. Both switches are required:
-
-```bash
-MASTERTRD_MODE=LIVE
-LIVE_TRADING_ENABLED=true
-```
-
-For the currently implemented Binance LIVE credential contract, provide locally:
-
-```text
-BINANCE_LIVE_API_KEY
-BINANCE_LIVE_API_SECRET
-BINANCE_LIVE_ACCOUNT_ID
-```
-
-Setting these variables does **not** make a provider or strategy safe by itself. LIVE also requires provider admission, strategy promotion, pre-trade risk approval, exposure/account limits, reconciliation, restart/recovery evidence, credential isolation, and tested kill switches. First real activation must use owner-selected minimal size and strict caps.
-
-## Credentials
-
-Preferred order:
-
-1. OS secret store / protected local environment injection.
-2. User-owned environment file outside the repository with restrictive permissions.
-3. Shell-session environment variables for temporary TESTNET checks.
-
-Never commit `.env`, API keys, account IDs, private keys, seed phrases, balances, or private position state. Rotate a credential immediately if it appears in a terminal capture, log, repository, or chat.
+Task Scheduler or another local supervisor is optional; the safety variables are the
+same as Linux.
 
 ## Logs and local data
 
-Primary local locations are:
+Primary locations:
 
-- `artifacts/local-jobs/` — research job receipts, stdout/stderr, reports.
-- `artifacts/scheduler/` — scheduler state, canary receipts, scheduler logs.
-- configured PAPER/session paths — execution journals and recovery state.
-- DuckDB/Parquet stores — durable research/data history.
+- `artifacts/local-jobs/` — receipts, logs, DuckDB, reports, data artifacts
+- `artifacts/scheduler/` — scheduler state/logs/canary receipts
+- `artifacts/trading/` — non-secret portfolio manifests and PAPER session state
+- `~/.mastertrd/runtime.json` — safe local runtime settings only
 
-Logs must not contain exchange secrets. Keep enough disk space for historical data and backtest artifacts; local compute/storage is the practical backtesting ceiling.
-
-## Emergency kill
-
-For an unsafe or unknown trading state:
-
-1. Stop the local trading worker/process immediately (`Ctrl+C` for a foreground node or stop its local supervisor service).
-2. Leave `LIVE_TRADING_ENABLED=false` before any restart.
-3. Inspect provider open orders/positions directly through the provider account.
-4. Run reconciliation and inspect MasterTrd local journals/state.
-5. Restart in PAPER first unless a reviewed LIVE recovery procedure explicitly requires otherwise.
-6. Rotate API credentials if compromise is suspected.
-
-The system-level emergency kill takes priority over strategy continuity or research jobs.
-
-## Recovery
-
-After a crash, reboot, network loss, or provider outage:
-
-1. Keep LIVE disabled while diagnosing.
-2. Verify the exact code revision and locked dependencies.
-3. Inspect latest local session/research receipts and logs.
-4. Reconcile expected orders/positions against provider state.
-5. Confirm data freshness and risk state.
-6. Start PAPER/TESTNET and prove normal behavior.
-7. Resume LIVE only after the provider-specific recovery and Promotion Governor gates are satisfied.
-
-Research workers may fail independently without taking down the trading worker.
+Back up important DuckDB/Parquet/research artifacts separately. Never push private
+trading state or secrets to GitHub.
 
 ## Rollback
 
-Use git to return to a previously verified revision, then reinstall from the locked environment and run tests before starting a trading node:
+Use a previously verified revision:
 
 ```bash
 git checkout <verified-sha>
 uv lock --check
 uv sync --locked --all-extras
+uv pip check
 uv run pytest -q
 ```
 
-Do not roll back session/account state blindly. Reconciliation with the provider is authoritative before trading resumes.
+Keep LIVE disabled during rollback. Do not roll back account/session state blindly;
+provider reconciliation is authoritative before trading resumes.
 
 ## Secret rotation
 
-When rotating TESTNET or LIVE credentials:
-
-1. Stop the relevant trading worker.
-2. Revoke/replace the provider key with withdrawal permission disabled.
+1. Stop the affected trading worker.
+2. Replace the key with withdrawal permission disabled and the narrowest supported
+   permissions/IP restrictions.
 3. Update only the protected local secret source.
-4. Verify old credentials no longer work.
-5. Start TESTNET/PAPER checks before re-enabling LIVE.
+4. Revoke the old key.
+5. Run TESTNET/PAPER preflight and reconciliation before restoring the intended mode.
 
-## Backups and GitHub
-
-GitHub is for source control, code review, releases, and optional CI. Back up local DuckDB/Parquet/research artifacts separately if they matter; do not push private trading state or credentials to GitHub.
-
-Vercel, PostHog, and Neon are optional integrations only. MasterTrd must continue operating locally when they are unavailable.
+Vercel, PostHog, and Neon remain optional integrations only. MasterTrd continues to
+operate locally when they are unavailable.

@@ -19,7 +19,7 @@
 - HFT/scalping/order-book/market-making promotion requires real integrity-checked tick/L2 evidence; candle-only evidence never substitutes.
 - Production order risk must use owned runtime state, not permissive zero/default snapshots.
 - Research and execution must share strategy semantics so optimization cannot validate behavior the executor does not run.
-- Missing external inputs (real credentials, venue support, L2 datasets, Oracle host) are explicit blockers, never synthetic PASS results.
+- Missing external inputs (real credentials, venue support, qualifying L2/options datasets) are explicit blockers, never synthetic PASS results.
 - Each production behavior change follows RED -> GREEN -> subsystem regression -> cumulative exact-head verification.
 - A feature is not complete until its real process path is executable and the V2 acceptance matrix proves it.
 

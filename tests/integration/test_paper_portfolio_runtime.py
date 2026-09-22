@@ -216,3 +216,73 @@ def test_portfolio_manifest_rejects_stale_code_and_lock_identity(tmp_path):
                 "MASTERTRD_CODE_HASH": "current-code",
             },
         )
+
+
+def test_portfolio_paper_runtime_rotates_each_strategy_into_forward_evidence(tmp_path):
+    from mastertrd.paper_archive import JsonPaperReportArchive
+
+    portfolio_path = tmp_path / "portfolio.json"
+    state_path = tmp_path / "portfolio-state.json"
+    feed_path = tmp_path / "feed.jsonl"
+    archive_path = tmp_path / "paper-reports.json"
+    history_dir = tmp_path / "paper-history"
+    rotation_request = tmp_path / "ROTATE"
+    candidates = [
+        _candidate("paper-eth", "ETHUSDT.BINANCE", 3, 8),
+        _candidate("paper-btc", "BTCUSDT.BINANCE", 4, 9),
+    ]
+    portfolio_path.write_text(
+        json.dumps(_portfolio_payload("paper-forward", candidates)),
+        encoding="utf-8",
+    )
+    events = [
+        _bar("ETHUSDT", 0, 2000.0),
+        _bar("BTCUSDT", 0, 60000.0),
+        _bar("ETHUSDT", 1, 2001.0),
+        _bar("BTCUSDT", 1, 60010.0),
+    ]
+    feed_path.write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8",
+    )
+    rotation_request.write_text("rotate\n", encoding="utf-8")
+
+    runtime = build_execution_runtime(
+        RuntimeConfig(mode=RuntimeMode.PAPER, live_trading_enabled=False),
+        {
+            "MASTERTRD_PORTFOLIO_MANIFEST": str(portfolio_path),
+            "MASTERTRD_SESSION_STATE": str(state_path),
+            "MASTERTRD_CODE_HASH": "portfolio-code",
+            "MASTERTRD_PAPER_START_NS": str(START_NS),
+            "MASTERTRD_PUBLIC_FEED_FIXTURE": str(feed_path),
+            "MASTERTRD_PAPER_ARCHIVE": str(archive_path),
+            "MASTERTRD_PAPER_HISTORY_DIR": str(history_dir),
+            "MASTERTRD_PAPER_ROTATION_REQUEST": str(rotation_request),
+        },
+    )
+    initial = {
+        strategy_id: runtime._journal.journal(strategy_id).session_id
+        for strategy_id in runtime._journal.strategy_ids
+    }
+
+    report = runtime.run()
+
+    assert report.session_rotations == 1
+    assert rotation_request.exists() is False
+    current = JsonPaperPortfolioStore(state_path).load()
+    assert set(current.strategy_ids) == set(initial)
+    assert all(
+        current.journal(strategy_id).session_id != initial[strategy_id]
+        for strategy_id in current.strategy_ids
+    )
+    archives = sorted(tmp_path.glob("paper-reports-*.json"))
+    assert len(archives) == 2
+    archived = [
+        report
+        for path in archives
+        for report in JsonPaperReportArchive(path).load()
+    ]
+    assert {item.strategy_id for item in archived} == set(initial)
+    assert {item.session_id for item in archived} == set(initial.values())
+    assert all(item.provenance_verified for item in archived)
+    assert len(list(history_dir.glob("*/*.json"))) == 2

@@ -334,6 +334,20 @@ class NautilusStreamingPaperPortfolioExecution:
     def strategies(self) -> tuple[object, ...]:
         return tuple(self._strategies)
 
+    def bind_journal(self, journal: PaperPortfolioJournal) -> None:
+        if self._closed:
+            raise RuntimeError("Nautilus PAPER portfolio execution is already finalized")
+        if journal.portfolio_id != self._journal.portfolio_id:
+            raise ValueError("paper portfolio journal identity changed")
+        if journal.code_hash != self._journal.code_hash:
+            raise ValueError("paper portfolio journal code identity changed")
+        if set(journal.strategy_ids) != set(self._journal.strategy_ids):
+            raise ValueError("paper portfolio journal strategy identities changed")
+        for strategy_id, sink in self._sinks.items():
+            sink.bind_journal(journal.journal(strategy_id))
+        self._journal = journal
+        self._last_telemetry.clear()
+
     def _instrument_id(self, raw: str, venue: str) -> str:
         qualified = raw if "." in raw else f"{raw}.{venue}"
         if qualified not in self._instruments:

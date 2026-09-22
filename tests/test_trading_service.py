@@ -424,6 +424,9 @@ def test_configure_paper_portfolio_accepts_only_current_validated_finalists(tmp_
     assert settings["MASTERTRD_PORTFOLIO_MANIFEST"] == configured["manifest"]
     assert settings["MASTERTRD_SESSION_STATE"] == configured["session_state"]
     assert settings["MASTERTRD_CODE_HASH"] == "code-current"
+    assert settings["MASTERTRD_PAPER_ARCHIVE"].endswith("-reports.json")
+    assert settings["MASTERTRD_PAPER_HISTORY_DIR"].endswith("-history")
+    assert settings["MASTERTRD_PAPER_ROTATION_REQUEST"].endswith("-rotate.request")
 
 
 def test_configure_paper_portfolio_rejects_unqualified_or_stale_finalists(tmp_path, monkeypatch):
@@ -476,3 +479,54 @@ def test_configure_paper_portfolio_rejects_unqualified_or_stale_finalists(tmp_pa
     stale["genome_hash"] = stale_candidate.genome_hash
     with pytest.raises(ValueError, match="code identity"):
         service.configure_paper_portfolio([base, stale], root=tmp_path / "trading")
+
+
+def test_current_code_hash_requires_clean_exact_checkout(monkeypatch):
+    import pytest
+
+    from mastertrd.trading_service import TradingService
+
+    monkeypatch.setattr("mastertrd.trading_service._source_git_head", lambda: "current-sha")
+    assert TradingService({})._current_code_hash() == "current-sha"
+    with pytest.raises(RuntimeError, match="does not match"):
+        TradingService({"MASTERTRD_CODE_HASH": "stale-sha"})._current_code_hash()
+
+
+def test_paper_evidence_rotation_request_is_persistent_and_requires_started_paper(tmp_path):
+    import pytest
+
+    from mastertrd.trading_service import TradingService
+
+    state = tmp_path / "portfolio-state.json"
+    request = tmp_path / "rotate.request"
+    service = TradingService(
+        {
+            "MASTERTRD_MODE": "PAPER",
+            "MASTERTRD_SESSION_STATE": str(state),
+            "MASTERTRD_PAPER_ROTATION_REQUEST": str(request),
+        },
+        clock_ns=lambda: 123,
+    )
+    with pytest.raises(RuntimeError, match="has not started"):
+        service.request_paper_evidence_rotation()
+
+    state.write_text("started", encoding="utf-8")
+    assert service.request_paper_evidence_rotation() == request
+    assert request.read_text(encoding="utf-8") == "requested_ns=123\n"
+    assert service.paper_evidence_rotation_requested() is True
+    state.unlink()
+    assert service.snapshot()["paper_rotation_requested"] is True
+
+
+def test_paper_evidence_rotation_request_rejects_non_paper_mode(tmp_path):
+    import pytest
+
+    from mastertrd.trading_service import TradingService
+
+    with pytest.raises(RuntimeError, match="requires PAPER mode"):
+        TradingService(
+            {
+                "MASTERTRD_MODE": "TESTNET",
+                "MASTERTRD_PAPER_ROTATION_REQUEST": str(tmp_path / "rotate.request"),
+            }
+        ).request_paper_evidence_rotation()

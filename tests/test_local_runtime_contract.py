@@ -40,3 +40,9 @@ def test_active_product_docs_are_local_first_and_keep_live_safety():
 
     for required_topic in ("recovery", "emergency kill", "credentials", "logs"):
         assert required_topic in lower
+
+
+def test_runtime_artifacts_and_private_state_are_git_ignored():
+    ignored = Path(".gitignore").read_text(encoding="utf-8")
+    for required in ("artifacts/", "*.duckdb", "*.parquet", ".env"):
+        assert required in ignored

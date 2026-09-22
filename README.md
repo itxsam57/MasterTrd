@@ -1,85 +1,115 @@
 # MasterTrd
 
-Autonomous quantitative research, validation, paper/demo/testnet, and controlled live-trading platform.
+Local-first autonomous quantitative research, validation, PAPER/TESTNET, and controlled LIVE trading.
 
-`MASTER_PLAN.md` is the canonical specification.
+`MASTER_PLAN.md` is the product specification. The current local-first architecture is
+`docs/superpowers/specs/2026-09-12-mastertrd-thin-core-local-first-design.md`.
 
 ## Safety defaults
 
+- `MASTERTRD_MODE=PAPER`
 - `LIVE_TRADING_ENABLED=false`
-- No exchange secrets belong in git.
-- Trading keys must have **no withdrawal permission**.
-- No strategy can become live-eligible without the Promotion Governor.
+- Exchange keys must have **no withdrawal permission**
+- Secrets and private account state never belong in git or research artifacts
+- Only the Promotion Governor can advance strategy lifecycle state
+- The app cannot enable LIVE and never submits orders directly
 
-## Current implementation status
+## Current status
 
-**Implementation status: PROCESS_READY.** The repository-owned research, PAPER, DEMO/TESTNET, risk, recovery, specialist, and evidence paths in `docs/superpowers/plans/2026-08-31-mastertrd-v2-plan-closure.md` are implemented and covered by cumulative acceptance; owner-controlled external receipts are tracked separately in `docs/ACCEPTANCE_REPORT.md`.
+**Implementation status: PROCESS_READY.** The code-owned V2 research, validation, execution, risk, recovery, specialist, and
+promotion paths are implemented. The local-first consumer product is also implemented:
+one Streamlit app, isolated research workers, a persistent `TradingService` worker,
+shared multi-strategy PAPER execution through one Nautilus account/risk path, local
+scheduling, result/health views, provider readiness, and a persistent emergency stop.
 
-The checked-in acceptance snapshot records verified historical-data ingestion, family-aware execution compilation, research screening/optimization/evolution, specialist statistical/regime/portfolio validation, the autonomous research brain, execution-risk wiring, persistent paper/demo/testnet runtime and recovery, real L2/HFT validation, live-readiness evidence production, autonomous workflows, portable local deployment packaging, and exact-SHA acceptance.
+The current implementation regression is **727 passed, 0 failed**, with
+`uv lock --check` and `uv pip check` clean. The release gate is exact-head acceptance;
+`docs/THIN_CORE_PROGRESS.md` records the current closure evidence and
+`docs/ACCEPTANCE_REPORT.md` remains the checked-in historical provenance snapshot.
 
-Process readiness is deliberately separate from LIVE activation. The real `testnet_smoke` evidence is currently `BLOCKED_OWNER_INPUT` until approved Binance TESTNET credentials/account identity are supplied through the protected `testnet` environment. Therefore LIVE remains disabled and the Promotion Governor has not approved `LIVE_ELIGIBLE`.
+This is still separate from LIVE eligibility. A real candidate-bound Binance TESTNET
+receipt requires owner-provided TESTNET credentials/account identity and must pass the
+risk/reconciliation/kill-switch evidence bundle. Until that external evidence exists, `testnet_smoke=BLOCKED_OWNER_INPUT`,
+`LIVE_ELIGIBLE=false`, and real-money LIVE remains locked.
 
-The `Completion Acceptance` workflow produces the canonical exact-head acceptance artifact for every relevant branch change. The checked-in `docs/ACCEPTANCE_REPORT.md` is a provenance snapshot of the last fully verified implementation baseline; it does not replace the exact-head workflow artifact.
+## Local start
 
-## Strategy Universe V1
-
-Strategy Universe V1 adds a versioned catalog of named strategy recipes and research targets without replacing MasterTrd's existing execution semantics. An `EXECUTABLE` recipe compiles deterministically into the shared `StrategyGenome` contract, carries its recipe identity as `style=recipe:<recipe_id>`, and then uses the same ResearchBrain, specialist evidence, Promotion Governor, and NautilusTrader execution boundaries as legacy generated candidates.
-
-The scheduled public-data research job now iterates exact executable crypto BAR recipe IDs and records `recipe_id` in its public artifact. It does not silently substitute a cheaper strategy for unsupported ideas: options recipes remain blocked until qualifying option-chain/Greeks evidence exists; HFT, scalping, order-book and market-making recipes remain blocked until the required real tick/L2/queue/latency evidence exists; provider-specific recipes remain blocked until that provider is explicitly admitted. Multi-leg candidates cannot be validated through the single-instrument Nautilus wrapper.
-
-Provider capability and MasterTrd admission are deliberately separate facts. `docs/MARKET_PROVIDER_MATRIX.md` records the researched market/provider surface and its blockers. Binance remains the only admitted execution provider in Strategy Universe V1; the presence of an Interactive Brokers, Polymarket, Betfair, OKX, Deribit, Hyperliquid, Databento, Tardis, or other Nautilus integration does **not** authorize MasterTrd to trade through it. Future admissions require provider-specific data, paper/test, reconciliation, risk, credential-isolation, and Governor evidence before execution can be enabled.
-
-## Local development
-
-```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# Linux/macOS: source .venv/bin/activate
-python -m pip install -U pip
-pip install -e ".[dev]"
-pytest -q
-```
-
-For the admitted full stack, use the locked environment:
+Install the locked stack:
 
 ```bash
 python -m pip install uv
 uv lock --check
 uv sync --locked --all-extras
-uv run pytest -q
+uv pip check
 ```
 
-
-## Local consumer app
-
-MasterTrd is local-first. The consumer control plane runs on your PC; Vercel, PostHog, Neon, Oracle, and GitHub-hosted Actions are not required for normal runtime.
+Open the consumer app:
 
 ```bash
-uv sync --locked --all-extras
-uv run mastertrd status
 uv run mastertrd app
 ```
 
-Useful local commands:
+Run the persistent trading worker in a separate terminal/process:
 
 ```bash
-uv run mastertrd strategies
-uv run mastertrd backtest --recipe ema-cross-fast
-uv run mastertrd jobs
-uv run mastertrd scheduler
 uv run mastertrd trading
 ```
 
-Backtests launch in separate local worker processes under `artifacts/local-jobs/`, so heavy research does not run inside the UI process. Recurring canary/research work is owned by the optional local scheduler rather than required GitHub cron.
+Useful commands:
 
-PAPER remains the safe default. LIVE still requires `MASTERTRD_MODE=LIVE`, `LIVE_TRADING_ENABLED=true`, provider admission, credentials, reconciliation, risk controls, restart/recovery evidence, and the Promotion Governor; the local app does not bypass those gates.
+```bash
+uv run mastertrd status
+uv run mastertrd strategies
+uv run mastertrd jobs
+uv run mastertrd scheduler
+uv run mastertrd config --mode PAPER --product SPOT
+```
 
-## Runtime modes
+## Research and Backtest Lab
 
-`RESEARCH`, `BACKTEST`, `PAPER`, `DEMO`, `TESTNET`, `LIVE`.
+The app's Backtest Lab can launch matrices across multiple executable recipes,
+instruments, supported timeframes, seeds, and history horizons. Each matrix cell is an
+isolated local worker and still runs the full MasterTrd validation path: screening,
+optimization/evolution, Nautilus execution-realistic validation, robustness,
+hidden/OOS, transfer testing, and required specialist gates. Failed and losing trials
+remain visible.
 
-LIVE mode requires both `MASTERTRD_MODE=LIVE` and `LIVE_TRADING_ENABLED=true`; otherwise configuration fails closed. Do not enable either merely because implementation acceptance is green.
+Each job keeps its receipt, report, DuckDB memory, public-data artifacts, stdout, and
+stderr under `artifacts/local-jobs/`.
 
-The persistent execution node belongs on the local PC. Vercel, PostHog, Neon, and GitHub-hosted Actions are not required for trading or research runtime.
+## Shared PAPER portfolios
 
-Local setup, TESTNET/LIVE owner inputs, emergency kill, recovery, rollback, logs, and secret rotation are documented in `docs/OPERATIONS.md`.
+Research jobs export exact-provenance `PAPER` finalist manifests only after a candidate
+reaches the PAPER lifecycle state. The Trading tab can combine at least two current-code
+finalists into one shared PAPER portfolio. MasterTrd verifies code and `uv.lock`
+identity before writing the portfolio configuration.
+
+The persistent worker then runs the portfolio through:
+
+- one Nautilus sandbox account/engine
+- one shared `RiskRuntime`
+- per-strategy StrategyGenome semantics and telemetry
+- aggregate positions, exposure, equity, P&L, drawdown, and leverage
+- one durable portfolio journal/reconciliation checkpoint
+- real Binance public closed-bar data with per-timeframe completeness recovery
+- flat-account evidence-window rotation into per-strategy forward PAPER archives
+
+PAPER remains credential-free.
+
+## Providers and LIVE
+
+`docs/MARKET_PROVIDER_MATRIX.md` is the provider capability/admission registry.
+Binance is the only currently admitted execution provider. Other integrations remain
+visible but fail closed until their own data, execution, reconciliation, credential,
+risk, PAPER/test, and Governor evidence is implemented.
+
+Safe local mode/product settings are stored outside the repository at
+`~/.mastertrd/runtime.json` by default. API keys and account IDs are **never** stored
+there; they remain protected environment/OS-secret inputs.
+
+LIVE still requires all of the following: explicit `MASTERTRD_MODE=LIVE`,
+`LIVE_TRADING_ENABLED=true`, admitted provider credentials, a Governor-approved
+LIVE-eligible candidate, coherent TESTNET evidence, reconciliation/recovery proof,
+risk limits, and tested kill switches.
+
+Operational details are in `docs/OPERATIONS.md`.

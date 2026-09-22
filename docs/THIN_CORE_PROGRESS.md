@@ -4,46 +4,57 @@
 
 **Thin Core / Full Lab / One Local App**
 
-Local-first research, backtesting, PAPER, and provider-gated LIVE trading from one consumer app with no mandatory SaaS runtime dependency.
-
-## Baseline
-
-- Baseline commit: `ee04dd2`
-- Baseline verification: `730 passed, 4 warnings`
-- Implementation branch: `feat/thin-core-local-first-20260912`
-- LIVE: locked / not admitted for real money yet
-- PAPER: single-strategy runtime proven; shared multi-strategy portfolio worker is the current slice
+Local-first research, backtesting, shared PAPER trading, and provider-gated LIVE trading
+from one consumer app with no mandatory SaaS runtime dependency.
 
 ## Current slice
 
-**Shared portfolio worker:** the local control plane and TradingService consolidation are complete; the next slice puts multiple PAPER strategies through one shared portfolio/risk execution path.
+**Release closure.** No code-owned implementation slice remains. The local-first product
+is complete on `feat/thin-core-local-first-20260912`; release verification is the
+repository's exact-head locked/full-stack/security/coverage/acceptance gate. The only
+remaining readiness evidence is the real owner-credential Binance TESTNET receipt,
+which is intentionally external and cannot be synthesized.
 
 ## Completed slices
 
-- [x] Approved local-first thin-core architecture (`ee04dd2`)
-- [x] Foundation implementation plan (`b1511a9`)
-- [x] Durable progress ledger and cleanup inventory (`6c88a2a`)
-- [x] Consumer command + application service (`28c7043`)
-- [x] Isolated local research jobs (`61c9077`, env-isolation fix `1ff3bc1`)
-- [x] Local Streamlit app (`a2f6ae6`)
-- [x] Local scheduler / hosted-cron removal (`43b8852`)
-- [x] Unified TradingService runtime boundary
-- [x] Legacy Oracle/operator runtime removal and local-only boundary
-- [x] Full foundation regression (`748 passed, 4 warnings`)
+- [x] Local-first thin-core architecture and durable progress/inventory
+- [x] One `mastertrd` CLI and local Streamlit app
+- [x] Isolated local research workers and local scheduler
+- [x] Unified `TradingService` lifecycle/status boundary (`e0428b0`)
+- [x] Legacy cloud/operator runtime removal
+- [x] Full Backtest Lab matrix using the existing ResearchBrain validation pipeline
+- [x] One shared multi-strategy PAPER Nautilus account/engine + shared risk runtime
+- [x] Mixed-timeframe Binance public feed with independent closed-bar completeness
+- [x] Durable portfolio replay/reconciliation state and per-strategy evidence
+- [x] Flat-account shared PAPER evidence rotation into governed per-strategy archives
+- [x] Dashboard positions/P&L/exposure/drawdown/leverage/jobs/health
+- [x] Visible persistent emergency stop; LIVE cannot clear it from the app
+- [x] Provider/admission view and safe non-secret local settings
+- [x] Validated research-finalist -> shared PAPER portfolio handoff with code/lock binding
+- [x] Obsolete PaperLedger, JSONL memory, duplicate research-cycle/dependency registry removed
+- [x] Final implementation regression: **727 passed, 0 failed**
+- [x] `uv lock --check` and `uv pip check` clean
+- [x] Core coverage gate: **90%** with threshold unchanged
+- [x] Mandatory capability gate: **164 passed**
+- [x] Execution-stack focused gate: **90 passed**
 
 ## Next incomplete slice
 
-Run multiple PAPER strategies concurrently through one shared portfolio/risk path, then expose that state through the local app.
+None code-owned. Keep LIVE locked and collect the real candidate-bound Binance TESTNET
+receipt only when approved owner credentials are supplied. Promotion Governor approval
+and deliberate LIVE activation remain later evidence/owner actions, not implementation
+work.
 
-## Known blockers
+## External blocker
 
-- ORB work remains isolated in the prior worktree and is intentionally not mixed into this branch.
-- LIVE provider admission is a later milestone and remains fail-closed.
+A real Binance TESTNET venue receipt cannot be synthesized. It needs the owner's
+TESTNET key/secret/account identity with withdrawal disabled. Missing owner input is a
+release-evidence blocker, not a reason to weaken or fake the gate.
 
-## Evidence
+## Current safety state
 
-- Full baseline: `uv run pytest -q` -> `730 passed, 4 warnings`
-- Foundation regression: `uv run pytest -q` -> `748 passed, 4 warnings`
-- Consumer smoke: `tests/test_consumer_local_smoke.py` -> PASS
-- Worker environment isolation regression: PASS
-- Lock/deps: `uv lock --check && uv pip check`
+- PAPER: implemented and credential-free
+- Shared multi-strategy PAPER: implemented
+- DEMO/TESTNET code path: implemented and fail-closed on missing credentials
+- Real TESTNET receipt: pending owner credentials
+- LIVE: locked; `LIVE_TRADING_ENABLED=false` by default

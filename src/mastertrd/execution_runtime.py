@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from math import isfinite
 import time
 
+from .paper_portfolio import JsonPaperPortfolioStore, PaperPortfolioJournal
 from .paper_session import JsonPaperSessionStore, PaperSessionJournal
 from .reconciliation import ExecutionState, Reconciler, ReconciliationResult
 from .risk_runtime import KillScope, RiskRuntime
@@ -25,8 +26,8 @@ class ExecutionRuntime:
     def __init__(
         self,
         *,
-        journal: PaperSessionJournal,
-        session_store: JsonPaperSessionStore,
+        journal: PaperSessionJournal | PaperPortfolioJournal,
+        session_store: JsonPaperSessionStore | JsonPaperPortfolioStore,
         risk_runtime: RiskRuntime,
         reconciler: Reconciler,
         engine_state: Callable[[], ExecutionState],
@@ -37,7 +38,13 @@ class ExecutionRuntime:
         startup_expected_state: Callable[[], ExecutionState] | None = None,
         reconciliation_clock: Callable[[], float] = time.time,
         rotation_requested: Callable[[], bool] | None = None,
-        rotate_session: Callable[[int], tuple[PaperSessionJournal, JsonPaperSessionStore]] | None = None,
+        rotate_session: Callable[
+            [int],
+            tuple[
+                PaperSessionJournal | PaperPortfolioJournal,
+                JsonPaperSessionStore | JsonPaperPortfolioStore,
+            ],
+        ] | None = None,
     ) -> None:
         if (rotation_requested is None) != (rotate_session is None):
             raise ValueError("rotation_requested and rotate_session must be configured together")
@@ -147,6 +154,51 @@ class ExecutionRuntime:
             )
         self._session_store.save(self._journal)
 
+    @staticmethod
+    def _validate_rotation(
+        previous: PaperSessionJournal | PaperPortfolioJournal,
+        new_journal: PaperSessionJournal | PaperPortfolioJournal,
+        new_store: JsonPaperSessionStore | JsonPaperPortfolioStore,
+    ) -> None:
+        if isinstance(previous, PaperSessionJournal):
+            if not isinstance(new_journal, PaperSessionJournal) or not isinstance(
+                new_store, JsonPaperSessionStore
+            ):
+                raise TypeError("single-strategy rotation must return a paper session journal/store")
+            if new_journal.session_id == previous.session_id:
+                raise RuntimeError("paper evidence rotation must create a new session identity")
+            if new_journal.strategy_id != previous.strategy_id:
+                raise RuntimeError("paper evidence rotation changed strategy identity")
+            if new_journal.genome_hash != previous.genome_hash:
+                raise RuntimeError("paper evidence rotation changed genome identity")
+            if new_journal.code_hash != previous.code_hash:
+                raise RuntimeError("paper evidence rotation changed code identity")
+            if new_journal.finalized_report is not None:
+                raise RuntimeError("paper evidence rotation returned a finalized session")
+            return
+
+        if not isinstance(previous, PaperPortfolioJournal):
+            raise TypeError("unsupported paper journal type")
+        if not isinstance(new_journal, PaperPortfolioJournal) or not isinstance(
+            new_store, JsonPaperPortfolioStore
+        ):
+            raise TypeError("portfolio rotation must return a paper portfolio journal/store")
+        if new_journal.portfolio_id != previous.portfolio_id:
+            raise RuntimeError("paper evidence rotation changed portfolio identity")
+        if new_journal.code_hash != previous.code_hash:
+            raise RuntimeError("paper evidence rotation changed code identity")
+        if set(new_journal.strategy_ids) != set(previous.strategy_ids):
+            raise RuntimeError("paper evidence rotation changed portfolio strategy identities")
+        for strategy_id in previous.strategy_ids:
+            old = previous.journal(strategy_id)
+            fresh = new_journal.journal(strategy_id)
+            if fresh.genome_hash != old.genome_hash:
+                raise RuntimeError("paper evidence rotation changed genome identity")
+            if fresh.session_id == old.session_id:
+                raise RuntimeError("paper evidence rotation must create new session identities")
+            if fresh.finalized_report is not None:
+                raise RuntimeError("paper evidence rotation returned a finalized session")
+
     def _rotate_evidence_if_safe(self, *, ended_ns: int) -> bool:
         if self._rotation_requested is None or self._rotate_session is None:
             return False
@@ -157,20 +209,7 @@ class ExecutionRuntime:
 
         previous = self._journal
         new_journal, new_store = self._rotate_session(int(ended_ns))
-        if not isinstance(new_journal, PaperSessionJournal) or not isinstance(
-            new_store, JsonPaperSessionStore
-        ):
-            raise TypeError("rotate_session must return a paper journal and session store")
-        if new_journal.session_id == previous.session_id:
-            raise RuntimeError("paper evidence rotation must create a new session identity")
-        if new_journal.strategy_id != previous.strategy_id:
-            raise RuntimeError("paper evidence rotation changed strategy identity")
-        if new_journal.genome_hash != previous.genome_hash:
-            raise RuntimeError("paper evidence rotation changed genome identity")
-        if new_journal.code_hash != previous.code_hash:
-            raise RuntimeError("paper evidence rotation changed code identity")
-        if new_journal.finalized_report is not None:
-            raise RuntimeError("paper evidence rotation returned a finalized session")
+        self._validate_rotation(previous, new_journal, new_store)
 
         self._journal = new_journal
         self._session_store = new_store

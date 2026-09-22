@@ -30,7 +30,10 @@ from .nautilus_paper import (
 )
 from .paper_archive import JsonPaperReportArchive
 from .paper_portfolio import (
+    JsonPaperPortfolioStore,
     NautilusStreamingPaperPortfolioExecution,
+    PaperPortfolioJournal,
+    PersistentPaperPortfolio,
     open_paper_portfolio,
 )
 from .paper_hardening import (
@@ -486,6 +489,85 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
 
 
 
+def _portfolio_strategy_token(strategy_id: str) -> str:
+    return hashlib.sha256(strategy_id.encode()).hexdigest()[:12]
+
+
+def _portfolio_archive_path(base: Path, strategy_id: str) -> Path:
+    suffix = base.suffix or ".json"
+    return base.with_name(f"{base.stem}-{_portfolio_strategy_token(strategy_id)}{suffix}")
+
+
+def _archive_finalized_paper_portfolio(
+    journal: PaperPortfolioJournal,
+    *,
+    archive_path: Path,
+    history_dir: Path,
+) -> None:
+    for strategy_id in journal.strategy_ids:
+        strategy_journal = journal.journal(strategy_id)
+        report = strategy_journal.finalized_report
+        if report is None:
+            raise ValueError("paper portfolio must be finalized before archival")
+        archive = JsonPaperReportArchive(_portfolio_archive_path(archive_path, strategy_id))
+        strategy_history = history_dir / _portfolio_strategy_token(strategy_id)
+        history_path = strategy_history / f"{strategy_journal.session_id}.json"
+        history_store = JsonPaperSessionStore(history_path)
+        if history_path.exists():
+            existing = history_store.load()
+            if existing.finalized_report != report:
+                raise ValueError("conflicting finalized paper portfolio history already exists")
+        else:
+            history_store.save(strategy_journal)
+        archive.append(report)
+
+
+def _portfolio_finalized_end_ns(journal: PaperPortfolioJournal) -> int:
+    reports = [journal.journal(strategy_id).finalized_report for strategy_id in journal.strategy_ids]
+    if any(report is None for report in reports):
+        raise ValueError("paper portfolio is not fully finalized")
+    return max(
+        _finalized_session_end_ns(journal.journal(strategy_id))
+        for strategy_id in journal.strategy_ids
+    )
+
+
+def _next_portfolio_session_nonce(base_nonce: str, journal: PaperPortfolioJournal) -> str:
+    material = "|".join(
+        sorted(journal.journal(strategy_id).session_id for strategy_id in journal.strategy_ids)
+    )
+    return f"{base_nonce}:rotation:{hashlib.sha256(material.encode()).hexdigest()[:16]}"
+
+
+def _open_replacement_paper_portfolio(
+    candidates: Sequence[StrategyGenome],
+    *,
+    portfolio_id: str,
+    state_path: Path,
+    code_hash: str,
+    started_ns: int,
+    session_nonce: str,
+) -> PersistentPaperPortfolio:
+    next_path = state_path.with_name(f".{state_path.name}.next")
+    next_path.unlink(missing_ok=True)
+    replacement = open_paper_portfolio(
+        candidates,
+        portfolio_id=portfolio_id,
+        state_path=next_path,
+        code_hash=code_hash,
+        started_ns=started_ns,
+        session_nonce=session_nonce,
+        resume=False,
+    )
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(next_path, state_path)
+    return PersistentPaperPortfolio(
+        journal=replacement.journal,
+        store=JsonPaperPortfolioStore(state_path),
+        resumed=False,
+    )
+
+
 def _paper_portfolio_runtime(
     runtime: RuntimeConfig,
     environ: Mapping[str, str],
@@ -581,21 +663,74 @@ def _paper_portfolio_runtime(
         )
         stream = MarketStream(public_source)
 
-    started_ns = _configured_new_paper_start_ns(environ)
-    session = open_paper_portfolio(
-        candidates,
-        portfolio_id=portfolio_id,
-        state_path=state_path,
-        code_hash=code_hash,
-        started_ns=started_ns,
-        session_nonce=environ.get("MASTERTRD_SESSION_NONCE", "portfolio-paper").strip()
-        or "portfolio-paper",
-        resume=state_path.exists(),
+    base_session_nonce = (
+        environ.get("MASTERTRD_SESSION_NONCE", "portfolio-paper").strip()
+        or "portfolio-paper"
     )
+    evidence_paths = _paper_evidence_paths(environ)
+    archive_path: Path | None = None
+    history_dir: Path | None = None
+    rotation_request_path: Path | None = None
+    if evidence_paths is not None:
+        archive_path, history_dir, rotation_request_path = evidence_paths
 
+    resume = state_path.exists()
+    if resume:
+        session = open_paper_portfolio(
+            candidates,
+            portfolio_id=portfolio_id,
+            state_path=state_path,
+            code_hash=code_hash,
+            started_ns=0,
+            session_nonce=base_session_nonce,
+            resume=True,
+        )
+        finalized = tuple(
+            session.journal.journal(strategy_id).finalized_report is not None
+            for strategy_id in session.journal.strategy_ids
+        )
+        if any(finalized) and not all(finalized):
+            raise RuntimeError("persisted PAPER portfolio is only partially finalized")
+        if all(finalized):
+            if archive_path is None or history_dir is None:
+                raise RuntimeError(
+                    "finalized PAPER portfolio requires evidence archive configuration"
+                )
+            ended_ns = _portfolio_finalized_end_ns(session.journal)
+            _archive_finalized_paper_portfolio(
+                session.journal,
+                archive_path=archive_path,
+                history_dir=history_dir,
+            )
+            if rotation_request_path is not None:
+                rotation_request_path.unlink(missing_ok=True)
+            session = _open_replacement_paper_portfolio(
+                candidates,
+                portfolio_id=portfolio_id,
+                state_path=state_path,
+                code_hash=code_hash,
+                started_ns=ended_ns,
+                session_nonce=_next_portfolio_session_nonce(
+                    base_session_nonce,
+                    session.journal,
+                ),
+            )
+            resume = False
+    else:
+        session = open_paper_portfolio(
+            candidates,
+            portfolio_id=portfolio_id,
+            state_path=state_path,
+            code_hash=code_hash,
+            started_ns=_configured_new_paper_start_ns(environ),
+            session_nonce=base_session_nonce,
+            resume=False,
+        )
+
+    journal_ref = {"journal": session.journal}
     if fixture_path:
         state_provider = RiskStateProvider(
-            clock=lambda: session.journal.latest_timestamp_ns / 1_000_000_000.0,
+            clock=lambda: journal_ref["journal"].latest_timestamp_ns / 1_000_000_000.0,
         )
     else:
         state_provider = RiskStateProvider()
@@ -634,8 +769,43 @@ def _paper_portfolio_runtime(
     )
     account_id = f"paper-portfolio:{portfolio_id}"
     state = lambda: execution.execution_state(account_id=account_id)
-    recovery_state = session.journal.execution_state_checkpoint if session.resumed else None
+    recovery_state = session.journal.execution_state_checkpoint if resume else None
     startup_expected_state = None if recovery_state is None else lambda state=recovery_state: state
+
+    rotation_requested = None
+    rotate_session = None
+    if archive_path is not None and history_dir is not None and rotation_request_path is not None:
+        rotation_requested = rotation_request_path.exists
+
+        def rotate_session(
+            ended_ns: int,
+        ) -> tuple[PaperPortfolioJournal, JsonPaperPortfolioStore]:
+            current = journal_ref["journal"]
+            if any(
+                current.journal(strategy_id).finalized_report is not None
+                for strategy_id in current.strategy_ids
+            ):
+                raise RuntimeError("active PAPER portfolio evidence is already finalized")
+            for strategy_id in current.strategy_ids:
+                current.journal(strategy_id).finalize(ended_ns=int(ended_ns))
+            JsonPaperPortfolioStore(state_path).save(current)
+            _archive_finalized_paper_portfolio(
+                current,
+                archive_path=archive_path,
+                history_dir=history_dir,
+            )
+            rotation_request_path.unlink(missing_ok=True)
+            replacement = _open_replacement_paper_portfolio(
+                candidates,
+                portfolio_id=portfolio_id,
+                state_path=state_path,
+                code_hash=code_hash,
+                started_ns=int(ended_ns),
+                session_nonce=_next_portfolio_session_nonce(base_session_nonce, current),
+            )
+            execution.bind_journal(replacement.journal)
+            journal_ref["journal"] = replacement.journal
+            return replacement.journal, replacement.store
 
     return ExecutionRuntime(
         journal=session.journal,
@@ -648,6 +818,8 @@ def _paper_portfolio_runtime(
         stream=stream,
         finalizer=execution.close,
         startup_expected_state=startup_expected_state,
+        rotation_requested=rotation_requested,
+        rotate_session=rotate_session,
     )
 
 

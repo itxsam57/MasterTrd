@@ -1,99 +1,33 @@
-# MasterTrd Thin-Core Cleanup Inventory
+# MasterTrd Thin-Core Ownership Inventory
 
-This is a migration map, not a deletion command. **DELETE** means delete only after call-site audit and replacement/parity evidence. Safety, risk, reconciliation, and provider-admission behavior must remain fail-closed.
+This is the final compact ownership map. There are no open migration targets.
 
-| Path | Action | Reason |
-|---|---|---|
-| `src/mastertrd/__init__.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/acceptance.py` | **REPLACE** | Replace operator/cloud-specific wrapper with local app/service/scheduler path while preserving core behavior. |
-| `src/mastertrd/advanced_validation.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/asset_transfer.py` | **KEEP** | Active research dependency imported by `research_brain.py`, `research_job.py`, and `robustness_cycle.py`. |
-| `src/mastertrd/bar_completeness.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/binance_stream.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/capability_matrix.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/champion.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/contracts.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/credentials.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/dependencies.py` | **DELETE** | Removed duplicate dependency registry; `pyproject.toml` + `uv.lock` are authoritative. |
-| `src/mastertrd/execution.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/execution_policy.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/execution_runtime.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/execution_signals.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/forward_scheduler.py` | **REPLACE** | Replace operator/cloud-specific wrapper with local app/service/scheduler path while preserving core behavior. |
-| `src/mastertrd/genome.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/governor.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/hft_engine.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/hft_strategy.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/hft_validation.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/hidden_cycle.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/hidden_gate.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/holdout.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/live_evidence.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/live_node.py` | **KEEP** | Tiny compatibility entrypoint delegating to TradingService; mastertrd trading is canonical. |
-| `src/mastertrd/live_readiness.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/market_capabilities.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/memory.py` | **DELETE** | Removed obsolete JSONL research memory; DuckDB is canonical. |
-| `src/mastertrd/memory_duckdb.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/multi_leg_validation.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/nautilus_backtest.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/nautilus_bar_strategy.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/nautilus_binance.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/nautilus_data.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/nautilus_evaluation.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/nautilus_multileg_strategy.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/nautilus_options_strategy.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/nautilus_paper.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/nautilus_risk_hook.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/nautilus_strategy.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/options_validation.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/oracle.py` | **DELETE** | Superseded Oracle-only deployment wrapper; zero active source call-sites. |
-| `src/mastertrd/oracle_paper_status.py` | **DELETE** | Superseded Oracle-only aggregate status wrapper; zero active source call-sites. |
-| `src/mastertrd/paper.py` | **DELETE** | Removed custom paper ledger; Nautilus owns authoritative PAPER accounting. |
-| `src/mastertrd/paper_archive.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/paper_challenger.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/paper_cycle.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/paper_diagnostics.py` | **DELETE** | Used only by the legacy hosted Oracle PAPER status workflow. |
-| `src/mastertrd/paper_events.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/paper_evidence.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/paper_execution_canary.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/paper_forward.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/paper_hardening.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/paper_session.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/paper_status.py` | **DELETE** | Folded into TradingService; no separate operator/status module remains. |
-| `src/mastertrd/product_contracts.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/public_market_canary.py` | **REPLACE** | Replace operator/cloud-specific wrapper with local app/service/scheduler path while preserving core behavior. |
-| `src/mastertrd/reconciliation.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/research_brain.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/research_candidate_generation.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/research_cycle.py` | **DELETE** | Removed one-off backtest wrapper; ResearchBrain owns the validated research cycle. |
-| `src/mastertrd/research_job.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/risk.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/risk_profiles.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/risk_runtime.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/risk_state.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/robustness.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/robustness_cycle.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/runtime.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/runtime_factory.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/specialist_orchestrator.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/strategy_families.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/strategy_universe.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/streaming.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/testnet_candidate.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/testnet_smoke.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/validation.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/venue.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `.github/workflows/acceptance.yml` | **KEEP** | Optional CI/security/release verification; not required for local runtime. |
-| `.github/workflows/autonomous-research.yml` | **REPLACE** | Keep optional/manual verification where useful; remove runtime dependence and recurring hosted scheduling. |
-| `.github/workflows/ci.yml` | **KEEP** | Optional CI/security/release verification; not required for local runtime. |
-| `.github/workflows/consumer-release-smoke.yml` | **KEEP** | Optional CI/security/release verification; not required for local runtime. |
-| `.github/workflows/dependency-admission.yml` | **DELETE** | Removed stale duplicate version matrix; locked full-stack/acceptance is authoritative. |
-| `.github/workflows/execution-stack.yml` | **KEEP** | Optional CI/security/release verification; not required for local runtime. |
-| `.github/workflows/full-stack.yml` | **KEEP** | Optional CI/security/release verification; not required for local runtime. |
-| `.github/workflows/lockfile.yml` | **KEEP** | Optional CI/security/release verification; not required for local runtime. |
-| `.github/workflows/oracle-deploy.yml` | **DELETE** | Superseded Oracle deployment path; local runtime is authoritative. |
-| `.github/workflows/paper-status.yml` | **DELETE** | Superseded remote Oracle status path; local app/status replaces it. |
-| `.github/workflows/public-binance-canary.yml` | **REPLACE** | Keep optional/manual verification where useful; remove runtime dependence and recurring hosted scheduling. |
-| `.github/workflows/research-stack.yml` | **KEEP** | Optional CI/security/release verification; not required for local runtime. |
-| `.github/workflows/security.yml` | **KEEP** | Optional CI/security/release verification; not required for local runtime. |
-| `.github/workflows/testnet-smoke.yml` | **KEEP** | Optional CI/security/release verification; not required for local runtime. |
+| State | Surface | Decision |
+| --- | --- | --- |
+| **KEEP** | `TradingService`, runtime factory, execution runtime, Nautilus adapters | One public trading boundary over proven execution primitives. |
+| **KEEP** | ResearchBrain, robustness/hidden/specialist validation, DuckDB/Parquet | Canonical research lab and durable research state. |
+| **KEEP** | Risk runtime/state, reconciliation, Governor, PAPER archive/lifecycle | Independent safety and lifecycle boundaries. |
+| **KEEP** | StrategyGenome, strategy universe, provider capability matrix | Canonical strategy/provider contracts. |
+| **KEEP** | `paper_portfolio.py` | Minimal shared-account PAPER orchestration; no second execution engine. |
+| **KEEP** | `live_node.py` | Tiny compatibility entrypoint only; `mastertrd trading` is canonical. |
+| **KEEP** | Optional CI/security/full-stack/testnet workflows | Verification only; never required for local runtime. |
+| **MERGE** | None open | Previous app/status/operator overlap is already behind `TradingService`. |
+| **REPLACE** | Hosted cron/operator status | Replaced by local scheduler, app status, and shared trading service. |
+| **REPLACE** | Legacy cloud runtime/deploy product path | Replaced by portable local Linux/Windows runtime. |
+| **DELETE** | `AppService`, standalone PAPER status/diagnostics, legacy cloud runtime/workflows | Removed after parity tests. |
+| **DELETE** | custom `PaperLedger` | Removed; Nautilus owns authoritative PAPER accounting. |
+| **DELETE** | JSONL research memory | Removed; DuckDB is canonical. |
+| **DELETE** | one-off generated research-cycle wrapper | Removed; ResearchBrain owns the cycle. |
+| **DELETE** | duplicate dependency registry/admission version matrix | Removed; `pyproject.toml` + `uv.lock` + locked full-stack acceptance are authoritative. |
+
+## Invariants
+
+- NautilusTrader is the only authoritative execution engine.
+- PAPER is the default and needs no exchange execution credentials.
+- LIVE cannot be enabled from the app.
+- Research workers cannot own or block the persistent trading worker.
+- Multiple PAPER strategies share one account/risk path.
+- Only validated PAPER finalist manifests can be assembled by the app into a shared
+  portfolio, and code/lock identity must match the current runtime.
+- Secrets never enter repository state, app settings, research reports, or portfolio
+  manifests.

@@ -20,6 +20,7 @@ on:
       - 'src/mastertrd/paper_evidence.py'
       - 'src/mastertrd/paper_cycle.py'
       - 'src/mastertrd/paper_events.py'
+      - 'src/mastertrd/paper_portfolio.py'
       - 'src/mastertrd/research/generator.py'
       - 'tests/test_hft_strategy.py'
       - 'tests/test_hft_ci_ownership.py'
@@ -65,6 +66,7 @@ on:
       - 'src/mastertrd/paper_evidence.py'
       - 'src/mastertrd/paper_cycle.py'
       - 'src/mastertrd/paper_events.py'
+      - 'src/mastertrd/paper_portfolio.py'
       - 'src/mastertrd/research/generator.py'
       - 'tests/test_hft_strategy.py'
       - 'tests/test_hft_ci_ownership.py'
@@ -134,6 +136,7 @@ jobs:
             tests/integration/test_nautilus_paper_session_identity.py \
             tests/integration/test_nautilus_paper_event_sink.py \
             tests/integration/test_generated_paper_start_cycle.py \
+            tests/integration/test_paper_portfolio_runtime.py \
             tests/integration/test_nautilus_market_bar_bridge.py \
             tests/integration/test_generated_strategy_execution_contract.py \
             tests/integration/test_generated_strategy_evaluation.py

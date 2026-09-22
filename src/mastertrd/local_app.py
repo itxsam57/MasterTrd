@@ -172,6 +172,19 @@ def render_app() -> None:
             st.subheader("Shared portfolio / risk")
             st.json(portfolio.get("risk", {}))
             st.dataframe(portfolio.get("strategies", []), use_container_width=True, hide_index=True)
+            if snapshot.get("paper_rotation_requested"):
+                st.info(
+                    "PAPER evidence-window close is pending. The trading worker will rotate "
+                    "the portfolio when the shared account is flat."
+                )
+            elif st.button("Close PAPER evidence window"):
+                try:
+                    service.request_paper_evidence_rotation()
+                except RuntimeError as exc:
+                    st.error(str(exc))
+                else:
+                    st.success("Evidence-window close requested; rotation waits for a flat account.")
+                    st.rerun()
 
         st.subheader("Validated PAPER finalists")
         finalist_labels = {

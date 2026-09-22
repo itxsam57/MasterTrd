@@ -1,7 +1,7 @@
 # MasterTrd Thin Core / Full Lab / One Local App
 
 Date: 2026-09-12
-Status: Approved design, pending implementation plan
+Status: IMPLEMENTED / CURRENT ARCHITECTURE
 
 ## Goal
 
@@ -127,7 +127,7 @@ Simplification must not delete safety merely because a library already handles e
 
 Every existing module is classified KEEP, MERGE, REPLACE, or DELETE before removal.
 
-Priority deletion/merging targets are duplicated PAPER status/session/evidence layers, overlapping runtime factories, Oracle-only product plumbing, redundant acceptance/workflow wrappers, and dead provider paths.
+Priority deletion/merging targets are duplicated PAPER status/session/evidence layers, overlapping runtime factories, cloud-only product plumbing, redundant acceptance/workflow wrappers, and dead provider paths.
 
 Keep hard boundaries around strategy semantics, authoritative backtests, risk, provider admission, reconciliation, and recovery.
 
