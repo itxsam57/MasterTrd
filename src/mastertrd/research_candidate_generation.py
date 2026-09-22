@@ -82,6 +82,7 @@ def generate_research_candidates(config: Any, dataset: Any) -> ResearchCandidate
                             seed=seed,
                             trade_size=config.trade_size,
                             recipe_id=recipe_id,
+                            timeframe=getattr(config, "timeframe", None),
                         ),
                     )
         return ResearchCandidateBatch(tuple(candidates), tuple(blockers))
@@ -110,6 +111,7 @@ def generate_research_candidates(config: Any, dataset: Any) -> ResearchCandidate
                         instruments=instrument_set,
                         seed=seed,
                         trade_size=config.trade_size,
+                        timeframe=getattr(config, "timeframe", None),
                     ),
                 )
 

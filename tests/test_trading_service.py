@@ -219,3 +219,260 @@ def test_snapshot_includes_persisted_paper_session_status(tmp_path):
     assert snapshot["paper"]["session_id"] == "snapshot-session"
     assert snapshot["paper"]["market_events"] == 1
     assert snapshot["paper"]["duration_seconds"] == 2
+
+
+def test_portfolio_snapshot_exposes_strategy_and_account_state(tmp_path):
+    import json
+
+    from mastertrd.genome import StrategyGenome
+    from mastertrd.paper_portfolio import open_paper_portfolio
+    from mastertrd.reconciliation import ExecutionState
+    from mastertrd.trading_service import TradingService
+
+    def candidate(strategy_id, instrument):
+        return StrategyGenome(
+            strategy_id=strategy_id,
+            family="trend",
+            style="day",
+            instruments=(instrument,),
+            timeframe="1m",
+            entry={"kind": "ema_cross", "fast_period": 3, "slow_period": 8},
+            exit={"kind": "cross_reverse"},
+        )
+
+    candidates = (
+        candidate("portfolio-a", "ETHUSDT.BINANCE"),
+        candidate("portfolio-b", "BTCUSDT.BINANCE"),
+    )
+    manifest = tmp_path / "portfolio.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "portfolio_id": "local-paper",
+                "candidates": [item.canonical_payload() for item in candidates],
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = tmp_path / "portfolio-state.json"
+    session = open_paper_portfolio(
+        candidates,
+        portfolio_id="local-paper",
+        state_path=state,
+        code_hash="code",
+        started_ns=1_000_000_000,
+    )
+    session.journal.record_reconciliation(
+        "reconcile:start",
+        ok=True,
+        timestamp_ns=2_000_000_000,
+    )
+    session.journal.record_execution_state(
+        ExecutionState(
+            account_id="paper-portfolio:local-paper",
+            positions={"ETHUSDT.BINANCE": "0.1"},
+            open_order_ids=frozenset(),
+            balances={"USDT": "100000"},
+        ),
+        timestamp_ns=2_000_000_000,
+    )
+    session.store.save(session.journal)
+
+    snapshot = TradingService(
+        {
+            "MASTERTRD_MODE": "PAPER",
+            "MASTERTRD_PORTFOLIO_MANIFEST": str(manifest),
+            "MASTERTRD_SESSION_STATE": str(state),
+        },
+        clock_ns=lambda: 3_000_000_000,
+    ).snapshot()
+
+    assert snapshot["portfolio"]["portfolio_id"] == "local-paper"
+    assert {row["strategy_id"] for row in snapshot["portfolio"]["strategies"]} == {
+        "portfolio-a",
+        "portfolio-b",
+    }
+    assert snapshot["portfolio"]["positions"]["ETHUSDT.BINANCE"] == "0.1"
+    assert snapshot["portfolio"]["reconciliation_errors"] == 0
+
+
+def test_emergency_stop_is_persistent_visible_and_blocks_worker_start(tmp_path):
+    import pytest
+
+    from mastertrd.trading_service import TradingService
+
+    stop_path = tmp_path / "EMERGENCY_STOP"
+    service = TradingService(
+        {
+            "MASTERTRD_MODE": "PAPER",
+            "MASTERTRD_EMERGENCY_STOP": str(stop_path),
+        }
+    )
+    assert service.emergency_stop_active() is False
+    service.activate_emergency_stop()
+    assert stop_path.is_file()
+    assert service.snapshot()["emergency_stop"] is True
+    with pytest.raises(RuntimeError, match="emergency stop is active"):
+        service.preflight()
+
+    service.clear_emergency_stop()
+    assert service.emergency_stop_active() is False
+
+
+def test_live_emergency_stop_cannot_be_cleared_from_control_plane(tmp_path):
+    import pytest
+
+    from mastertrd.trading_service import TradingService
+
+    stop_path = tmp_path / "EMERGENCY_STOP"
+    stop_path.write_text("stop", encoding="utf-8")
+    service = TradingService(
+        {
+            "MASTERTRD_MODE": "LIVE",
+            "LIVE_TRADING_ENABLED": "true",
+            "MASTERTRD_EMERGENCY_STOP": str(stop_path),
+        }
+    )
+    with pytest.raises(RuntimeError, match="cannot clear emergency stop while LIVE"):
+        service.clear_emergency_stop()
+
+
+def test_local_settings_persist_only_safe_non_secret_runtime_fields(tmp_path, monkeypatch):
+    import json
+
+    from mastertrd.trading_service import TradingService
+
+    config = tmp_path / "runtime.json"
+    monkeypatch.setenv("MASTERTRD_LOCAL_CONFIG", str(config))
+    for key in (
+        "MASTERTRD_MODE",
+        "LIVE_TRADING_ENABLED",
+        "MASTERTRD_BINANCE_PRODUCT",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    service = TradingService()
+    service.save_local_settings(mode="TESTNET", product="SPOT")
+    payload = json.loads(config.read_text(encoding="utf-8"))
+    assert payload == {
+        "MASTERTRD_MODE": "TESTNET",
+        "LIVE_TRADING_ENABLED": "false",
+        "MASTERTRD_BINANCE_PRODUCT": "SPOT",
+    }
+    assert service.snapshot()["mode"] == "TESTNET"
+    assert service.provider_rows()[0]["credentials_configured"] is False
+
+
+def test_local_settings_refuse_live_activation(tmp_path, monkeypatch):
+    import pytest
+
+    from mastertrd.trading_service import TradingService
+
+    monkeypatch.setenv("MASTERTRD_LOCAL_CONFIG", str(tmp_path / "runtime.json"))
+    with pytest.raises(RuntimeError, match="LIVE activation"):
+        TradingService().save_local_settings(mode="LIVE", product="SPOT")
+
+
+def test_configure_paper_portfolio_accepts_only_current_validated_finalists(tmp_path, monkeypatch):
+    import json
+    from pathlib import Path
+
+    from mastertrd.genome import StrategyGenome
+    from mastertrd.trading_service import TradingService
+
+    config_path = tmp_path / "runtime.json"
+    monkeypatch.setenv("MASTERTRD_LOCAL_CONFIG", str(config_path))
+    service = TradingService()
+    monkeypatch.setattr(service, "_current_code_hash", lambda: "code-current")
+    monkeypatch.setattr(service, "_current_lock_hash", lambda: "lock-current")
+
+    def manifest(strategy_id, instrument):
+        candidate = StrategyGenome(
+            strategy_id=strategy_id,
+            family="trend",
+            style="day",
+            instruments=(instrument,),
+            timeframe="1m",
+            entry={"kind": "ema_cross", "fast_period": 3, "slow_period": 8},
+            exit={"kind": "cross_reverse"},
+        )
+        return {
+            "candidate": candidate.canonical_payload(),
+            "strategy_id": candidate.strategy_id,
+            "genome_hash": candidate.genome_hash,
+            "state": "PAPER",
+            "code_hash": "code-current",
+            "dataset_hash": f"data-{strategy_id}",
+            "lock_hash": "lock-current",
+            "recipe_id": "ema-cross-fast",
+        }
+
+    configured = service.configure_paper_portfolio(
+        [
+            manifest("paper-a", "ETHUSDT.BINANCE"),
+            manifest("paper-b", "BTCUSDT.BINANCE"),
+        ],
+        root=tmp_path / "trading",
+    )
+    payload = json.loads(Path(configured["manifest"]).read_text(encoding="utf-8"))
+    assert payload["code_hash"] == "code-current"
+    assert payload["lock_hash"] == "lock-current"
+    assert len(payload["candidates"]) == 2
+    settings = json.loads(config_path.read_text(encoding="utf-8"))
+    assert settings["MASTERTRD_MODE"] == "PAPER"
+    assert settings["LIVE_TRADING_ENABLED"] == "false"
+    assert settings["MASTERTRD_PORTFOLIO_MANIFEST"] == configured["manifest"]
+    assert settings["MASTERTRD_SESSION_STATE"] == configured["session_state"]
+    assert settings["MASTERTRD_CODE_HASH"] == "code-current"
+
+
+def test_configure_paper_portfolio_rejects_unqualified_or_stale_finalists(tmp_path, monkeypatch):
+    import pytest
+
+    from mastertrd.genome import StrategyGenome
+    from mastertrd.trading_service import TradingService
+
+    monkeypatch.setenv("MASTERTRD_LOCAL_CONFIG", str(tmp_path / "runtime.json"))
+    service = TradingService()
+    monkeypatch.setattr(service, "_current_code_hash", lambda: "current-code")
+    monkeypatch.setattr(service, "_current_lock_hash", lambda: "current-lock")
+    candidate = StrategyGenome(
+        strategy_id="paper-a",
+        family="trend",
+        style="day",
+        instruments=("ETHUSDT.BINANCE",),
+        timeframe="1m",
+        entry={"kind": "ema_cross", "fast_period": 3, "slow_period": 8},
+        exit={"kind": "cross_reverse"},
+    )
+    base = {
+        "candidate": candidate.canonical_payload(),
+        "strategy_id": candidate.strategy_id,
+        "genome_hash": candidate.genome_hash,
+        "state": "PAPER",
+        "code_hash": "current-code",
+        "dataset_hash": "data",
+        "lock_hash": "current-lock",
+        "recipe_id": "ema-cross-fast",
+    }
+    with pytest.raises(ValueError, match="at least two"):
+        service.configure_paper_portfolio([base], root=tmp_path / "trading")
+
+    bad_state = dict(base, state="HIDDEN_PASS")
+    with pytest.raises(ValueError, match="PAPER-qualified"):
+        service.configure_paper_portfolio([base, bad_state], root=tmp_path / "trading")
+
+    stale = dict(base, strategy_id="paper-b", code_hash="old-code")
+    stale_candidate = StrategyGenome(
+        strategy_id="paper-b",
+        family="trend",
+        style="day",
+        instruments=("BTCUSDT.BINANCE",),
+        timeframe="1m",
+        entry={"kind": "ema_cross", "fast_period": 4, "slow_period": 9},
+        exit={"kind": "cross_reverse"},
+    )
+    stale["candidate"] = stale_candidate.canonical_payload()
+    stale["genome_hash"] = stale_candidate.genome_hash
+    with pytest.raises(ValueError, match="code identity"):
+        service.configure_paper_portfolio([base, stale], root=tmp_path / "trading")

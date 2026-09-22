@@ -14,7 +14,7 @@ This is a migration map, not a deletion command. **DELETE** means delete only af
 | `src/mastertrd/champion.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
 | `src/mastertrd/contracts.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
 | `src/mastertrd/credentials.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/dependencies.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
+| `src/mastertrd/dependencies.py` | **DELETE** | Removed duplicate dependency registry; `pyproject.toml` + `uv.lock` are authoritative. |
 | `src/mastertrd/execution.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
 | `src/mastertrd/execution_policy.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
 | `src/mastertrd/execution_runtime.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
@@ -32,7 +32,7 @@ This is a migration map, not a deletion command. **DELETE** means delete only af
 | `src/mastertrd/live_node.py` | **KEEP** | Tiny compatibility entrypoint delegating to TradingService; mastertrd trading is canonical. |
 | `src/mastertrd/live_readiness.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
 | `src/mastertrd/market_capabilities.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/memory.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
+| `src/mastertrd/memory.py` | **DELETE** | Removed obsolete JSONL research memory; DuckDB is canonical. |
 | `src/mastertrd/memory_duckdb.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
 | `src/mastertrd/multi_leg_validation.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
 | `src/mastertrd/nautilus_backtest.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
@@ -48,7 +48,7 @@ This is a migration map, not a deletion command. **DELETE** means delete only af
 | `src/mastertrd/options_validation.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
 | `src/mastertrd/oracle.py` | **DELETE** | Superseded Oracle-only deployment wrapper; zero active source call-sites. |
 | `src/mastertrd/oracle_paper_status.py` | **DELETE** | Superseded Oracle-only aggregate status wrapper; zero active source call-sites. |
-| `src/mastertrd/paper.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
+| `src/mastertrd/paper.py` | **DELETE** | Removed custom paper ledger; Nautilus owns authoritative PAPER accounting. |
 | `src/mastertrd/paper_archive.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
 | `src/mastertrd/paper_challenger.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
 | `src/mastertrd/paper_cycle.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
@@ -65,7 +65,7 @@ This is a migration map, not a deletion command. **DELETE** means delete only af
 | `src/mastertrd/reconciliation.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
 | `src/mastertrd/research_brain.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
 | `src/mastertrd/research_candidate_generation.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
-| `src/mastertrd/research_cycle.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
+| `src/mastertrd/research_cycle.py` | **DELETE** | Removed one-off backtest wrapper; ResearchBrain owns the validated research cycle. |
 | `src/mastertrd/research_job.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
 | `src/mastertrd/risk.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
 | `src/mastertrd/risk_profiles.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
@@ -87,7 +87,7 @@ This is a migration map, not a deletion command. **DELETE** means delete only af
 | `.github/workflows/autonomous-research.yml` | **REPLACE** | Keep optional/manual verification where useful; remove runtime dependence and recurring hosted scheduling. |
 | `.github/workflows/ci.yml` | **KEEP** | Optional CI/security/release verification; not required for local runtime. |
 | `.github/workflows/consumer-release-smoke.yml` | **KEEP** | Optional CI/security/release verification; not required for local runtime. |
-| `.github/workflows/dependency-admission.yml` | **KEEP** | Optional CI/security/release verification; not required for local runtime. |
+| `.github/workflows/dependency-admission.yml` | **DELETE** | Removed stale duplicate version matrix; locked full-stack/acceptance is authoritative. |
 | `.github/workflows/execution-stack.yml` | **KEEP** | Optional CI/security/release verification; not required for local runtime. |
 | `.github/workflows/full-stack.yml` | **KEEP** | Optional CI/security/release verification; not required for local runtime. |
 | `.github/workflows/lockfile.yml` | **KEEP** | Optional CI/security/release verification; not required for local runtime. |

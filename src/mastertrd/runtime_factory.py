@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -28,6 +29,10 @@ from .nautilus_paper import (
     open_persistent_paper_session,
 )
 from .paper_archive import JsonPaperReportArchive
+from .paper_portfolio import (
+    NautilusStreamingPaperPortfolioExecution,
+    open_paper_portfolio,
+)
 from .paper_hardening import (
     load_public_binance_bar_history,
     paper_bootstrap_bar_limit,
@@ -61,6 +66,42 @@ def _load_candidate(path: str | Path) -> StrategyGenome:
         return StrategyGenome(**raw)
     except (TypeError, ValueError) as exc:
         raise RuntimeError("candidate manifest is invalid") from exc
+
+
+def _load_portfolio_manifest(path: str | Path) -> tuple[str, str, str, tuple[StrategyGenome, ...]]:
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("portfolio manifest could not be read") from exc
+    if not isinstance(raw, dict):
+        raise RuntimeError("portfolio manifest must be a JSON object")
+    portfolio_id = raw.get("portfolio_id")
+    candidates_raw = raw.get("candidates")
+    manifest_code_hash = raw.get("code_hash")
+    manifest_lock_hash = raw.get("lock_hash")
+    if not isinstance(portfolio_id, str) or not portfolio_id.strip():
+        raise RuntimeError("portfolio manifest requires portfolio_id")
+    if not isinstance(manifest_code_hash, str) or not manifest_code_hash:
+        raise RuntimeError("portfolio manifest requires code_hash")
+    if not isinstance(manifest_lock_hash, str) or not manifest_lock_hash:
+        raise RuntimeError("portfolio manifest requires lock_hash")
+    if not isinstance(candidates_raw, list) or len(candidates_raw) < 2:
+        raise RuntimeError("portfolio manifest requires at least two candidates")
+    candidates: list[StrategyGenome] = []
+    for value in candidates_raw:
+        if not isinstance(value, dict):
+            raise RuntimeError("portfolio candidates must be JSON objects")
+        try:
+            candidates.append(StrategyGenome(**value))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("portfolio candidate manifest is invalid") from exc
+    if len({candidate.strategy_id for candidate in candidates}) != len(candidates):
+        raise RuntimeError("paper portfolio strategy identities must be unique")
+    if any(len(candidate.instruments) != 1 for candidate in candidates):
+        raise RuntimeError("shared PAPER portfolio currently admits single-leg strategies only")
+    if any(tuple(candidate.data_requirements) != ("BAR",) for candidate in candidates):
+        raise RuntimeError("shared PAPER portfolio currently admits BAR strategies only")
+    return portfolio_id.strip(), manifest_code_hash, manifest_lock_hash, tuple(candidates)
 
 
 def _fixture_source(path: str | Path) -> Iterable[RawMarketPayload]:
@@ -444,6 +485,172 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
     )
 
 
+
+def _paper_portfolio_runtime(
+    runtime: RuntimeConfig,
+    environ: Mapping[str, str],
+) -> ExecutionRuntime:
+    del runtime
+    portfolio_id, manifest_code_hash, manifest_lock_hash, candidates = _load_portfolio_manifest(
+        _required(environ, "MASTERTRD_PORTFOLIO_MANIFEST")
+    )
+    state_path = Path(_required(environ, "MASTERTRD_SESSION_STATE"))
+    code_hash = _required(environ, "MASTERTRD_CODE_HASH")
+    if manifest_code_hash != code_hash:
+        raise RuntimeError("portfolio manifest code_hash does not match runtime code identity")
+    lock_path = Path(__file__).resolve().parents[2] / "uv.lock"
+    if not lock_path.is_file():
+        raise RuntimeError("uv.lock is required for PAPER portfolio provenance")
+    current_lock_hash = hashlib.sha256(lock_path.read_bytes()).hexdigest()
+    if manifest_lock_hash != current_lock_hash:
+        raise RuntimeError("portfolio manifest lock_hash does not match current uv.lock")
+    instrument_ids = tuple(dict.fromkeys(
+        candidate.instruments[0] for candidate in candidates
+    ))
+    timeframes = tuple(dict.fromkeys(candidate.timeframe for candidate in candidates))
+    subscriptions = {
+        timeframe: tuple(dict.fromkeys(
+            candidate.instruments[0]
+            for candidate in candidates
+            if candidate.timeframe == timeframe
+        ))
+        for timeframe in timeframes
+    }
+
+    fixture_path = environ.get("MASTERTRD_PUBLIC_FEED_FIXTURE", "").strip()
+    initial_bars: dict[str, Sequence[MarketBar]] = {}
+    public_source: BinancePublicMarketSource | None = None
+
+    if fixture_path:
+        instruments = {
+            instrument_id: fixture_binance_spot_instrument(instrument_id)
+            for instrument_id in instrument_ids
+        }
+        stream = MarketStream(_fixture_source(fixture_path))
+    else:
+        instruments = {
+            instrument_id: load_public_binance_spot_instrument(instrument_id)
+            for instrument_id in instrument_ids
+        }
+        anchors: dict[str, int] = {}
+        for timeframe in timeframes:
+            timeframe_anchors: set[int] = set()
+            for instrument_id in subscriptions[timeframe]:
+                matching = tuple(
+                    candidate
+                    for candidate in candidates
+                    if candidate.instruments[0] == instrument_id
+                    and candidate.timeframe == timeframe
+                )
+                required_limit = max(
+                    paper_bootstrap_bar_limit(candidate) for candidate in matching
+                )
+                history = load_public_binance_bar_history(
+                    instrument_id,
+                    timeframe,
+                    limit=required_limit,
+                )
+                minimum = max(required_bar_history(candidate) for candidate in matching)
+                if len(history) < minimum:
+                    raise RuntimeError(
+                        "public PAPER history is insufficient for portfolio warmup: "
+                        f"{instrument_id} {timeframe} {len(history)}/{minimum} closed bars"
+                    )
+                for candidate in matching:
+                    initial_bars[candidate.strategy_id] = history
+                timeframe_anchors.add(
+                    _public_paper_first_expected_start_ms(
+                        history,
+                        timeframe=timeframe,
+                    )
+                )
+            if len(timeframe_anchors) != 1:
+                raise RuntimeError(
+                    f"public PAPER portfolio bootstrap bars are not aligned for {timeframe}"
+                )
+            anchors[timeframe] = timeframe_anchors.pop()
+
+        public_source = BinancePublicMarketSource(
+            instrument_ids,
+            timeframe=timeframes[0] if len(timeframes) == 1 else timeframes,
+            subscriptions=subscriptions,
+            first_expected_start_ms=(
+                anchors[timeframes[0]] if len(timeframes) == 1 else anchors
+            ),
+            recovery_grace_ms=0,
+        )
+        stream = MarketStream(public_source)
+
+    started_ns = _configured_new_paper_start_ns(environ)
+    session = open_paper_portfolio(
+        candidates,
+        portfolio_id=portfolio_id,
+        state_path=state_path,
+        code_hash=code_hash,
+        started_ns=started_ns,
+        session_nonce=environ.get("MASTERTRD_SESSION_NONCE", "portfolio-paper").strip()
+        or "portfolio-paper",
+        resume=state_path.exists(),
+    )
+
+    if fixture_path:
+        state_provider = RiskStateProvider(
+            clock=lambda: session.journal.latest_timestamp_ns / 1_000_000_000.0,
+        )
+    else:
+        state_provider = RiskStateProvider()
+    for instrument_id in instrument_ids:
+        state_provider.update_account_state(
+            symbol=instrument_id,
+            portfolio_id="default",
+            symbol_exposure=0.0,
+            portfolio_exposure=0.0,
+            daily_pnl=0.0,
+            drawdown=0.0,
+            leverage=0.0,
+            correlated_exposure=0.0,
+        )
+    risk_runtime = RiskRuntime(_paper_risk_limits(), state_provider=state_provider)
+    risk_runtime.update_api_health(
+        venue="BINANCE",
+        healthy=True,
+        error_rate=0.0,
+        latency_ms=0.0,
+    )
+
+    telemetry_provider = None
+    if public_source is not None:
+        def telemetry_provider(candidate: StrategyGenome) -> Mapping[str, object] | None:
+            snapshot = public_source.completeness_snapshots.get(candidate.timeframe)
+            return None if snapshot is None else asdict(snapshot)
+
+    execution = NautilusStreamingPaperPortfolioExecution(
+        candidates=candidates,
+        risk_runtime=risk_runtime,
+        journal=session.journal,
+        instruments=instruments,
+        initial_bars=initial_bars,
+        telemetry_provider=telemetry_provider,
+    )
+    account_id = f"paper-portfolio:{portfolio_id}"
+    state = lambda: execution.execution_state(account_id=account_id)
+    recovery_state = session.journal.execution_state_checkpoint if session.resumed else None
+    startup_expected_state = None if recovery_state is None else lambda state=recovery_state: state
+
+    return ExecutionRuntime(
+        journal=session.journal,
+        session_store=session.store,
+        risk_runtime=risk_runtime,
+        reconciler=Reconciler(),
+        engine_state=state,
+        venue_state=state,
+        dispatch=execution.dispatch,
+        stream=stream,
+        finalizer=execution.close,
+        startup_expected_state=startup_expected_state,
+    )
+
+
 def _exchange_runtime(
     runtime: RuntimeConfig,
     environ: Mapping[str, str],
@@ -503,6 +710,8 @@ def build_execution_runtime(
     environ: Mapping[str, str],
 ) -> ExecutionRuntime | NautilusLiveExecutionRuntime:
     if runtime.mode is RuntimeMode.PAPER:
+        if environ.get("MASTERTRD_PORTFOLIO_MANIFEST", "").strip():
+            return _paper_portfolio_runtime(runtime, environ)
         return _paper_runtime(runtime, environ)
     if runtime.mode in (RuntimeMode.DEMO, RuntimeMode.TESTNET, RuntimeMode.LIVE):
         return _exchange_runtime(runtime, environ)

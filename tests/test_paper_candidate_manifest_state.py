@@ -47,6 +47,7 @@ def test_paper_candidate_manifest_uses_strategy_state_enum_value():
             "candidate": candidate.canonical_payload(),
             "strategy_id": candidate.strategy_id,
             "genome_hash": candidate.genome_hash,
+            "state": "PAPER",
             "code_hash": "code-v1",
             "dataset_hash": "dataset-v1",
             "lock_hash": "lock-v1",

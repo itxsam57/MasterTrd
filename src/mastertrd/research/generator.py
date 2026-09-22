@@ -222,6 +222,7 @@ def generate_candidate(
     seed: int,
     trade_size: str | None = None,
     recipe_id: str | None = None,
+    timeframe: str | None = None,
 ) -> StrategyGenome:
     if recipe_id is not None:
         from mastertrd.strategy_universe import compile_strategy_recipe, strategy_recipe
@@ -236,6 +237,7 @@ def generate_candidate(
             instruments=instruments,
             seed=seed,
             trade_size=trade_size,
+            timeframe=timeframe,
         )
 
     spec = family_spec(family)
@@ -246,7 +248,10 @@ def generate_candidate(
     if trade_size is not None:
         entry = dict(entry)
         entry["trade_size"] = _validated_trade_size(trade_size)
-    timeframe = rng.choice(_TIMEFRAMES[family])
+    allowed_timeframes = _TIMEFRAMES[family]
+    if timeframe is not None and timeframe not in allowed_timeframes:
+        raise ValueError(f"timeframe {timeframe} is not supported by family {family}")
+    timeframe = timeframe or rng.choice(allowed_timeframes)
     raw_id = f"{family}|{','.join(instruments)}|{seed}|{entry}|{exit_rule}|{filters}"
     strategy_id = "S-" + sha256(raw_id.encode()).hexdigest()[:12].upper()
     data_requirements = (spec.min_data_level.value,)

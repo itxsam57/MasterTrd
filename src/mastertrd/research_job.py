@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
@@ -48,6 +48,7 @@ class ResearchJobPlan:
     seed_stop: int
     archive_months: int = 2
     runnable_recipe_ids: tuple[str, ...] = ()
+    timeframes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.requested_families or not self.runnable_families:
@@ -62,6 +63,8 @@ class ResearchJobPlan:
             raise ValueError("archive_months must be at least two")
         if len(set(self.runnable_recipe_ids)) != len(self.runnable_recipe_ids):
             raise ValueError("runnable_recipe_ids must be unique")
+        if len(set(self.timeframes)) != len(self.timeframes) or any(not value for value in self.timeframes):
+            raise ValueError("timeframes must be unique non-empty values")
         for recipe_id in self.runnable_recipe_ids:
             recipe = strategy_recipe(recipe_id)
             if recipe.readiness is not RecipeReadiness.EXECUTABLE:
@@ -234,6 +237,7 @@ def research_job_plan_for_recipe(recipe_id: str) -> ResearchJobPlan:
         seed_stop=base.seed_stop,
         archive_months=_archive_months_for_recipe(recipe_id),
         runnable_recipe_ids=(recipe_id,),
+        timeframes=base.timeframes,
     )
 
 
@@ -477,6 +481,7 @@ def _paper_candidate_manifests(
                 "candidate": candidate.canonical_payload(),
                 "strategy_id": candidate.strategy_id,
                 "genome_hash": candidate.genome_hash,
+                "state": StrategyState.PAPER.value,
                 "code_hash": code_hash,
                 "dataset_hash": dataset_hash,
                 "lock_hash": lock_hash,
@@ -551,76 +556,80 @@ def run_research_job(
     memory = DuckDbResearchMemory(artifact_dir / "research.duckdb")
     try:
         for family, recipe_id in schedule:
-            for seed in range(plan.seed_start, plan.seed_stop):
-                preview = generate_candidate(
-                    family=family,
-                    instruments=(plan.instruments[0],),
-                    seed=seed,
-                    recipe_id=recipe_id,
-                )
-                timeframe = preview.timeframe
-                if timeframe not in dataset_cache:
-                    dataset_cache[timeframe] = _dataset_for_timeframe(
-                        instrument_ids=plan.instruments,
-                        instruments=instruments,
-                        timeframe=timeframe,
-                        periods=periods,
-                        data_dir=data_dir,
-                    )
-                dataset, manifests = dataset_cache[timeframe]
-                robust_policy, advanced_policy, transfer_policy, hidden_policy = _scheduled_validation_policies()
-                execution_costs = _scheduled_execution_costs()
-                config = ResearchBrainConfig(
-                    families=(family,),
-                    instruments=plan.instruments,
-                    seed_start=seed,
-                    seed_stop=seed + 1,
-                    screening_min_return=0.0,
-                    optimization_trials=2,
-                    evolution_generations=1,
-                    evolution_population=4,
-                    validation_budget=len(plan.instruments),
-                    paper_queue_cap=1,
-                    hidden_fraction=0.20,
-                    validation_window=_scheduled_validation_window(recipe_id) if recipe_id is not None else 150,
-                    trade_size="0.01000",
-                    starting_balances=("10 ETH", "10 BTC", "100000 USDT"),
-                    recipe_ids=(recipe_id,) if recipe_id is not None else (),
-                    fees=execution_costs["fees"],
-                    slippage=execution_costs["slippage"],
-                    stressed_fees=execution_costs["stressed_fees"],
-                    stressed_slippage=execution_costs["stressed_slippage"],
-                    robustness_policy=robust_policy,
-                    advanced_policy=advanced_policy,
-                    asset_transfer_policy=transfer_policy,
-                    hidden_policy=hidden_policy,
-                )
-                report = run_research_brain(
-                    config,
-                    dataset,
-                    memory,
-                    code_hash=code_hash,
-                    lock_hash=lock_hash,
-                )
-                paper_candidates = _paper_candidate_manifests(
-                    report=report,
-                    memory=memory,
-                    code_hash=code_hash,
-                    dataset_hash=dataset.dataset_hash,
-                    lock_hash=lock_hash,
-                    recipe_id=recipe_id,
-                )
-                runs.append(
-                    _public_run_payload(
+            requested_timeframes = plan.timeframes or (None,)
+            for requested_timeframe in requested_timeframes:
+                for seed in range(plan.seed_start, plan.seed_stop):
+                    preview = generate_candidate(
                         family=family,
-                        recipe_id=recipe_id,
+                        instruments=(plan.instruments[0],),
                         seed=seed,
-                        timeframe=timeframe,
-                        report=report,
-                        manifests=manifests,
-                        paper_candidates=paper_candidates,
+                        recipe_id=recipe_id,
+                        timeframe=requested_timeframe,
                     )
-                )
+                    timeframe = preview.timeframe
+                    if timeframe not in dataset_cache:
+                        dataset_cache[timeframe] = _dataset_for_timeframe(
+                            instrument_ids=plan.instruments,
+                            instruments=instruments,
+                            timeframe=timeframe,
+                            periods=periods,
+                            data_dir=data_dir,
+                        )
+                    dataset, manifests = dataset_cache[timeframe]
+                    robust_policy, advanced_policy, transfer_policy, hidden_policy = _scheduled_validation_policies()
+                    execution_costs = _scheduled_execution_costs()
+                    config = ResearchBrainConfig(
+                        families=(family,),
+                        instruments=plan.instruments,
+                        seed_start=seed,
+                        seed_stop=seed + 1,
+                        screening_min_return=0.0,
+                        optimization_trials=2,
+                        evolution_generations=1,
+                        evolution_population=4,
+                        validation_budget=len(plan.instruments),
+                        paper_queue_cap=1,
+                        hidden_fraction=0.20,
+                        validation_window=_scheduled_validation_window(recipe_id) if recipe_id is not None else 150,
+                        trade_size="0.01000",
+                        starting_balances=("10 ETH", "10 BTC", "100000 USDT"),
+                        recipe_ids=(recipe_id,) if recipe_id is not None else (),
+                        timeframe=requested_timeframe,
+                        fees=execution_costs["fees"],
+                        slippage=execution_costs["slippage"],
+                        stressed_fees=execution_costs["stressed_fees"],
+                        stressed_slippage=execution_costs["stressed_slippage"],
+                        robustness_policy=robust_policy,
+                        advanced_policy=advanced_policy,
+                        asset_transfer_policy=transfer_policy,
+                        hidden_policy=hidden_policy,
+                    )
+                    report = run_research_brain(
+                        config,
+                        dataset,
+                        memory,
+                        code_hash=code_hash,
+                        lock_hash=lock_hash,
+                    )
+                    paper_candidates = _paper_candidate_manifests(
+                        report=report,
+                        memory=memory,
+                        code_hash=code_hash,
+                        dataset_hash=dataset.dataset_hash,
+                        lock_hash=lock_hash,
+                        recipe_id=recipe_id,
+                    )
+                    runs.append(
+                        _public_run_payload(
+                            family=family,
+                            recipe_id=recipe_id,
+                            seed=seed,
+                            timeframe=timeframe,
+                            report=report,
+                            manifests=manifests,
+                            paper_candidates=paper_candidates,
+                        )
+                    )
     finally:
         memory.close()
 
@@ -640,6 +649,7 @@ def run_research_job(
             "seed_start": plan.seed_start,
             "seed_stop": plan.seed_stop,
             "archive_months": plan.archive_months,
+            "timeframes": list(plan.timeframes),
         },
         "runs": runs,
     }
@@ -658,6 +668,29 @@ def main() -> int:
 
     recipe_id = os.environ.get("MASTERTRD_RESEARCH_RECIPE_ID", "").strip()
     plan = research_job_plan_for_recipe(recipe_id) if recipe_id else default_research_job_plan()
+
+    instruments_raw = os.environ.get("MASTERTRD_RESEARCH_INSTRUMENTS", "").strip()
+    timeframes_raw = os.environ.get("MASTERTRD_RESEARCH_TIMEFRAMES", "").strip()
+    seed_start_raw = os.environ.get("MASTERTRD_RESEARCH_SEED_START", "").strip()
+    seed_stop_raw = os.environ.get("MASTERTRD_RESEARCH_SEED_STOP", "").strip()
+    archive_months_raw = os.environ.get("MASTERTRD_RESEARCH_ARCHIVE_MONTHS", "").strip()
+    overrides = {}
+    if instruments_raw:
+        overrides["instruments"] = tuple(
+            value.strip().upper() for value in instruments_raw.split(",") if value.strip()
+        )
+    if timeframes_raw:
+        overrides["timeframes"] = tuple(
+            value.strip() for value in timeframes_raw.split(",") if value.strip()
+        )
+    if seed_start_raw:
+        overrides["seed_start"] = int(seed_start_raw)
+    if seed_stop_raw:
+        overrides["seed_stop"] = int(seed_stop_raw)
+    if archive_months_raw:
+        overrides["archive_months"] = int(archive_months_raw)
+    if overrides:
+        plan = replace(plan, **overrides)
     report = run_research_job(
         plan,
         artifact_dir=artifact_dir,

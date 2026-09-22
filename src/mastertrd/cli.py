@@ -24,6 +24,9 @@ def _parser() -> argparse.ArgumentParser:
     jobs.add_argument("--root", default="artifacts/local-jobs")
     subcommands.add_parser("app", help="Open the local MasterTrd app")
     subcommands.add_parser("trading", help="Run the persistent local trading worker")
+    config = subcommands.add_parser("config", help="Save safe local runtime settings")
+    config.add_argument("--mode", choices=("PAPER", "DEMO", "TESTNET"), required=True)
+    config.add_argument("--product", choices=("SPOT", "USD_M", "COIN_M"), default="SPOT")
     scheduler = subcommands.add_parser("scheduler", help="Run local recurring checks and research")
     scheduler.add_argument("--poll-seconds", type=float, default=60.0)
     return parser
@@ -52,6 +55,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             heartbeat=lambda state: print(f"MasterTrd heartbeat: {state}", file=sys.stderr, flush=True)
         )
         return 0
+    elif args.command == "config":
+        path = service.save_local_settings(mode=args.mode, product=args.product)
+        payload = {"config": str(path), "mode": args.mode, "product": args.product}
     else:  # pragma: no cover - argparse enforces valid commands
         raise RuntimeError(f"unsupported command: {args.command}")
     print(json.dumps(payload, sort_keys=True))

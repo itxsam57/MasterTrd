@@ -65,6 +65,7 @@ class ResearchBrainConfig:
     validation_budget: int
     paper_queue_cap: int
     recipe_ids: tuple[str, ...] = ()
+    timeframe: str | None = None
     hidden_fraction: float = 0.20
     trade_size: str = "0.01000"
     starting_balances: tuple[str, ...] = ("100000 USDT",)

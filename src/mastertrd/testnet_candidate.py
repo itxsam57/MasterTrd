@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Any, Mapping
+from typing import Any, ClassVar, Mapping
 
 from .contracts import RuntimeMode
 from .genome import StrategyGenome
@@ -23,6 +23,8 @@ from .venue import BinanceProduct
 
 @dataclass(frozen=True, slots=True)
 class TestnetCandidateManifest:
+    __test__: ClassVar[bool] = False
+
     candidate: StrategyGenome
     strategy_id: str
     genome_hash: str

@@ -204,6 +204,13 @@ def strategy_recipe(recipe_id: str) -> StrategyRecipe:
     raise ValueError(f"unknown strategy recipe: {recipe_id}")
 
 
+def strategy_recipe_timeframes(recipe_id: str) -> tuple[str, ...]:
+    recipe = strategy_recipe(recipe_id)
+    from mastertrd.research.generator import _TIMEFRAMES
+
+    return tuple(_TIMEFRAMES[recipe.family])
+
+
 def recipes_for(*, family: str | None = None, asset_class: AssetClass | None = None, readiness: RecipeReadiness | None = None) -> tuple[StrategyRecipe, ...]:
     return tuple(recipe for recipe in STRATEGY_RECIPES if (family is None or recipe.family == family) and (asset_class is None or asset_class in recipe.asset_classes) and (readiness is None or recipe.readiness is readiness))
 
@@ -221,7 +228,7 @@ def _validate_recipe_instruments(recipe: StrategyRecipe, instruments: Sequence[s
         raise ValueError(f"recipe {recipe.recipe_id} accepts at most {spec.max_instruments} instruments")
 
 
-def compile_strategy_recipe(recipe_id: str, *, instruments: Sequence[str], seed: int, trade_size: str | None = None) -> StrategyGenome:
+def compile_strategy_recipe(recipe_id: str, *, instruments: Sequence[str], seed: int, trade_size: str | None = None, timeframe: str | None = None) -> StrategyGenome:
     """Compile one admitted recipe using the existing shared family semantics.
 
     The recipe ID is salted into the RNG and strategy identity so two named recipes
@@ -247,7 +254,10 @@ def compile_strategy_recipe(recipe_id: str, *, instruments: Sequence[str], seed:
         entry = dict(entry)
         entry["trade_size"] = legacy._validated_trade_size(trade_size)
 
-    timeframe = rng.choice(legacy._TIMEFRAMES[recipe.family])
+    allowed_timeframes = legacy._TIMEFRAMES[recipe.family]
+    if timeframe is not None and timeframe not in allowed_timeframes:
+        raise ValueError(f"timeframe {timeframe} is not supported by recipe {recipe_id}")
+    timeframe = timeframe or rng.choice(allowed_timeframes)
     spec = family_spec(recipe.family)
     raw_id = f"recipe|{recipe_id}|{','.join(instruments)}|{seed}|{entry}|{exit_rule}|{filters}"
     strategy_id = "R-" + sha256(raw_id.encode()).hexdigest()[:12].upper()

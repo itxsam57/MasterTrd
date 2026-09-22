@@ -431,3 +431,23 @@ def test_public_market_source_fails_closed_before_newer_tick_when_recovery_fails
     assert snapshot.missing_closed_bars == 1
     assert snapshot.recovery_failures == 1
     assert snapshot.data_healthy is False
+
+
+def test_public_market_source_supports_exact_multi_timeframe_portfolio_subscriptions():
+    source = BinancePublicMarketSource(
+        ("ETHUSDT.BINANCE", "BTCUSDT.BINANCE"),
+        timeframe=("1m", "5m"),
+        subscriptions={
+            "1m": ("ETHUSDT.BINANCE",),
+            "5m": ("BTCUSDT.BINANCE",),
+        },
+    )
+
+    assert source.timeframes == ("1m", "5m")
+    assert source.timeframe is None
+    assert "ethusdt@bookTicker" in source.uri
+    assert "btcusdt@bookTicker" in source.uri
+    assert "ethusdt@kline_1m" in source.uri
+    assert "btcusdt@kline_5m" in source.uri
+    assert "ethusdt@kline_5m" not in source.uri
+    assert "btcusdt@kline_1m" not in source.uri

@@ -58,3 +58,14 @@ def test_app_command_delegates_to_streamlit(monkeypatch):
     assert main(["app"]) == 0
     assert launched["argv"][1:4] == ["-m", "streamlit", "run"]
     assert launched["argv"][-2:] == ["--server.address", "127.0.0.1"]
+
+
+def test_config_command_saves_only_safe_local_settings(capsys, monkeypatch, tmp_path):
+    path = tmp_path / "runtime.json"
+    monkeypatch.setattr(
+        "mastertrd.cli.TradingService.save_local_settings",
+        lambda self, mode, product: path,
+    )
+    assert main(["config", "--mode", "TESTNET", "--product", "SPOT"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {"config": str(path), "mode": "TESTNET", "product": "SPOT"}
