@@ -178,12 +178,12 @@ def test_live_node_is_only_a_compatibility_entrypoint():
     assert "def run_service" not in source
 
 
-def test_paper_status_module_has_no_standalone_operator_cli():
+def test_paper_status_is_owned_by_trading_service_only():
     from pathlib import Path
 
-    source = Path("src/mastertrd/paper_status.py").read_text(encoding="utf-8")
-    assert "argparse" not in source
-    assert 'if __name__ == "__main__"' not in source
+    assert not Path("src/mastertrd/paper_status.py").exists()
+    source = Path("src/mastertrd/trading_service.py").read_text(encoding="utf-8")
+    assert "def paper_status_payload" in source
 
 
 def test_snapshot_includes_persisted_paper_session_status(tmp_path):

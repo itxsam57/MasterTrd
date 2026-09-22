@@ -20,7 +20,8 @@ def test_operations_runbook_is_local_first_and_covers_runtime_safety():
 
     assert "mastertrd app" in text
     assert "mastertrd scheduler" in text
-    assert "mastertrd.live_node" in text
+    assert "mastertrd trading" in text
+    assert "python -m mastertrd.live_node" not in text
     assert "LIVE_TRADING_ENABLED=false" in text
     assert "LIVE_TRADING_ENABLED=true" in text
     assert "provider admission" in lower

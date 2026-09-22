@@ -66,13 +66,12 @@ jobs:
             tests/test_hft_execution_policy.py \
             tests/test_risk_state.py \
             tests/test_risk_runtime.py \
-            tests/test_live_node.py \
+            tests/test_trading_service.py \
             tests/test_runtime_shutdown.py \
             tests/test_paper_forward.py \
             tests/test_research_brain_specialist_wiring.py \
             tests/test_specialist_orchestrator.py \
             tests/test_testnet_workflow_candidate_bundle.py \
-            tests/test_oracle_deployment.py \
             tests/test_operations_docs.py \
             tests/integration/test_research_all_families.py \
             tests/integration/test_generated_strategy_execution_contract.py \

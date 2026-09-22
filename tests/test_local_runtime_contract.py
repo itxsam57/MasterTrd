@@ -34,7 +34,7 @@ def test_active_product_docs_are_local_first_and_keep_live_safety():
         "LIVE",
         "LIVE_TRADING_ENABLED=false",
         "LIVE_TRADING_ENABLED=true",
-        "mastertrd.live_node",
+        "mastertrd trading",
     ):
         assert required in text
 

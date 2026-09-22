@@ -82,7 +82,7 @@ jobs:
 
           from mastertrd.contracts import RuntimeMode
           from mastertrd.credentials import load_binance_credentials
-          from mastertrd.live_node import NodeReadiness, preflight_node
+          from mastertrd.trading_service import TradingReadiness, TradingService
           from mastertrd.runtime import RuntimeConfig
 
           runtime = RuntimeConfig.from_env(dict(os.environ))
@@ -95,8 +95,8 @@ jobs:
           else:
               if credentials is None:
                   raise SystemExit('TESTNET credentials were not loaded')
-              readiness = preflight_node(runtime, os.environ)
-              if readiness is not NodeReadiness.EXCHANGE_READY:
+              readiness = TradingService(os.environ).preflight()
+              if readiness is not TradingReadiness.EXCHANGE_READY:
                   raise SystemExit(f'unexpected readiness: {readiness}')
               print('TESTNET credential/runtime preflight: OK')
           PY

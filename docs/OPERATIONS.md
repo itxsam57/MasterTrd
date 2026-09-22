@@ -43,7 +43,7 @@ Use a normal user-owned checkout and virtual environment. For a persistent tradi
 
 ```bash
 MASTERTRD_MODE=PAPER LIVE_TRADING_ENABLED=false \
-  uv run python -m mastertrd.live_node
+  uv run mastertrd trading
 ```
 
 Keep the checkout, `.venv`, and writable `artifacts/` directories on local storage. Do not run the trading worker from a temporary CI runner.
@@ -56,7 +56,7 @@ Use PowerShell from the repository root:
 $env:MASTERTRD_MODE = "PAPER"
 $env:LIVE_TRADING_ENABLED = "false"
 uv run mastertrd app
-uv run python -m mastertrd.live_node
+uv run mastertrd trading
 ```
 
 Use Windows Task Scheduler or another local supervisor only if persistent auto-start is desired. The runtime safety variables stay identical across Windows and Linux.

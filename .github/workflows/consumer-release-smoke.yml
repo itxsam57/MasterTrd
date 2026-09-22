@@ -80,22 +80,22 @@ jobs:
           record_failure \
             'live-disabled-default' \
             'LIVE mode requires LIVE_TRADING_ENABLED=true' \
-            env MASTERTRD_MODE=LIVE LIVE_TRADING_ENABLED=false uv run python -m mastertrd.live_node
+            env MASTERTRD_MODE=LIVE LIVE_TRADING_ENABLED=false uv run mastertrd trading
 
           record_failure \
             'live-flag-outside-live' \
             'LIVE_TRADING_ENABLED=true is invalid outside LIVE mode' \
-            env MASTERTRD_MODE=PAPER LIVE_TRADING_ENABLED=true uv run python -m mastertrd.live_node
+            env MASTERTRD_MODE=PAPER LIVE_TRADING_ENABLED=true uv run mastertrd trading
 
           record_failure \
             'paper-missing-operator-inputs' \
             'MASTERTRD_CANDIDATE_MANIFEST is required for persistent execution' \
-            env MASTERTRD_MODE=PAPER LIVE_TRADING_ENABLED=false uv run python -m mastertrd.live_node
+            env MASTERTRD_MODE=PAPER LIVE_TRADING_ENABLED=false uv run mastertrd trading
 
           record_failure \
             'testnet-missing-operator-inputs' \
             'MASTERTRD_CANDIDATE_MANIFEST is required for persistent execution' \
-            env MASTERTRD_MODE=TESTNET LIVE_TRADING_ENABLED=false uv run python -m mastertrd.live_node
+            env MASTERTRD_MODE=TESTNET LIVE_TRADING_ENABLED=false uv run mastertrd trading
 
           record_failure \
             'research-job-missing-code-identity' \
@@ -163,7 +163,7 @@ jobs:
               MASTERTRD_CODE_HASH="$GITHUB_SHA" \
               MASTERTRD_PUBLIC_FEED_FIXTURE="$PWD/artifacts/consumer-release-smoke/feed.jsonl" \
               MASTERTRD_PAPER_START_NS=1 \
-              uv run python -m mastertrd.live_node 2>&1
+              uv run mastertrd trading 2>&1
           )
           paper_status=$?
           set -e

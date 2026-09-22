@@ -12,11 +12,11 @@ Local-first research, backtesting, PAPER, and provider-gated LIVE trading from o
 - Baseline verification: `730 passed, 4 warnings`
 - Implementation branch: `feat/thin-core-local-first-20260912`
 - LIVE: locked / not admitted for real money yet
-- PAPER: existing runtime preserved while control plane is simplified
+- PAPER: single-strategy runtime proven; shared multi-strategy portfolio worker is the current slice
 
 ## Current slice
 
-**Thin-core cleanup:** foundation is complete; next slice consolidates duplicated PAPER/runtime/operator wrappers behind the local app and shared trading service boundary.
+**Shared portfolio worker:** the local control plane and TradingService consolidation are complete; the next slice puts multiple PAPER strategies through one shared portfolio/risk execution path.
 
 ## Completed slices
 
@@ -27,11 +27,13 @@ Local-first research, backtesting, PAPER, and provider-gated LIVE trading from o
 - [x] Isolated local research jobs (`61c9077`, env-isolation fix `1ff3bc1`)
 - [x] Local Streamlit app (`a2f6ae6`)
 - [x] Local scheduler / hosted-cron removal (`43b8852`)
+- [x] Unified TradingService runtime boundary
+- [x] Legacy Oracle/operator runtime removal and local-only boundary
 - [x] Full foundation regression (`748 passed, 4 warnings`)
 
 ## Next incomplete slice
 
-Consolidate PAPER/runtime/operator wrappers into one local trading-service boundary, then delete superseded wrappers only after parity tests pass.
+Run multiple PAPER strategies concurrently through one shared portfolio/risk path, then expose that state through the local app.
 
 ## Known blockers
 
@@ -45,4 +47,3 @@ Consolidate PAPER/runtime/operator wrappers into one local trading-service bound
 - Consumer smoke: `tests/test_consumer_local_smoke.py` -> PASS
 - Worker environment isolation regression: PASS
 - Lock/deps: `uv lock --check && uv pip check`
-- Workspace: `/home/ubuntu/projects/MasterTrd-thin-core-20260912`

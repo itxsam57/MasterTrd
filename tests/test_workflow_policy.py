@@ -217,3 +217,18 @@ def test_research_stack_owns_strategy_universe_recipe_changes_and_traceability_t
     assert "tests/test_strategy_recipe_compiler.py" in lower
     assert "tests/test_research_recipe_scheduling.py" in lower
     assert "tests/integration/test_strategy_universe_research.py" in lower
+
+
+def test_active_workflows_use_trading_service_boundary():
+    from pathlib import Path
+
+    acceptance = Path(".github/workflows/acceptance.yml").read_text(encoding="utf-8")
+    consumer = Path(".github/workflows/consumer-release-smoke.yml").read_text(encoding="utf-8")
+    testnet = Path(".github/workflows/testnet-smoke.yml").read_text(encoding="utf-8")
+
+    assert "tests/test_live_node.py" not in acceptance
+    assert "tests/test_oracle_deployment.py" not in acceptance
+    assert "mastertrd.live_node" not in consumer
+    assert "uv run mastertrd trading" in consumer
+    assert "from mastertrd.live_node import NodeReadiness, preflight_node" not in testnet
+    assert "from mastertrd.trading_service import TradingReadiness, TradingService" in testnet

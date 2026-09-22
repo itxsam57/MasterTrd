@@ -67,6 +67,7 @@ uv run mastertrd strategies
 uv run mastertrd backtest --recipe ema-cross-fast
 uv run mastertrd jobs
 uv run mastertrd scheduler
+uv run mastertrd trading
 ```
 
 Backtests launch in separate local worker processes under `artifacts/local-jobs/`, so heavy research does not run inside the UI process. Recurring canary/research work is owned by the optional local scheduler rather than required GitHub cron.

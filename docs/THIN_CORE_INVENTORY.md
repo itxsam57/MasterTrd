@@ -29,7 +29,7 @@ This is a migration map, not a deletion command. **DELETE** means delete only af
 | `src/mastertrd/hidden_gate.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
 | `src/mastertrd/holdout.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
 | `src/mastertrd/live_evidence.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/live_node.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
+| `src/mastertrd/live_node.py` | **KEEP** | Tiny compatibility entrypoint delegating to TradingService; mastertrd trading is canonical. |
 | `src/mastertrd/live_readiness.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
 | `src/mastertrd/market_capabilities.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
 | `src/mastertrd/memory.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
@@ -59,7 +59,7 @@ This is a migration map, not a deletion command. **DELETE** means delete only af
 | `src/mastertrd/paper_forward.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
 | `src/mastertrd/paper_hardening.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
 | `src/mastertrd/paper_session.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
-| `src/mastertrd/paper_status.py` | **MERGE** | Consolidate overlapping orchestration/state wrappers behind one research or trading service boundary. |
+| `src/mastertrd/paper_status.py` | **DELETE** | Folded into TradingService; no separate operator/status module remains. |
 | `src/mastertrd/product_contracts.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
 | `src/mastertrd/public_market_canary.py` | **REPLACE** | Replace operator/cloud-specific wrapper with local app/service/scheduler path while preserving core behavior. |
 | `src/mastertrd/reconciliation.py` | **KEEP** | Core strategy, data, validation, execution semantics, provider capability, or safety primitive. |
