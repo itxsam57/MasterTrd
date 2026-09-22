@@ -93,8 +93,8 @@ jobs:
             env MASTERTRD_MODE=PAPER LIVE_TRADING_ENABLED=false uv run mastertrd trading
 
           record_failure \
-            'testnet-missing-operator-inputs' \
-            'MASTERTRD_CANDIDATE_MANIFEST is required for persistent execution' \
+            'testnet-missing-credentials' \
+            'Missing Binance TESTNET credentials' \
             env MASTERTRD_MODE=TESTNET LIVE_TRADING_ENABLED=false uv run mastertrd trading
 
           record_failure \

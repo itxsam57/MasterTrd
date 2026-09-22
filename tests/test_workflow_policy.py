@@ -230,5 +230,6 @@ def test_active_workflows_use_trading_service_boundary():
     assert "tests/test_oracle_deployment.py" not in acceptance
     assert "mastertrd.live_node" not in consumer
     assert "uv run mastertrd trading" in consumer
+    assert "Missing Binance TESTNET credentials" in consumer
     assert "from mastertrd.live_node import NodeReadiness, preflight_node" not in testnet
     assert "from mastertrd.trading_service import TradingReadiness, TradingService" in testnet
