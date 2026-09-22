@@ -100,15 +100,15 @@ def run_risk_review(
             code_hash=code_hash,
         )
 
-    legacy = risk_review_evidence(candidate, limits)
+    review = risk_review_evidence(candidate, limits)
     return _evidence(
         candidate,
         evidence_type="risk_review",
         dataset_hash=dataset_hash,
         code_hash=code_hash,
-        passed=legacy.passed,
-        status=LiveEvidenceStatus.COMPLETED if legacy.passed else LiveEvidenceStatus.FAILED,
-        metrics={**legacy.metrics, "testnet_mode": 1.0},
+        passed=review.passed,
+        status=LiveEvidenceStatus.COMPLETED if review.passed else LiveEvidenceStatus.FAILED,
+        metrics={**review.metrics, "testnet_mode": 1.0},
     )
 
 

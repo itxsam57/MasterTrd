@@ -1,6 +1,4 @@
-import numpy as np
-
-from mastertrd.hft_engine import probe_hftbacktest_engine
+from mastertrd.research.hft_specialist import probe_hftbacktest_engine
 
 
 def test_real_hftbacktest_engine_processes_l2_events():

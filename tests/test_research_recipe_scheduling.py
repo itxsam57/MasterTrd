@@ -52,8 +52,8 @@ def test_research_brain_config_rejects_recipe_from_unconfigured_family() -> None
         raise AssertionError("recipe from an unconfigured family must fail closed")
 
 
-def test_candidate_generation_passes_exact_recipe_identity_to_generator(monkeypatch) -> None:
-    calls: list[dict[str, object]] = []
+def test_candidate_generation_passes_exact_recipe_identity_to_compiler(monkeypatch) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
     monkeypatch.setattr(
         candidate_generation,
         "family_instrument_sets",
@@ -61,8 +61,9 @@ def test_candidate_generation_passes_exact_recipe_identity_to_generator(monkeypa
     )
     monkeypatch.setattr(
         candidate_generation,
-        "generate_candidate",
-        lambda **kwargs: calls.append(kwargs) or SimpleNamespace(family=kwargs["family"]),
+        "compile_strategy_recipe",
+        lambda recipe_id, **kwargs: calls.append((recipe_id, kwargs))
+        or SimpleNamespace(family=strategy_recipe(recipe_id).family),
     )
     dataset = SimpleNamespace(
         nautilus_instruments={"BTCUSDT.BINANCE": object()},
@@ -75,13 +76,13 @@ def test_candidate_generation_passes_exact_recipe_identity_to_generator(monkeypa
     )
 
     assert len(batch.candidates) == 4
-    assert [call["recipe_id"] for call in calls] == [
+    assert [recipe_id for recipe_id, _ in calls] == [
         "ema-cross-fast",
         "ema-cross-fast",
         "ema-cross-balanced",
         "ema-cross-balanced",
     ]
-    assert [call["seed"] for call in calls] == [5, 6, 5, 6]
+    assert [call["seed"] for _, call in calls] == [5, 6, 5, 6]
 
 
 def test_public_run_payload_records_recipe_identity_without_secrets() -> None:

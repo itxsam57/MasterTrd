@@ -1,7 +1,7 @@
 from math import isfinite
 
 from mastertrd.genome import StrategyGenome
-from mastertrd.hft_engine import run_hftbacktest_stress_suite
+from mastertrd.research.hft_specialist import run_hftbacktest_stress_suite
 from mastertrd.hft_validation import HftStressPolicy, hft_stress_evidence
 
 

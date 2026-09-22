@@ -6,7 +6,7 @@ from typing import Any
 from .genome import StrategyGenome
 from .research.generator import family_instrument_sets, generate_candidate
 from .strategy_families import family_spec
-from .strategy_universe import strategy_recipe
+from .strategy_universe import compile_strategy_recipe, strategy_recipe
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,8 +27,8 @@ def generate_research_candidates(config: Any, dataset: Any) -> ResearchCandidate
 
     Families with no compatible universe are recorded as explicit blockers rather
     than being silently downgraded or emitted as structurally invalid genomes.
-    When a config supplies named recipe IDs, their exact identity is forwarded to
-    the shared generator; legacy family-only callers keep the previous behavior.
+    Named recipe IDs use the catalog compiler directly; family-only research uses
+    the family generator.
     """
     missing_metadata = [
         instrument_id
@@ -76,12 +76,11 @@ def generate_research_candidates(config: Any, dataset: Any) -> ResearchCandidate
             for instrument_set in instrument_sets:
                 for seed in range(config.seed_start, config.seed_stop):
                     candidates.append(
-                        generate_candidate(
-                            family=family,
+                        compile_strategy_recipe(
+                            recipe_id,
                             instruments=instrument_set,
                             seed=seed,
                             trade_size=config.trade_size,
-                            recipe_id=recipe_id,
                             timeframe=getattr(config, "timeframe", None),
                         ),
                     )

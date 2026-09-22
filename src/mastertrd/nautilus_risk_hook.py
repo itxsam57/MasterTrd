@@ -2,9 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from nautilus_trader.examples.strategies.ema_cross import EMACross
-
-from .genome import StrategyGenome
 from .risk import RiskAction, RiskSnapshot
 from .risk_runtime import OrderIntent, RiskRuntime
 
@@ -94,36 +91,3 @@ class NautilusRiskMixin:
             return None
         self._risk_orders_allowed += 1
         return super().submit_order(order, *args, **kwargs)
-
-
-class RiskManagedEMACross(NautilusRiskMixin, EMACross):
-    """Legacy compatibility wrapper for tests and non-promotion callers.
-
-    Promotion-grade trend compilation no longer selects Nautilus's bundled EMA
-    example strategy; see ``compile_genome_to_nautilus``.
-    """
-
-    def __init__(
-        self,
-        *,
-        config,
-        genome: StrategyGenome | None = None,
-        risk_runtime: RiskRuntime | None = None,
-    ) -> None:
-        super().__init__(config=config)
-        self.genome = genome
-        self._risk_last_price = 0.0
-        configured_id = getattr(config, "strategy_id", None)
-        strategy_id = (
-            genome.strategy_id
-            if genome is not None
-            else str(configured_id or f"nautilus:{config.instrument_id.value}")
-        )
-        self._configure_risk_runtime(strategy_id, risk_runtime)
-
-    def on_bar(self, bar) -> None:
-        self._risk_last_price = float(bar.close.as_double())
-        super().on_bar(bar)
-
-    def _risk_reference_price(self, instrument_id) -> float:
-        return self._risk_last_price

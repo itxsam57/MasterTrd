@@ -242,19 +242,19 @@ def compile_strategy_recipe(recipe_id: str, *, instruments: Sequence[str], seed:
         raise ValueError("at least one instrument is required")
     _validate_recipe_instruments(recipe, instruments)
 
-    from mastertrd.research import generator as legacy
+    from mastertrd.research import generator
 
     digest = sha256(f"{recipe_id}|{seed}".encode()).digest()
     recipe_seed = int.from_bytes(digest[:8], "big", signed=False)
     rng = random.Random(recipe_seed)
-    entry, exit_rule, filters = legacy._rules(recipe.family, rng)
+    entry, exit_rule, filters = generator._rules(recipe.family, rng)
     if entry.get("type") != recipe.entry_kind or exit_rule.get("type") != recipe.exit_kind:
         raise RuntimeError(f"recipe {recipe_id} no longer matches executable family semantics")
     if trade_size is not None:
         entry = dict(entry)
-        entry["trade_size"] = legacy._validated_trade_size(trade_size)
+        entry["trade_size"] = generator._validated_trade_size(trade_size)
 
-    allowed_timeframes = legacy._TIMEFRAMES[recipe.family]
+    allowed_timeframes = generator._TIMEFRAMES[recipe.family]
     if timeframe is not None and timeframe not in allowed_timeframes:
         raise ValueError(f"timeframe {timeframe} is not supported by recipe {recipe_id}")
     timeframe = timeframe or rng.choice(allowed_timeframes)

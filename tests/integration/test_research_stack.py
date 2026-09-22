@@ -2,7 +2,9 @@ import numpy as np
 import pandas as pd
 
 import mastertrd.nautilus_paper as nautilus_paper
-from mastertrd.research.market_stats import cointegration_pvalue, detect_change_points, forecast_volatility
+from mastertrd.research.regimes import discover_regimes
+from mastertrd.research.statistics import cointegration_evidence
+from mastertrd.research.volatility import forecast_volatility
 from mastertrd.research.optimize import optimize_integer_parameter
 from mastertrd.research.screen import moving_average_screen
 
@@ -37,22 +39,22 @@ def test_optuna_finds_integer_near_known_optimum():
 
 def test_regime_detector_finds_structural_break():
     series = np.r_[np.zeros(80), np.ones(80) * 5, np.ones(80) * -3]
-    breaks = detect_change_points(series, penalty=5)
-    assert any(abs(point - 80) <= 5 for point in breaks)
-    assert any(abs(point - 160) <= 5 for point in breaks)
+    evidence = discover_regimes(series, min_size=3, penalty=5)
+    assert any(abs(point - 80) <= 5 for point in evidence.change_points)
+    assert any(abs(point - 160) <= 5 for point in evidence.change_points)
 
 
 def test_cointegration_detects_shared_stochastic_trend():
     rng = np.random.default_rng(12)
     x = np.cumsum(rng.normal(size=400))
     y = 2.5 * x + rng.normal(scale=0.4, size=400)
-    assert cointegration_pvalue(x, y) < 0.05
+    assert cointegration_evidence(x, y, max_pvalue=0.05).passed is True
 
 
 def test_garch_volatility_forecast_is_positive_and_finite():
     rng = np.random.default_rng(21)
     returns = rng.normal(0, 0.01, 500)
-    vol = forecast_volatility(returns)
+    vol = forecast_volatility(returns, horizon=1).forecast[0]
     assert np.isfinite(vol)
     assert vol > 0
 

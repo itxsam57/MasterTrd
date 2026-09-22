@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import mastertrd.live_node as live_node
 import mastertrd.nautilus_risk_hook as nautilus_risk_hook
 from mastertrd.acceptance import (
     AcceptanceProbe,
@@ -55,7 +54,8 @@ def test_passed_implementation_with_owner_blocker_is_process_ready_not_complete(
 
 
 def test_obsolete_runtime_and_risk_compatibility_shims_are_removed() -> None:
-    assert not hasattr(live_node, "load_execution_runtime_factory")
+    assert not (ROOT / "src" / "mastertrd" / "live_node.py").exists()
+    assert not hasattr(nautilus_risk_hook, "RiskManagedEMACross")
     assert not hasattr(nautilus_risk_hook, "default_nautilus_risk_limits")
 
 

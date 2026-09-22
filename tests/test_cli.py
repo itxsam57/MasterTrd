@@ -57,7 +57,14 @@ def test_app_command_delegates_to_streamlit(monkeypatch):
     monkeypatch.setattr("mastertrd.cli.subprocess.run", fake_run)
     assert main(["app"]) == 0
     assert launched["argv"][1:4] == ["-m", "streamlit", "run"]
-    assert launched["argv"][-2:] == ["--server.address", "127.0.0.1"]
+    assert launched["argv"][-6:] == [
+        "--server.address",
+        "127.0.0.1",
+        "--server.headless",
+        "true",
+        "--browser.gatherUsageStats",
+        "false",
+    ]
 
 
 def test_config_command_saves_only_safe_local_settings(capsys, monkeypatch, tmp_path):

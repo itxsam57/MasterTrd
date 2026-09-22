@@ -1,7 +1,7 @@
-from mastertrd.hft_engine import HftEngineProbeResult
+from mastertrd.research.hft_specialist import HftEngineProbeResult
 
 
-def test_hft_engine_probe_result_is_a_stable_core_contract():
+def test_hft_specialist_probe_result_is_a_stable_contract():
     result = HftEngineProbeResult(
         engine="hftbacktest",
         engine_version="2.4.4",

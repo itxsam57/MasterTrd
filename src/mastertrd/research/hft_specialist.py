@@ -4,8 +4,27 @@ from dataclasses import dataclass
 from importlib.metadata import version
 from math import isfinite
 
-from ..hft_engine import HftEngineProbeResult
+from ..genome import StrategyGenome
 from ..hft_validation import HftStressReport
+
+
+@dataclass(frozen=True, slots=True)
+class HftEngineProbeResult:
+    engine: str
+    engine_version: str
+    event_count: int
+    best_bid: float
+    best_ask: float
+    processed: bool
+
+
+def _validate_stress_request(dataset_hash: str, code_hash: str, cycles: int) -> None:
+    if not dataset_hash:
+        raise ValueError("dataset_hash is required")
+    if not code_hash:
+        raise ValueError("code_hash is required")
+    if cycles <= 0:
+        raise ValueError("cycles must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,7 +146,7 @@ def _run_hft_scenario(
         hbt.close()
 
 
-def probe_hftbacktest_engine_impl() -> HftEngineProbeResult:
+def probe_hftbacktest_engine() -> HftEngineProbeResult:
     import numpy as np
     from hftbacktest import (
         BacktestAsset,
@@ -183,13 +202,14 @@ def probe_hftbacktest_engine_impl() -> HftEngineProbeResult:
         hbt.close()
 
 
-def run_hftbacktest_stress_suite_impl(
-    candidate,
+def run_hftbacktest_stress_suite(
+    candidate: StrategyGenome,
     *,
     dataset_hash: str,
     code_hash: str,
-    cycles: int,
+    cycles: int = 30,
 ) -> HftStressReport:
+    _validate_stress_request(dataset_hash, code_hash, cycles)
     baseline = _run_hft_scenario(
         cycles=cycles,
         ask_price=100.2,

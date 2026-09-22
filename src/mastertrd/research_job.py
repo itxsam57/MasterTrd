@@ -28,6 +28,7 @@ from .strategy_universe import (
     AssetClass,
     RecipeReadiness,
     STRATEGY_RECIPES,
+    compile_strategy_recipe,
     strategy_recipe,
 )
 
@@ -559,12 +560,20 @@ def run_research_job(
             requested_timeframes = plan.timeframes or (None,)
             for requested_timeframe in requested_timeframes:
                 for seed in range(plan.seed_start, plan.seed_stop):
-                    preview = generate_candidate(
-                        family=family,
-                        instruments=(plan.instruments[0],),
-                        seed=seed,
-                        recipe_id=recipe_id,
-                        timeframe=requested_timeframe,
+                    preview = (
+                        generate_candidate(
+                            family=family,
+                            instruments=(plan.instruments[0],),
+                            seed=seed,
+                            timeframe=requested_timeframe,
+                        )
+                        if recipe_id is None
+                        else compile_strategy_recipe(
+                            recipe_id,
+                            instruments=(plan.instruments[0],),
+                            seed=seed,
+                            timeframe=requested_timeframe,
+                        )
                     )
                     timeframe = preview.timeframe
                     if timeframe not in dataset_cache:

@@ -45,7 +45,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         payload = [receipt.to_dict() for receipt in list_local_jobs(Path(args.root))]
     elif args.command == "app":
         app_path = Path(__file__).with_name("local_app.py")
-        result = subprocess.run([sys.executable, "-m", "streamlit", "run", str(app_path), "--server.address", "127.0.0.1"], check=False)
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "streamlit",
+                "run",
+                str(app_path),
+                "--server.address",
+                "127.0.0.1",
+                "--server.headless",
+                "true",
+                "--browser.gatherUsageStats",
+                "false",
+            ],
+            check=False,
+        )
         return int(result.returncode)
     elif args.command == "scheduler":
         run_scheduler(poll_seconds=args.poll_seconds)

@@ -86,31 +86,19 @@ def test_non_executable_recipe_fails_closed_with_catalog_blocker() -> None:
         )
 
 
-def test_generate_candidate_recipe_path_uses_compiler_and_legacy_path_is_unchanged() -> None:
-    via_generator = generate_candidate(
+
+def test_family_generator_and_named_recipe_compiler_have_distinct_ownership() -> None:
+    generated = generate_candidate(
         family="trend",
         instruments=("BTCUSDT.BINANCE",),
         seed=13,
-        recipe_id="ema-cross-balanced",
     )
-    direct = compile_strategy_recipe(
+    compiled = compile_strategy_recipe(
         "ema-cross-balanced",
         instruments=("BTCUSDT.BINANCE",),
         seed=13,
     )
-    assert via_generator.canonical_payload() == direct.canonical_payload()
 
-    legacy = generate_candidate(
-        family="trend",
-        instruments=("BTCUSDT.BINANCE",),
-        seed=13,
-    )
-    assert legacy.style == "trend"
-
-    with pytest.raises(ValueError, match="belongs to family momentum"):
-        generate_candidate(
-            family="trend",
-            instruments=("BTCUSDT.BINANCE",),
-            seed=13,
-            recipe_id="rsi-momentum-balanced",
-        )
+    assert generated.style == "trend"
+    assert compiled.style == "recipe:ema-cross-balanced"
+    assert generated.strategy_id != compiled.strategy_id

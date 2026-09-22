@@ -129,7 +129,7 @@
 **Files:**
 - Create: `src/mastertrd/runtime_factory.py`
 - Create: `src/mastertrd/binance_stream.py`
-- Modify: `src/mastertrd/live_node.py`
+- Modify: `src/mastertrd/trading_service.py`
 - Modify: `src/mastertrd/execution_runtime.py`
 - Modify: `src/mastertrd/nautilus_paper.py`
 - Modify: `src/mastertrd/reconciliation.py`
@@ -140,7 +140,7 @@
 
 **Interfaces:**
 - Produce `build_execution_runtime(runtime: RuntimeConfig, environ: Mapping[str,str]) -> ExecutionRuntime` as the canonical factory.
-- `live_node.main()` uses the canonical factory by default; arbitrary `MASTERTRD_EXECUTION_FACTORY` is removed from production requirements.
+- `TradingService` uses the canonical factory; the obsolete `live_node.py` compatibility entrypoint and arbitrary `MASTERTRD_EXECUTION_FACTORY` are removed.
 - PAPER uses real Binance public market data plus Nautilus sandbox execution; DEMO/TESTNET/LIVE use Nautilus Binance adapters and mode-specific credentials.
 - Restart recovery restores journal/state and reconciles before accepting new risk.
 

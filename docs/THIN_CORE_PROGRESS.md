@@ -32,11 +32,14 @@ which is intentionally external and cannot be synthesized.
 - [x] Provider/admission view and safe non-secret local settings
 - [x] Validated research-finalist -> shared PAPER portfolio handoff with code/lock binding
 - [x] Obsolete PaperLedger, JSONL memory, duplicate research-cycle/dependency registry removed
-- [x] Final implementation regression: **727 passed, 0 failed**
+- [x] Final implementation regression: **726 passed, 0 failed**
 - [x] `uv lock --check` and `uv pip check` clean
 - [x] Core coverage gate: **90%** with threshold unchanged
-- [x] Mandatory capability gate: **164 passed**
+- [x] Mandatory capability gate: **163 passed**
 - [x] Execution-stack focused gate: **90 passed**
+- [x] Research-stack focused gate: **84 passed**
+- [x] Static cleanup audit: no import cycles, unused production imports, or high-confidence dead symbols
+- [x] Fresh `mastertrd app` startup verified non-interactive with Streamlit health endpoint `ok`
 
 ## Next incomplete slice
 

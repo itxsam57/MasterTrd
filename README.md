@@ -22,7 +22,7 @@ one Streamlit app, isolated research workers, a persistent `TradingService` work
 shared multi-strategy PAPER execution through one Nautilus account/risk path, local
 scheduling, result/health views, provider readiness, and a persistent emergency stop.
 
-The current implementation regression is **727 passed, 0 failed**, with
+The current implementation regression is **726 passed, 0 failed**, with
 `uv lock --check` and `uv pip check` clean. The release gate is exact-head acceptance;
 `docs/THIN_CORE_PROGRESS.md` records the current closure evidence and
 `docs/ACCEPTANCE_REPORT.md` remains the checked-in historical provenance snapshot.

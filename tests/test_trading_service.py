@@ -168,15 +168,6 @@ def test_run_forever_registers_sigint_and_sigterm_before_runtime_start():
     assert observed_stop == [False]
 
 
-def test_live_node_is_only_a_compatibility_entrypoint():
-    from pathlib import Path
-
-    source = Path("src/mastertrd/live_node.py").read_text(encoding="utf-8")
-    assert "TradingService" in source
-    assert "def preflight_node" not in source
-    assert "def run_node" not in source
-    assert "def run_service" not in source
-
 
 def test_paper_status_is_owned_by_trading_service_only():
     from pathlib import Path
