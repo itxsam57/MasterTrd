@@ -93,3 +93,42 @@ def test_autopilot_cycle_launches_bounded_rotating_jobs(tmp_path, monkeypatch):
     assert [item[0] for item in launched] == ["ema-cross-fast", "atr-breakout-fast"]
     assert all(item[1]["seed_stop"] - item[1]["seed_start"] == 2 for item in launched)
     assert all(item[1]["product"] == "SPOT" for item in launched)
+
+
+def test_autopilot_maintenance_reconciles_without_launching_research(tmp_path, monkeypatch):
+    calls = {"paper": 0, "worker": 0}
+
+    monkeypatch.setattr(
+        autopilot,
+        "_auto_prepare_paper",
+        lambda service, *, job_root: calls.__setitem__("paper", calls["paper"] + 1)
+        or {"configured": False, "reason": "waiting"},
+    )
+    monkeypatch.setattr(
+        autopilot,
+        "_ensure_paper_worker",
+        lambda service, *, log_path: calls.__setitem__("worker", calls["worker"] + 1)
+        or {"started": False, "reason": "waiting"},
+    )
+
+    config = AutopilotConfig(
+        enabled=True,
+        products=("SPOT",),
+        universe_size=2,
+        recipes_per_cycle=1,
+        seed_count=1,
+        auto_prepare_paper=True,
+        auto_start_paper=True,
+        max_running_jobs=1,
+    )
+    state = autopilot.run_autopilot_maintenance(
+        config=config,
+        job_root=tmp_path / "jobs",
+        state_path=tmp_path / "state.json",
+        service=object(),
+    )
+
+    assert state["maintenance_status"] == "OK"
+    assert state["maintenance_paper_action"]["reason"] == "waiting"
+    assert state["maintenance_paper_worker"]["reason"] == "waiting"
+    assert calls == {"paper": 1, "worker": 1}

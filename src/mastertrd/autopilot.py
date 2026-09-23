@@ -253,6 +253,50 @@ def _auto_prepare_paper(
     }
 
 
+def run_autopilot_maintenance(
+    *,
+    config: AutopilotConfig | None = None,
+    job_root: Path = Path("artifacts/local-jobs"),
+    state_path: Path | None = None,
+    service: TradingService | None = None,
+) -> dict[str, object]:
+    """Reconcile completed research into PAPER without launching new research work."""
+    active_config = config or load_autopilot_config()
+    state_file = autopilot_state_path() if state_path is None else Path(state_path)
+    state = _load_state(state_file)
+    now = datetime.now(timezone.utc).isoformat()
+
+    if not active_config.enabled:
+        payload = {
+            **state,
+            "last_maintenance_at": now,
+            "maintenance_status": "DISABLED",
+        }
+        _save_state(state_file, payload)
+        return payload
+
+    active_service = service or TradingService()
+    paper_action: dict[str, object] = {"configured": False, "reason": "disabled"}
+    worker_action: dict[str, object] = {"started": False, "reason": "disabled"}
+    if active_config.auto_prepare_paper:
+        paper_action = _auto_prepare_paper(active_service, job_root=job_root)
+    if active_config.auto_start_paper:
+        worker_action = _ensure_paper_worker(
+            active_service,
+            log_path=Path("artifacts/trading/autopilot-paper-worker.log"),
+        )
+
+    payload = {
+        **state,
+        "last_maintenance_at": now,
+        "maintenance_status": "OK",
+        "maintenance_paper_action": paper_action,
+        "maintenance_paper_worker": worker_action,
+    }
+    _save_state(state_file, payload)
+    return payload
+
+
 def run_autopilot_cycle(
     *,
     config: AutopilotConfig | None = None,
