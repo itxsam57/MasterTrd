@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from decimal import Decimal
 from importlib.metadata import version
 from math import isfinite, prod
 from statistics import mean, stdev
@@ -123,17 +124,35 @@ def _build_evaluation_engine(
     from nautilus_trader.model.instruments import CurrencyPair
     from nautilus_trader.model.objects import Money
 
-    all_spot = all(isinstance(instrument, CurrencyPair) for instrument in instruments.values())
-    account_type = AccountType.CASH if all_spot else AccountType.MARGIN
+    spot_flags = [
+        isinstance(instrument, CurrencyPair)
+        for instrument in instruments.values()
+    ]
+    all_spot = all(spot_flags)
+    all_margin = not any(spot_flags)
+    if not all_spot and not all_margin:
+        raise ValueError(
+            "generalized bar evaluation cannot mix cash and margin products in one venue account"
+        )
 
     engine = BacktestEngine(config=BacktestEngineConfig())
-    engine.add_venue(
-        venue=Venue(venue_name),
-        oms_type=OmsType.NETTING,
-        account_type=account_type,
-        base_currency=None,
-        starting_balances=[Money.from_str(value) for value in starting_balances],
-    )
+    venue_kwargs = {
+        "venue": Venue(venue_name),
+        "base_currency": None,
+        "starting_balances": [Money.from_str(value) for value in starting_balances],
+    }
+    if all_spot:
+        venue_kwargs.update(
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.CASH,
+        )
+    else:
+        venue_kwargs.update(
+            oms_type=OmsType.HEDGING,
+            account_type=AccountType.MARGIN,
+            default_leverage=Decimal("2"),
+        )
+    engine.add_venue(**venue_kwargs)
     for instrument in instruments.values():
         engine.add_instrument(instrument)
     return engine

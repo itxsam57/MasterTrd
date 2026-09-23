@@ -83,3 +83,26 @@ def test_real_nautilus_backtest_maps_to_evaluation_result():
     assert result.max_drawdown >= 0.0
     assert result.fees == 0.0
     assert result.slippage == 0.0
+
+
+def test_usdm_evaluation_engine_matches_margin_hedging_paper_account():
+    from nautilus_trader.model.enums import AccountType
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.test_kit.providers import TestInstrumentProvider
+
+    from mastertrd.nautilus_evaluation import _build_evaluation_engine
+
+    instrument = TestInstrumentProvider.ethusdt_perp_binance()
+    engine = _build_evaluation_engine(
+        instruments={instrument.id.value: instrument},
+        starting_balances=("100000 USDT",),
+    )
+    try:
+        engine.run(streaming=True)
+        account = engine.cache.account_for_venue(Venue("BINANCE"))
+        assert account is not None
+        assert account.type == AccountType.MARGIN
+        assert set(str(currency) for currency in account.balances_total()) == {"USDT"}
+    finally:
+        engine.end()
+        engine.dispose()
