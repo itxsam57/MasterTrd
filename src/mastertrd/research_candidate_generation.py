@@ -58,11 +58,22 @@ def generate_research_candidates(config: Any, dataset: Any) -> ResearchCandidate
         for recipe_id in recipe_ids:
             recipe = strategy_recipe(recipe_id)
             family = recipe.family
-            instrument_sets = family_instrument_sets(
+            compatible_sets = family_instrument_sets(
                 family,
                 metadata,
                 available_data_levels=available_levels,
             )
+            configured_sets = tuple(getattr(config, "instrument_sets", ()))
+            if configured_sets:
+                allowed = set(compatible_sets)
+                invalid = [items for items in configured_sets if tuple(items) not in allowed]
+                if invalid:
+                    raise ValueError(
+                        "configured research instrument_sets are incompatible with the family/data contract"
+                    )
+                instrument_sets = configured_sets
+            else:
+                instrument_sets = compatible_sets
             if not instrument_sets:
                 spec = family_spec(family)
                 blockers.append(

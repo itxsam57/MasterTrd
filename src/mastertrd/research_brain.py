@@ -18,7 +18,8 @@ from .hidden_gate import HiddenGatePolicy
 from .holdout import chronological_holdout
 from .memory_duckdb import DuckDbResearchMemory, ResearchStageReceipt
 from .nautilus_data import market_bars_to_nautilus
-from .nautilus_evaluation import run_binance_spot_evaluation
+from .nautilus_evaluation import run_nautilus_evaluation
+from .multi_leg_validation import MultiLegStressPolicy, run_nautilus_multi_leg_stress
 from .paper_cycle import start_generated_paper_cycle
 from .research.evolve import evolve_genomes
 from .research.optimize import optimize_genome
@@ -61,6 +62,7 @@ class ResearchBrainConfig:
     validation_budget: int
     paper_queue_cap: int
     recipe_ids: tuple[str, ...] = ()
+    instrument_sets: tuple[tuple[str, ...], ...] = ()
     timeframe: str | None = None
     hidden_fraction: float = 0.20
     trade_size: str = "0.01000"
@@ -70,6 +72,7 @@ class ResearchBrainConfig:
     slippage: float = 0.0
     stressed_fees: float = 0.001
     stressed_slippage: float = 0.001
+    multi_leg_policy: MultiLegStressPolicy | None = None
     robustness_policy: RobustnessPolicy = field(
         default_factory=lambda: RobustnessPolicy(
             min_trades_per_slice=1,
@@ -113,6 +116,15 @@ class ResearchBrainConfig:
             raise ValueError("research families and instruments are required")
         if len(set(self.recipe_ids)) != len(self.recipe_ids):
             raise ValueError("recipe_ids must be unique")
+        if len(set(self.instrument_sets)) != len(self.instrument_sets):
+            raise ValueError("instrument_sets must be unique")
+        for instrument_set in self.instrument_sets:
+            if not instrument_set:
+                raise ValueError("instrument_sets cannot contain an empty set")
+            if len(set(instrument_set)) != len(instrument_set):
+                raise ValueError("instrument_sets cannot contain duplicate instruments")
+            if not set(instrument_set).issubset(self.instruments):
+                raise ValueError("instrument_sets must be subsets of configured instruments")
         if self.recipe_ids:
             from .strategy_universe import RecipeReadiness, strategy_recipe
 
@@ -402,20 +414,67 @@ def _score(genome: StrategyGenome, dataset: ResearchDataset, config: ResearchBra
     return float(result.total_return)
 
 
-def _select_transfer_key(dataset: ResearchDataset, primary: str) -> str | None:
-    return next((key for key in sorted(dataset.bars_by_instrument) if key != primary), None)
-
-
-def _slice_hash(run_id: str, instrument: str, label: str, bars: Sequence[MarketBar]) -> str:
-    identity = (
-        run_id,
-        instrument,
-        label,
-        str(bars[0].timestamp),
-        str(bars[-1].timestamp),
-        str(len(bars)),
+def _aligned_bars_by_instrument(
+    dataset: ResearchDataset,
+    instrument_ids: Sequence[str],
+) -> dict[str, tuple[MarketBar, ...]]:
+    ids = tuple(instrument_ids)
+    if not ids:
+        raise ValueError("at least one instrument is required")
+    timestamp_maps = {
+        instrument_id: {
+            bar.timestamp: bar
+            for bar in _instrument_bars(dataset, instrument_id)
+        }
+        for instrument_id in ids
+    }
+    common = set.intersection(
+        *(set(values) for values in timestamp_maps.values())
     )
-    return hashlib.sha256("|".join(identity).encode()).hexdigest()
+    if not common:
+        raise ValueError("configured instruments have no aligned BAR observations")
+    ordered = tuple(sorted(common))
+    return {
+        instrument_id: tuple(timestamp_maps[instrument_id][timestamp] for timestamp in ordered)
+        for instrument_id in ids
+    }
+
+
+def _transfer_instrument_ids(
+    dataset: ResearchDataset,
+    candidate: StrategyGenome,
+) -> tuple[str, ...] | None:
+    required = len(candidate.instruments)
+    current = set(candidate.instruments)
+    alternatives = tuple(
+        key
+        for key in sorted(dataset.bars_by_instrument)
+        if key not in current
+    )
+    if len(alternatives) < required:
+        return None
+    return alternatives[:required]
+
+
+def _multi_slice_hash(
+    run_id: str,
+    label: str,
+    bars_by_instrument: Mapping[str, Sequence[MarketBar]],
+) -> str:
+    parts = [run_id, label]
+    for instrument_id in sorted(bars_by_instrument):
+        bars = tuple(bars_by_instrument[instrument_id])
+        if not bars:
+            raise ValueError(f"slice {label} is empty for {instrument_id}")
+        parts.extend(
+            (
+                instrument_id,
+                str(bars[0].timestamp),
+                str(bars[-1].timestamp),
+                str(len(bars)),
+            )
+        )
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()
 
 
 def _restore_final_report(
@@ -651,23 +710,42 @@ def run_research_brain(
                 continue
             admitted += 1
             try:
-                key = genome.instruments[0]
-                bars = _instrument_bars(dataset, key)
+                aligned = _aligned_bars_by_instrument(dataset, genome.instruments)
+                primary = genome.instruments[0]
                 research, _hidden, _manifest = chronological_holdout(
-                    bars,
+                    aligned[primary],
                     hidden_fraction=config.hidden_fraction,
                     min_research=config.validation_window * 4,
                     min_hidden=config.validation_window,
-                    dataset_hash=f"{dataset.dataset_hash}:{key}",
+                    dataset_hash=f"{dataset.dataset_hash}:{','.join(genome.instruments)}",
                 )
-                base = research[: config.validation_window]
-                instrument = dataset.nautilus_instruments[key]
-                events = market_bars_to_nautilus(base, instrument=instrument)
-                result = run_binance_spot_evaluation(
+                research_count = len(research)
+                research_by_instrument = {
+                    instrument_id: aligned[instrument_id][:research_count]
+                    for instrument_id in genome.instruments
+                }
+                base = {
+                    instrument_id: bars[: config.validation_window]
+                    for instrument_id, bars in research_by_instrument.items()
+                }
+                if any(len(bars) != config.validation_window for bars in base.values()):
+                    raise ValueError("research dataset cannot supply the validation window")
+                instruments = {
+                    instrument_id: dataset.nautilus_instruments[instrument_id]
+                    for instrument_id in genome.instruments
+                }
+                events = {
+                    instrument_id: market_bars_to_nautilus(
+                        bars,
+                        instrument=instruments[instrument_id],
+                    )
+                    for instrument_id, bars in base.items()
+                }
+                result = run_nautilus_evaluation(
                     genome=genome,
-                    instrument=instrument,
-                    data=events,
-                    dataset_hash=_slice_hash(run_id, key, "backtest", base),
+                    instruments=instruments,
+                    data_by_instrument=events,
+                    dataset_hash=_multi_slice_hash(run_id, "backtest", base),
                     code_hash=code_hash,
                     trade_size_override=config.trade_size,
                     starting_balances=config.starting_balances,
@@ -703,10 +781,78 @@ def run_research_brain(
     validation_artifact, _ = _stage(memory, run_id, "nautilus_validation", validation_stage)
 
     def specialist_stage() -> Mapping[str, Any]:
-        return run_research_specialist_stage(
+        resolved_inputs = dict(specialist_inputs_by_genome_hash)
+        stress_failures: dict[str, str] = {}
+        for item in validation_artifact["outcomes"]:
+            if not bool(item["passed"]):
+                continue
+            genome = _genome_from_payload(item["genome"])
+            if genome.genome_hash in resolved_inputs or genome.family != "stat_arb":
+                continue
+            if config.multi_leg_policy is None:
+                continue
+
+            try:
+                aligned = _aligned_bars_by_instrument(dataset, genome.instruments)
+                stress_count = config.validation_window * 4
+                stress_bars = {
+                    instrument_id: aligned[instrument_id][:stress_count]
+                    for instrument_id in genome.instruments
+                }
+                if any(len(values) != stress_count for values in stress_bars.values()):
+                    raise ValueError(
+                        "multi-leg stress dataset cannot supply the configured research window"
+                    )
+                stress_instruments = {
+                    instrument_id: dataset.nautilus_instruments[instrument_id]
+                    for instrument_id in genome.instruments
+                }
+                stress_events = {
+                    instrument_id: market_bars_to_nautilus(
+                        values,
+                        instrument=stress_instruments[instrument_id],
+                    )
+                    for instrument_id, values in stress_bars.items()
+                }
+                report = run_nautilus_multi_leg_stress(
+                    genome,
+                    instruments=stress_instruments,
+                    data_by_instrument=stress_events,
+                    dataset_hash=_multi_slice_hash(
+                        run_id,
+                        "multi-leg-stress",
+                        stress_bars,
+                    ),
+                    code_hash=code_hash,
+                    trade_size=config.trade_size,
+                    starting_balances=config.starting_balances,
+                )
+                resolved_inputs[genome.genome_hash] = SpecialistInputs(
+                    multi_leg_report=report,
+                    multi_leg_policy=config.multi_leg_policy,
+                )
+            except Exception as exc:
+                stress_failures[genome.genome_hash] = (
+                    f"multi_leg_stress_failed:{type(exc).__name__}:{exc}"
+                )
+
+        artifact = run_research_specialist_stage(
             validation_artifact["outcomes"],
-            specialist_inputs_by_genome_hash=specialist_inputs_by_genome_hash,
+            specialist_inputs_by_genome_hash=resolved_inputs,
         )
+        outcomes = []
+        for outcome in artifact["outcomes"]:
+            current = dict(outcome)
+            genome_payload = current.get("genome")
+            genome_hash = (
+                str(genome_payload.get("genome_hash", ""))
+                if isinstance(genome_payload, Mapping)
+                else ""
+            )
+            if genome_hash in stress_failures and not bool(current["passed"]):
+                current["reason"] = stress_failures[genome_hash]
+            outcomes.append(current)
+        return {"outcomes": outcomes}
 
     specialist_artifact, _ = _stage(memory, run_id, "specialist_tests", specialist_stage)
 
@@ -715,7 +861,11 @@ def run_research_brain(
         for item in specialist_artifact["outcomes"]:
             genome = _genome_from_payload(item["genome"])
             if not bool(item["passed"]):
-                terminal = evaluate_promotion(StrategyState.BACKTESTED, StrategyState.QUARANTINED, frozenset())
+                terminal = evaluate_promotion(
+                    StrategyState.BACKTESTED,
+                    StrategyState.QUARANTINED,
+                    frozenset(),
+                )
                 outcomes.append(
                     {
                         "genome": _genome_payload(genome),
@@ -726,10 +876,14 @@ def run_research_brain(
                     }
                 )
                 continue
-            key = genome.instruments[0]
-            transfer_key = _select_transfer_key(dataset, key)
-            if transfer_key is None:
-                terminal = evaluate_promotion(StrategyState.BACKTESTED, StrategyState.QUARANTINED, frozenset())
+
+            transfer_ids = _transfer_instrument_ids(dataset, genome)
+            if transfer_ids is None:
+                terminal = evaluate_promotion(
+                    StrategyState.BACKTESTED,
+                    StrategyState.QUARANTINED,
+                    frozenset(),
+                )
                 outcomes.append(
                     {
                         "genome": _genome_payload(genome),
@@ -740,43 +894,106 @@ def run_research_brain(
                     }
                 )
                 continue
+
             try:
                 specialist_evidence = tuple(
                     _validation_evidence_from_payload(record)
                     for record in item.get("evidence", ())
                 )
-                bars = _instrument_bars(dataset, key)
-                research, hidden, manifest = chronological_holdout(
-                    bars,
+                aligned = _aligned_bars_by_instrument(dataset, genome.instruments)
+                primary = genome.instruments[0]
+                research_primary, hidden_primary, manifest = chronological_holdout(
+                    aligned[primary],
                     hidden_fraction=config.hidden_fraction,
                     min_research=config.validation_window * 4,
                     min_hidden=config.validation_window,
-                    dataset_hash=f"{dataset.dataset_hash}:{key}",
+                    dataset_hash=f"{dataset.dataset_hash}:{','.join(genome.instruments)}",
                 )
+                research_count = len(research_primary)
+                hidden_count = len(hidden_primary)
+                research_by_instrument = {
+                    instrument_id: aligned[instrument_id][:research_count]
+                    for instrument_id in genome.instruments
+                }
+                hidden_by_instrument = {
+                    instrument_id: aligned[instrument_id][research_count:]
+                    for instrument_id in genome.instruments
+                }
+                if any(len(values) != hidden_count for values in hidden_by_instrument.values()):
+                    raise ValueError("aligned hidden BAR counts must match across instruments")
+
                 w = config.validation_window
-                windows = (research[0:w], research[w:2*w], research[2*w:3*w], research[3*w:4*w])
-                if any(len(window) != w for window in windows):
+                windows = tuple(
+                    {
+                        instrument_id: research_by_instrument[instrument_id][offset * w : (offset + 1) * w]
+                        for instrument_id in genome.instruments
+                    }
+                    for offset in range(4)
+                )
+                if any(
+                    len(values) != w
+                    for window in windows
+                    for values in window.values()
+                ):
                     raise ValueError("research dataset cannot supply all validation windows")
-                instrument = dataset.nautilus_instruments[key]
-                converted = tuple(market_bars_to_nautilus(window, instrument=instrument) for window in windows)
-                transfer_instrument = dataset.nautilus_instruments[transfer_key]
-                transfer_bars = _instrument_bars(dataset, transfer_key)[:w]
-                transfer_events = market_bars_to_nautilus(transfer_bars, instrument=transfer_instrument)
-                transfer_genome = replace(genome, instruments=(transfer_key,))
+
+                instruments = {
+                    instrument_id: dataset.nautilus_instruments[instrument_id]
+                    for instrument_id in genome.instruments
+                }
+                converted = tuple(
+                    {
+                        instrument_id: market_bars_to_nautilus(
+                            values,
+                            instrument=instruments[instrument_id],
+                        )
+                        for instrument_id, values in window.items()
+                    }
+                    for window in windows
+                )
+
+                transfer_aligned = _aligned_bars_by_instrument(dataset, transfer_ids)
+                transfer_bars = {
+                    instrument_id: transfer_aligned[instrument_id][:w]
+                    for instrument_id in transfer_ids
+                }
+                if any(len(values) != w for values in transfer_bars.values()):
+                    raise ValueError("asset transfer dataset cannot supply the validation window")
+                transfer_instruments = {
+                    instrument_id: dataset.nautilus_instruments[instrument_id]
+                    for instrument_id in transfer_ids
+                }
+                transfer_events = {
+                    instrument_id: market_bars_to_nautilus(
+                        values,
+                        instrument=transfer_instruments[instrument_id],
+                    )
+                    for instrument_id, values in transfer_bars.items()
+                }
+                transfer_genome = replace(genome, instruments=transfer_ids)
 
                 robust = run_generated_robustness_cycle(
                     candidate=genome,
-                    instruments={key: instrument},
-                    data_by_instrument={key: converted[0]},
-                    dataset_hash=_slice_hash(run_id, key, "robust-base", windows[0]),
-                    fold_datasets=((_slice_hash(run_id, key, "fold", windows[1]), {key: converted[1]}),),
-                    cpcv_datasets=((_slice_hash(run_id, key, "cpcv", windows[2]), {key: converted[2]}),),
-                    monte_carlo_datasets=((_slice_hash(run_id, key, "mc", windows[3]), {key: converted[3]}),),
+                    instruments=instruments,
+                    data_by_instrument=converted[0],
+                    dataset_hash=_multi_slice_hash(run_id, "robust-base", windows[0]),
+                    fold_datasets=((
+                        _multi_slice_hash(run_id, "fold", windows[1]),
+                        converted[1],
+                    ),),
+                    cpcv_datasets=((
+                        _multi_slice_hash(run_id, "cpcv", windows[2]),
+                        converted[2],
+                    ),),
+                    monte_carlo_datasets=((
+                        _multi_slice_hash(run_id, "mc", windows[3]),
+                        converted[3],
+                    ),),
                     asset_transfer_datasets=((
                         transfer_genome,
-                        {transfer_key: transfer_instrument},
-                        _slice_hash(run_id, transfer_key, "transfer", transfer_bars),
-                        {transfer_key: transfer_events},
+                        transfer_instruments,
+                        _multi_slice_hash(run_id, "transfer", transfer_bars),
+                        transfer_events,
                     ),),
                     code_hash=code_hash,
                     trade_size=config.trade_size,
@@ -789,18 +1006,36 @@ def run_research_brain(
                     specialist_evidence=specialist_evidence,
                 )
                 if not robust.promotion.allowed:
-                    raise RuntimeError("robustness promotion denied:" + ",".join(sorted(robust.promotion.missing_evidence)))
+                    raise RuntimeError(
+                        "robustness promotion denied:"
+                        + ",".join(sorted(robust.promotion.missing_evidence))
+                    )
 
-                hidden_events = market_bars_to_nautilus(hidden, instrument=instrument)
+                hidden_events = {
+                    instrument_id: market_bars_to_nautilus(
+                        values,
+                        instrument=instruments[instrument_id],
+                    )
+                    for instrument_id, values in hidden_by_instrument.items()
+                }
                 hidden_cycle = run_generated_hidden_cycle(
                     candidate=genome,
-                    instruments={key: instrument},
-                    hidden_data_by_instrument={key: hidden_events},
+                    instruments=instruments,
+                    hidden_data_by_instrument=hidden_events,
                     manifest=manifest,
                     regime_datasets=(
-                        (_slice_hash(run_id, key, "regime-a", windows[1]), {key: converted[1]}),
-                        (_slice_hash(run_id, key, "regime-b", windows[2]), {key: converted[2]}),
-                        (_slice_hash(run_id, key, "regime-c", windows[3]), {key: converted[3]}),
+                        (
+                            _multi_slice_hash(run_id, "regime-a", windows[1]),
+                            converted[1],
+                        ),
+                        (
+                            _multi_slice_hash(run_id, "regime-b", windows[2]),
+                            converted[2],
+                        ),
+                        (
+                            _multi_slice_hash(run_id, "regime-c", windows[3]),
+                            converted[3],
+                        ),
                     ),
                     code_hash=code_hash,
                     trade_size=config.trade_size,
@@ -808,7 +1043,10 @@ def run_research_brain(
                     starting_balances=config.starting_balances,
                 )
                 if not hidden_cycle.promotion.allowed:
-                    raise RuntimeError("hidden promotion denied:" + ",".join(sorted(hidden_cycle.promotion.missing_evidence)))
+                    raise RuntimeError(
+                        "hidden promotion denied:"
+                        + ",".join(sorted(hidden_cycle.promotion.missing_evidence))
+                    )
                 outcomes.append(
                     {
                         "genome": _genome_payload(genome),
@@ -819,7 +1057,11 @@ def run_research_brain(
                     }
                 )
             except Exception as exc:
-                terminal = evaluate_promotion(StrategyState.BACKTESTED, StrategyState.QUARANTINED, frozenset())
+                terminal = evaluate_promotion(
+                    StrategyState.BACKTESTED,
+                    StrategyState.QUARANTINED,
+                    frozenset(),
+                )
                 outcomes.append(
                     {
                         "genome": _genome_payload(genome),

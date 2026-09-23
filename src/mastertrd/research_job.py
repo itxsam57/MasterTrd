@@ -19,6 +19,7 @@ from .data.binance_public import binance_kline_url
 from .genome import StrategyGenome
 from .hidden_gate import HiddenGatePolicy
 from .memory_duckdb import DuckDbResearchMemory
+from .multi_leg_validation import MultiLegStressPolicy
 from .nautilus_paper import load_public_binance_instrument
 from .research.generator import generate_candidate
 from .research_brain import ResearchBrainConfig, ResearchDataset, run_research_brain
@@ -80,8 +81,17 @@ class ResearchJobPlan:
             spec = family_spec(recipe.family)
             if spec.min_data_level is not DataLevel.BAR:
                 raise ValueError("scheduled public recipe must use BAR data")
-            if spec.max_instruments != 1:
-                raise ValueError("scheduled public recipe must be single-leg")
+            if spec.max_instruments != 1 and not (
+                recipe.family == "stat_arb" and self.product == "USD_M"
+            ):
+                raise ValueError(
+                    "scheduled public recipe must be single-leg or admitted USD_M stat_arb"
+                )
+            if recipe.family == "stat_arb" and len(self.instruments) < 4:
+                raise ValueError(
+                    "scheduled stat_arb research requires at least four instruments "
+                    "for independent transfer validation"
+                )
 
 
 def _recipe_supports_public_product(recipe, product: str) -> bool:
@@ -105,7 +115,10 @@ def scheduled_public_recipe_ids(product: str = "SPOT") -> tuple[str, ...]:
         if recipe.readiness is RecipeReadiness.EXECUTABLE
         and _recipe_supports_public_product(recipe, normalized)
         and family_spec(recipe.family).min_data_level is DataLevel.BAR
-        and family_spec(recipe.family).max_instruments == 1
+        and (
+            family_spec(recipe.family).max_instruments == 1
+            or (recipe.family == "stat_arb" and normalized == "USD_M")
+        )
     )
 
 
@@ -125,6 +138,8 @@ def research_recipe_coverage(product: str = "SPOT") -> dict[str, str]:
             reason = "public_binance_product_asset_class_unavailable"
         elif spec.min_data_level is not DataLevel.BAR:
             reason = f"qualifying_public_{spec.min_data_level.value.lower()}_data_unavailable"
+        elif recipe.family == "stat_arb" and normalized == "SPOT":
+            reason = "spot_cash_short_leg_execution_unavailable"
         elif spec.max_instruments != 1:
             reason = "scheduled_exact_multi_leg_validation_unavailable"
         else:
@@ -150,7 +165,12 @@ def _default_runnable_recipe_ids(
 def _scheduled_validation_window(recipe_id: str) -> int:
     """Give each robustness slice enough bars to warm up its slowest recipe family."""
 
-    return 350 if strategy_recipe(recipe_id).family == "position" else 150
+    family = strategy_recipe(recipe_id).family
+    if family == "position":
+        return 350
+    if family == "stat_arb":
+        return 300
+    return 150
 
 
 def _archive_months_for_recipe(recipe_id: str) -> int:
@@ -164,6 +184,16 @@ def _archive_months_for_recipe(recipe_id: str) -> int:
     if family in {"trend", "volatility"}:
         return 6
     return 2
+
+
+def _scheduled_multi_leg_policy() -> MultiLegStressPolicy:
+    """Require balanced, flat, low-slippage simulated execution before robustness."""
+    return MultiLegStressPolicy(
+        min_completed_cycles=1,
+        max_leg_fill_skew=0.0,
+        max_residual_exposure_ratio=0.0,
+        max_slippage_bps=5.0,
+    )
 
 
 def _scheduled_execution_costs() -> dict[str, float]:
@@ -229,7 +259,12 @@ def default_research_job_plan(*, product: str = "SPOT") -> ResearchJobPlan:
         instruments=(
             ("BTCUSDT.BINANCE", "ETHUSDT.BINANCE")
             if normalized_product == "SPOT"
-            else ("BTCUSDT-PERP.BINANCE", "ETHUSDT-PERP.BINANCE")
+            else (
+                "BTCUSDT-PERP.BINANCE",
+                "ETHUSDT-PERP.BINANCE",
+                "SOLUSDT-PERP.BINANCE",
+                "XRPUSDT-PERP.BINANCE",
+            )
         ),
         seed_start=40,
         seed_stop=43,
@@ -248,11 +283,16 @@ def research_job_plan_for_recipe(recipe_id: str, *, product: str = "SPOT") -> Re
         disposition = research_recipe_coverage(normalized_product).get(recipe_id, "blocked:unknown_recipe")
         raise ValueError(f"{recipe_id!r} is not runnable in public BAR research: {disposition}")
     recipe = strategy_recipe(recipe_id)
+    instruments = (
+        base.instruments
+        if recipe.family == "stat_arb"
+        else base.instruments[:2]
+    )
     return ResearchJobPlan(
         requested_families=base.requested_families,
         runnable_families=(recipe.family,),
         blocked_families=base.blocked_families,
-        instruments=base.instruments,
+        instruments=instruments,
         seed_start=base.seed_start,
         seed_stop=base.seed_stop,
         archive_months=_archive_months_for_recipe(recipe_id),
@@ -597,17 +637,34 @@ def run_research_job(
             requested_timeframes = plan.timeframes or (None,)
             for requested_timeframe in requested_timeframes:
                 for seed in range(plan.seed_start, plan.seed_stop):
+                    spec = family_spec(family)
+                    candidate_instrument_sets = ()
+                    if family == "stat_arb":
+                        usable = plan.instruments[: min(8, len(plan.instruments))]
+                        candidate_instrument_sets = tuple(
+                            (usable[index], usable[index + 1])
+                            for index in range(0, len(usable) - 1, 2)
+                        )
+                        if len(candidate_instrument_sets) < 2:
+                            raise RuntimeError(
+                                "stat_arb research requires at least two independent instrument pairs"
+                            )
+                    preview_instruments = (
+                        candidate_instrument_sets[0]
+                        if candidate_instrument_sets
+                        else plan.instruments[: spec.min_instruments]
+                    )
                     preview = (
                         generate_candidate(
                             family=family,
-                            instruments=(plan.instruments[0],),
+                            instruments=preview_instruments,
                             seed=seed,
                             timeframe=requested_timeframe,
                         )
                         if recipe_id is None
                         else compile_strategy_recipe(
                             recipe_id,
-                            instruments=(plan.instruments[0],),
+                            instruments=preview_instruments,
                             seed=seed,
                             timeframe=requested_timeframe,
                         )
@@ -634,8 +691,14 @@ def run_research_job(
                         optimization_trials=2,
                         evolution_generations=1,
                         evolution_population=4,
-                        validation_budget=len(plan.instruments),
-                        paper_queue_cap=1,
+                        validation_budget=(
+                            min(2, len(candidate_instrument_sets))
+                            if candidate_instrument_sets
+                            else len(plan.instruments)
+                        ),
+                        paper_queue_cap=1 if spec.max_instruments == 1 else 0,
+                        recipe_ids=(recipe_id,) if recipe_id is not None else (),
+                        instrument_sets=candidate_instrument_sets,
                         hidden_fraction=0.20,
                         validation_window=_scheduled_validation_window(recipe_id) if recipe_id is not None else 150,
                         trade_size="0.01000",
@@ -644,12 +707,16 @@ def run_research_job(
                             if plan.product == "SPOT"
                             else ("100000 USDT",)
                         ),
-                        recipe_ids=(recipe_id,) if recipe_id is not None else (),
                         timeframe=requested_timeframe,
                         fees=execution_costs["fees"],
                         slippage=execution_costs["slippage"],
                         stressed_fees=execution_costs["stressed_fees"],
                         stressed_slippage=execution_costs["stressed_slippage"],
+                        multi_leg_policy=(
+                            _scheduled_multi_leg_policy()
+                            if family == "stat_arb"
+                            else None
+                        ),
                         robustness_policy=robust_policy,
                         advanced_policy=advanced_policy,
                         asset_transfer_policy=transfer_policy,

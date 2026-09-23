@@ -357,3 +357,18 @@ def test_local_paper_candidates_includes_usdm_handoffs(tmp_path):
     assert len(rows) == 1
     assert rows[0]["product"] == "USD_M"
     assert rows[0]["manifest"] == manifest
+
+
+def test_stat_arb_local_job_requires_four_markets_for_transfer_validation(tmp_path):
+    import pytest
+
+    from mastertrd.local_jobs import launch_research_job
+
+    with pytest.raises(ValueError, match="at least 4"):
+        launch_research_job(
+            "pairs-cointegration-balanced",
+            tmp_path,
+            instruments=("BTCUSDT-PERP.BINANCE", "ETHUSDT-PERP.BINANCE"),
+            timeframe="15m",
+            product="USD_M",
+        )

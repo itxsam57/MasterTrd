@@ -161,3 +161,42 @@ def test_research_config_rejects_blocked_named_recipe_before_candidate_generatio
             recipe_id="options-iv-rv-defined-risk",
             instruments=("BTCUSDT.BINANCE",),
         )
+
+
+def test_named_stat_arb_recipe_can_be_bounded_to_explicit_candidate_pairs() -> None:
+    from nautilus_trader.test_kit.providers import TestInstrumentProvider
+
+    btc = TestInstrumentProvider.btcusdt_binance()
+    eth = TestInstrumentProvider.ethusdt_binance()
+    ada = TestInstrumentProvider.adausdt_binance()
+    ada_btc = TestInstrumentProvider.adabtc_binance()
+    metadata = {
+        instrument.id.value: instrument
+        for instrument in (btc, eth, ada, ada_btc)
+    }
+    dataset = SimpleNamespace(
+        nautilus_instruments=metadata,
+        available_data_levels={key: frozenset({"BAR"}) for key in metadata},
+    )
+    config = _config(
+        family="stat_arb",
+        recipe_id="pairs-cointegration-balanced",
+        instruments=tuple(metadata),
+    )
+    from dataclasses import replace
+
+    config = replace(
+        config,
+        instrument_sets=(
+            (btc.id.value, eth.id.value),
+            (ada.id.value, ada_btc.id.value),
+        ),
+    )
+
+    batch = generate_research_candidates(config, dataset)
+
+    assert batch.blockers == ()
+    assert {candidate.instruments for candidate in batch.candidates} == {
+        (btc.id.value, eth.id.value),
+        (ada.id.value, ada_btc.id.value),
+    }

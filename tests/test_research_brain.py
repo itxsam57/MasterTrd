@@ -70,3 +70,40 @@ def test_research_parameter_space_respects_rsi_threshold_contract():
     low, high = _parameter_space(genome)["entry.threshold"]
     assert low >= 51
     assert high <= 100
+
+
+def test_research_brain_config_validates_explicit_instrument_sets():
+    import pytest
+
+    base = dict(
+        families=("stat_arb",),
+        instruments=(
+            "BTCUSDT-PERP.BINANCE",
+            "ETHUSDT-PERP.BINANCE",
+            "SOLUSDT-PERP.BINANCE",
+            "XRPUSDT-PERP.BINANCE",
+        ),
+        seed_start=42,
+        seed_stop=43,
+        screening_min_return=-1.0,
+        optimization_trials=1,
+        evolution_generations=1,
+        evolution_population=2,
+        validation_budget=1,
+        paper_queue_cap=0,
+        recipe_ids=("pairs-cointegration-balanced",),
+    )
+    config = ResearchBrainConfig(
+        **base,
+        instrument_sets=(
+            ("BTCUSDT-PERP.BINANCE", "ETHUSDT-PERP.BINANCE"),
+            ("SOLUSDT-PERP.BINANCE", "XRPUSDT-PERP.BINANCE"),
+        ),
+    )
+    assert len(config.instrument_sets) == 2
+
+    with pytest.raises(ValueError, match="subsets"):
+        ResearchBrainConfig(
+            **base,
+            instrument_sets=(("BTCUSDT-PERP.BINANCE", "OTHER.BINANCE"),),
+        )

@@ -81,8 +81,12 @@ def launch_research_job(
 
     if normalized_product not in {"SPOT", "USD_M"}:
         raise ValueError("public research product must be SPOT or USD_M")
-    if instruments and len(instruments) < 2:
-        raise ValueError("local research requires at least two instruments for transfer validation")
+    minimum_instruments = 4 if recipe.family == "stat_arb" else 2
+    if instruments and len(instruments) < minimum_instruments:
+        raise ValueError(
+            f"local {recipe.family} research requires at least {minimum_instruments} "
+            "instruments for independent transfer validation"
+        )
     if timeframe is not None and timeframe not in strategy_recipe_timeframes(recipe_id):
         raise ValueError(f"timeframe {timeframe} is not supported by recipe {recipe_id}")
     if (seed_start is None) != (seed_stop is None):
@@ -178,12 +182,22 @@ def _friendly_reason(reason: object) -> str:
             "The candidate completed the run but did not have all evidence required for promotion. "
             "A short history window is a common cause; failed validation stages can also cause this."
         )
+    if raw == "paper_queue_cap_reached":
+        return (
+            "The candidate passed research and hidden validation, but its multi-leg "
+            "forward PAPER execution path remains fail-closed."
+        )
     marker = "robustness promotion denied:"
     if marker in raw:
         failed = raw.split(marker, 1)[1].replace(",", ", ")
         return f"Initial results did not survive the required robustness checks: {failed}."
     if "public_binance_spot_asset_class_unavailable" in raw or "public_binance_product_asset_class_unavailable" in raw:
         return "This strategy does not match the selected Binance research product."
+    if "spot_cash_short_leg_execution_unavailable" in raw:
+        return (
+            "This multi-leg strategy requires a real short leg; Binance SPOT PAPER uses a cash account, "
+            "so run it on USD-M instead."
+        )
     if "scheduled_exact_multi_leg_validation_unavailable" in raw:
         return "This is a multi-leg strategy; the current public BAR scheduler does not yet run exact multi-leg validation."
     if "not runnable" in raw:

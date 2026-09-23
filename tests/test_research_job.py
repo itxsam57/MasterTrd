@@ -572,3 +572,100 @@ def test_usdm_research_job_can_queue_qualified_candidate_for_paper(monkeypatch, 
     assert report["plan"]["product"] == "USD_M"
     assert captured["paper_queue_cap"] == 1
     assert captured["starting_balances"] == ("100000 USDT",)
+
+
+def test_stat_arb_public_plan_uses_four_usdm_markets_for_independent_transfer():
+    plan = research_job.research_job_plan_for_recipe(
+        "pairs-cointegration-balanced",
+        product="USD_M",
+    )
+    assert plan.runnable_recipe_ids == ("pairs-cointegration-balanced",)
+    assert len(plan.instruments) == 4
+    assert plan.instruments[:2] == (
+        "BTCUSDT-PERP.BINANCE",
+        "ETHUSDT-PERP.BINANCE",
+    )
+    assert "pairs-cointegration-balanced" in research_job.scheduled_public_recipe_ids("USD_M")
+    assert "pairs-cointegration-balanced" not in research_job.scheduled_public_recipe_ids("SPOT")
+    assert (
+        research_job.research_recipe_coverage("SPOT")["pairs-cointegration-balanced"]
+        == "blocked:spot_cash_short_leg_execution_unavailable"
+    )
+
+
+def test_stat_arb_research_stays_out_of_paper_until_forward_multileg_is_admitted(
+    monkeypatch,
+    tmp_path,
+):
+    from dataclasses import replace
+
+    plan = research_job.research_job_plan_for_recipe(
+        "pairs-cointegration-balanced",
+        product="USD_M",
+    )
+    plan = replace(
+        plan,
+        seed_start=40,
+        seed_stop=41,
+        archive_months=2,
+        timeframes=("15m",),
+    )
+    captured = {}
+
+    class Memory:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(research_job, "DuckDbResearchMemory", lambda path: Memory())
+    monkeypatch.setattr(
+        research_job,
+        "_stable_archive_periods",
+        lambda count: ("2026-05", "2026-06"),
+    )
+    monkeypatch.setattr(
+        research_job,
+        "_load_public_instruments",
+        lambda ids, **kwargs: {instrument_id: object() for instrument_id in ids},
+    )
+    dataset = SimpleNamespace(dataset_hash="dataset-stat-arb")
+    monkeypatch.setattr(
+        research_job,
+        "_dataset_for_timeframe",
+        lambda **kwargs: (dataset, ({"file_sha256": "e" * 64},)),
+    )
+
+    def fake_run(config, *_args, **_kwargs):
+        captured["instruments"] = config.instruments
+        captured["paper_queue_cap"] = config.paper_queue_cap
+        captured["validation_window"] = config.validation_window
+        captured["multi_leg_policy"] = config.multi_leg_policy
+        captured["instrument_sets"] = config.instrument_sets
+        captured["validation_budget"] = config.validation_budget
+        return SimpleNamespace(
+            run_id="run-stat-arb",
+            generated=1,
+            stored=1,
+            paper_queued=0,
+            resumed=False,
+            finalists=(),
+        )
+
+    monkeypatch.setattr(research_job, "run_research_brain", fake_run)
+    report = research_job.run_research_job(
+        plan,
+        artifact_dir=tmp_path,
+        code_hash="code-stat-arb",
+        lock_hash="lock-stat-arb",
+    )
+
+    assert report["plan"]["product"] == "USD_M"
+    assert len(captured["instruments"]) == 4
+    assert captured["paper_queue_cap"] == 0
+    assert captured["validation_window"] == 300
+    assert captured["multi_leg_policy"].min_completed_cycles == 1
+    assert captured["multi_leg_policy"].max_leg_fill_skew == 0.0
+    assert captured["instrument_sets"] == (
+        ("BTCUSDT-PERP.BINANCE", "ETHUSDT-PERP.BINANCE"),
+        ("SOLUSDT-PERP.BINANCE", "XRPUSDT-PERP.BINANCE"),
+    )
+    assert captured["validation_budget"] == 2

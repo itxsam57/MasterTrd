@@ -65,10 +65,14 @@ def test_research_brain_forwards_persisted_specialist_evidence_into_robustness(m
         bars_by_instrument={
             "BTCUSDT.BINANCE": points,
             "ETHUSDT.BINANCE": points,
+            "SOLUSDT.BINANCE": points,
+            "XRPUSDT.BINANCE": points,
         },
         nautilus_instruments={
             "BTCUSDT.BINANCE": object(),
             "ETHUSDT.BINANCE": object(),
+            "SOLUSDT.BINANCE": object(),
+            "XRPUSDT.BINANCE": object(),
         },
     )
     artifacts = {
