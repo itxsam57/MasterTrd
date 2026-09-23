@@ -75,3 +75,26 @@ def test_bridge_rejects_wrong_instrument_venue_and_mixed_timeframes():
         market_bars_to_nautilus((valid, wrong_venue), instrument=instrument)
     with pytest.raises(ValueError, match="timeframe"):
         market_bars_to_nautilus((valid, other_timeframe), instrument=instrument)
+
+
+def test_bridge_accepts_exact_qualified_instrument_identity():
+    from nautilus_trader.test_kit.providers import TestInstrumentProvider
+
+    instrument = TestInstrumentProvider.ethusdt_binance()
+    market_bars = tuple(
+        parse_kline_row(
+            row,
+            symbol="ETHUSDT",
+            interval="1m",
+            instrument_id=str(instrument.id),
+        )
+        for row in (
+            (1700000000000, "2000", "2005", "1995", "2001", "1"),
+            (1700000060000, "2001", "2006", "1999", "2002", "1"),
+        )
+    )
+
+    bars = market_bars_to_nautilus(market_bars, instrument=instrument)
+
+    assert len(bars) == 2
+    assert all(bar.bar_type.instrument_id == instrument.id for bar in bars)

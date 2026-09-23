@@ -37,12 +37,15 @@ def _unix_nanos(timestamp: datetime) -> int:
 def _validate_identity(bars: Sequence[MarketBar], instrument: Any) -> str:
     timeframe = bars[0].timeframe
     instrument_symbol = str(instrument.raw_symbol).upper()
+    instrument_id = str(instrument.id).upper()
     instrument_venue = str(instrument.id.venue).upper()
+    accepted_instruments = {instrument_symbol, instrument_id}
 
     for bar in bars:
-        if bar.instrument.upper() != instrument_symbol:
+        if bar.instrument.upper() not in accepted_instruments:
             raise ValueError(
-                f"market bar instrument {bar.instrument} does not match {instrument_symbol}"
+                f"market bar instrument {bar.instrument} does not match "
+                f"{instrument_symbol} or {instrument_id}"
             )
         if bar.venue.upper() != instrument_venue:
             raise ValueError(f"market bar venue {bar.venue} does not match {instrument_venue}")
