@@ -386,16 +386,21 @@ class BinancePublicMarketSource(BinancePublicBookTickerSource):
     @property
     def uri(self) -> str:
         streams: list[str] = [f"{symbol.lower()}@bookTicker" for symbol in self.symbols]
-        for interval in self.timeframes:
-            streams.extend(
-                f"{symbol.lower()}@kline_{interval}"
-                for symbol in self._symbols_by_timeframe[interval]
-            )
-        base = (
-            "wss://data-stream.binance.vision"
-            if self.product is BinanceProduct.SPOT
-            else "wss://fstream.binance.com/market"
-        )
+        if self.product is BinanceProduct.SPOT:
+            for interval in self.timeframes:
+                streams.extend(
+                    f"{symbol.lower()}@kline_{interval}"
+                    for symbol in self._symbols_by_timeframe[interval]
+                )
+            base = "wss://data-stream.binance.vision"
+        else:
+            # Binance's current USD-M WebSocket service routes book-ticker and
+            # kline traffic through separate public/market paths. The PAPER
+            # runtime keeps one deterministic stream on the public book route
+            # and obtains each due *closed* candle through the exact REST
+            # completeness-recovery primitive. This avoids cross-route races
+            # while preserving spread/volatility observations for risk.
+            base = "wss://fstream.binance.com/public"
         return f"{base}/stream?streams=" + "/".join(streams)
 
     def _decode_kline(self, payload: dict[str, object]) -> dict[str, object] | None:

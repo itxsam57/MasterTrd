@@ -462,6 +462,7 @@ def test_usdm_public_market_source_accepts_perpetual_ids_and_uses_futures_endpoi
 
     assert source.product.value == "USD_M"
     assert source.symbols == ("BTCUSDT", "ETHUSDT")
-    assert source.uri.startswith("wss://fstream.binance.com/market/stream?streams=")
+    assert source.uri.startswith("wss://fstream.binance.com/public/stream?streams=")
     assert "btcusdt@bookTicker" in source.uri
-    assert "ethusdt@kline_1m" in source.uri
+    assert "ethusdt@bookTicker" in source.uri
+    assert "@kline_" not in source.uri

@@ -421,7 +421,7 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
             candidate.instruments,
             timeframe=candidate.timeframe,
             first_expected_start_ms=first_expected_start_ms,
-            recovery_grace_ms=0,
+            recovery_grace_ms=5_000 if product is BinanceProduct.USD_M else 0,
             product=product,
         )
         stream = MarketStream(public_source)
@@ -692,7 +692,7 @@ def _paper_portfolio_runtime(
             first_expected_start_ms=(
                 anchors[timeframes[0]] if len(timeframes) == 1 else anchors
             ),
-            recovery_grace_ms=0,
+            recovery_grace_ms=5_000 if product is BinanceProduct.USD_M else 0,
             product=product,
         )
         stream = MarketStream(public_source)
