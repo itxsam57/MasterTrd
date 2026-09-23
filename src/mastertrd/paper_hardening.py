@@ -9,6 +9,7 @@ from urllib.request import urlopen
 
 from .contracts import MarketBar
 from .genome import StrategyGenome
+from .venue import BinanceProduct, binance_exchange_symbol, binance_product_for_instrument_id
 
 
 _MAX_BINANCE_KLINES = 1000
@@ -226,7 +227,7 @@ def load_public_binance_bar_history(
     limit: int,
     now_ms: int | None = None,
 ) -> tuple[MarketBar, ...]:
-    """Load recent *closed* Binance spot klines without credentials.
+    """Load recent *closed* Binance SPOT or USD-M klines without credentials.
 
     This is a fail-closed PAPER bootstrap path. It never authenticates, never
     falls back to synthetic data, and excludes the current in-progress candle.
@@ -234,9 +235,11 @@ def load_public_binance_bar_history(
     """
 
     raw_instrument = str(instrument_id).strip().upper()
-    if not raw_instrument.endswith(".BINANCE"):
-        raise RuntimeError("public PAPER history requires a BINANCE instrument")
-    symbol = raw_instrument.rsplit(".", 1)[0]
+    try:
+        product = binance_product_for_instrument_id(raw_instrument)
+        symbol = binance_exchange_symbol(raw_instrument)
+    except ValueError as exc:
+        raise RuntimeError("public PAPER history requires a BINANCE instrument") from exc
     interval = str(timeframe).strip()
     if interval not in _SUPPORTED_INTERVALS:
         raise RuntimeError(f"unsupported Binance history timeframe: {timeframe}")
@@ -244,7 +247,12 @@ def load_public_binance_bar_history(
         raise ValueError("Binance history limit must be between 1 and 1000")
 
     query = urlencode({"symbol": symbol, "interval": interval, "limit": int(limit)})
-    url = f"https://data-api.binance.vision/api/v3/klines?{query}"
+    if product is BinanceProduct.SPOT:
+        url = f"https://data-api.binance.vision/api/v3/klines?{query}"
+    elif product is BinanceProduct.USD_M:
+        url = f"https://fapi.binance.com/fapi/v1/klines?{query}"
+    else:  # pragma: no cover - current public PAPER admission is SPOT/USD-M only.
+        raise RuntimeError("unsupported Binance PAPER product")
     try:
         with urlopen(url, timeout=15) as response:
             payload = json.loads(response.read().decode("utf-8"))

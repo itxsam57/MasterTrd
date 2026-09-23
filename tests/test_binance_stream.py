@@ -451,3 +451,17 @@ def test_public_market_source_supports_exact_multi_timeframe_portfolio_subscript
     assert "btcusdt@kline_5m" in source.uri
     assert "ethusdt@kline_5m" not in source.uri
     assert "btcusdt@kline_1m" not in source.uri
+
+
+def test_usdm_public_market_source_accepts_perpetual_ids_and_uses_futures_endpoint():
+    source = BinancePublicMarketSource(
+        ("BTCUSDT-PERP.BINANCE", "ETHUSDT-PERP.BINANCE"),
+        timeframe="1m",
+        product="USD_M",
+    )
+
+    assert source.product.value == "USD_M"
+    assert source.symbols == ("BTCUSDT", "ETHUSDT")
+    assert source.uri.startswith("wss://fstream.binance.com/market/stream?streams=")
+    assert "btcusdt@bookTicker" in source.uri
+    assert "ethusdt@kline_1m" in source.uri

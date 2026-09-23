@@ -399,3 +399,26 @@ def test_tracker_recovery_rejects_wrong_or_non_recovered_payload_and_negative_cl
     assert tracker.recover_due(60_000) == ()
     assert tracker.snapshot.recovery_failures == 1
     assert "authoritative recovered bar" in (tracker.snapshot.last_recovery_error or "")
+
+
+def test_rest_recovery_uses_usdm_endpoint_when_requested():
+    start_ms = 1_788_422_400_000
+    close_ms = 1_788_436_799_999
+    row = [start_ms, "2000", "2010", "1990", "2005", "10", close_ms]
+    requested_urls = []
+
+    def open_response(url: str, **_kwargs):
+        requested_urls.append(url)
+        return FakeResponse([row])
+
+    payload = load_public_binance_closed_kline(
+        "ETHUSDT",
+        "4h",
+        start_ms,
+        now_ms=close_ms + 5_001,
+        urlopen_fn=open_response,
+        product="USD_M",
+    )
+
+    assert payload["instrument"] == "ETHUSDT"
+    assert requested_urls[0].startswith("https://fapi.binance.com/fapi/v1/klines?")

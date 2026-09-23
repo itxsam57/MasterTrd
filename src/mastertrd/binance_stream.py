@@ -14,6 +14,7 @@ from .bar_completeness import (
     load_public_binance_closed_kline,
 )
 from .streaming import MarketStream, RawMarketPayload
+from .venue import BinanceProduct
 
 
 class _Connection(Protocol):
@@ -47,6 +48,8 @@ def _canonical_symbol(value: str) -> str:
         if venue != "BINANCE":
             raise ValueError("Binance public stream accepts only BINANCE instruments")
         raw = symbol
+    if raw.endswith("-PERP"):
+        raw = raw.removesuffix("-PERP")
     if not raw or not raw.isalnum():
         raise ValueError("Binance stream symbol must be alphanumeric")
     return raw
@@ -115,7 +118,14 @@ class BinancePublicBookTickerSource:
         reconnect_backoff_seconds: Sequence[float] = (1.0, 2.0, 5.0, 10.0, 30.0),
         max_reconnect_attempts: int | None = None,
         volatility_window: int = 30,
+        product: str | BinanceProduct = BinanceProduct.SPOT,
     ) -> None:
+        try:
+            normalized_product = BinanceProduct(str(product).strip().upper())
+        except ValueError as exc:
+            raise ValueError("Binance public stream product is invalid") from exc
+        if normalized_product not in {BinanceProduct.SPOT, BinanceProduct.USD_M}:
+            raise ValueError("Binance public stream supports SPOT and USD_M")
         symbols = tuple(dict.fromkeys(_canonical_symbol(value) for value in instruments))
         if not symbols:
             raise ValueError("at least one Binance instrument is required")
@@ -127,6 +137,7 @@ class BinancePublicBookTickerSource:
         if not backoff or any(not isfinite(value) or value < 0.0 for value in backoff):
             raise ValueError("reconnect backoff values must be finite and non-negative")
 
+        self.product = normalized_product
         self.symbols = symbols
         self._symbol_set = frozenset(symbols)
         self._connector = connector
@@ -143,7 +154,11 @@ class BinancePublicBookTickerSource:
     @property
     def uri(self) -> str:
         streams = "/".join(f"{symbol.lower()}@bookTicker" for symbol in self.symbols)
-        return f"wss://data-stream.binance.vision/stream?streams={streams}"
+        if self.product is BinanceProduct.SPOT:
+            base = "wss://data-stream.binance.vision"
+        else:
+            base = "wss://fstream.binance.com/market"
+        return f"{base}/stream?streams={streams}"
 
     def _decode(self, message: str | bytes) -> dict[str, object] | None:
         payload = _json_payload(message)
@@ -273,8 +288,9 @@ class BinancePublicMarketSource(BinancePublicBookTickerSource):
         max_reconnect_attempts: int | None = None,
         volatility_window: int = 30,
         first_expected_start_ms: int | Mapping[str, int] | None = None,
-        recovery_loader: RecoveryLoader = load_public_binance_closed_kline,
+        recovery_loader: RecoveryLoader | None = None,
         recovery_grace_ms: int = 0,
+        product: str | BinanceProduct = BinanceProduct.SPOT,
         recovery_retry_interval_ms: int = 30_000,
     ) -> None:
         if isinstance(timeframe, str):
@@ -292,7 +308,18 @@ class BinancePublicMarketSource(BinancePublicBookTickerSource):
             reconnect_backoff_seconds=reconnect_backoff_seconds,
             max_reconnect_attempts=max_reconnect_attempts,
             volatility_window=volatility_window,
+            product=product,
         )
+        if recovery_loader is None:
+            def product_recovery_loader(symbol, timeframe, start_ms, **kwargs):
+                return load_public_binance_closed_kline(
+                    symbol,
+                    timeframe,
+                    start_ms,
+                    product=self.product,
+                    **kwargs,
+                )
+            recovery_loader = product_recovery_loader
         self.timeframes = intervals
         self.timeframe = intervals[0] if len(intervals) == 1 else None
 
@@ -364,7 +391,12 @@ class BinancePublicMarketSource(BinancePublicBookTickerSource):
                 f"{symbol.lower()}@kline_{interval}"
                 for symbol in self._symbols_by_timeframe[interval]
             )
-        return "wss://data-stream.binance.vision/stream?streams=" + "/".join(streams)
+        base = (
+            "wss://data-stream.binance.vision"
+            if self.product is BinanceProduct.SPOT
+            else "wss://fstream.binance.com/market"
+        )
+        return f"{base}/stream?streams=" + "/".join(streams)
 
     def _decode_kline(self, payload: dict[str, object]) -> dict[str, object] | None:
         raw_kline = payload.get("k")

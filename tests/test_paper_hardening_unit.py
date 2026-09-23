@@ -143,3 +143,28 @@ def test_history_loader_excludes_open_candle_and_requires_closed_history(monkeyp
             [[0, "100", "101", "99", "100", "1", 2_000_000]],
             now_ms=2_000_000,
         )
+
+
+def test_history_loader_uses_usdm_endpoint_and_perpetual_identity(monkeypatch):
+    requested = []
+    payload = [
+        [0, "100", "101", "99", "100", "1", 899_999],
+        [900_000, "100", "102", "98", "101", "2", 1_799_999],
+    ]
+
+    def open_response(url, **_kwargs):
+        requested.append(url)
+        return Response(payload)
+
+    monkeypatch.setattr(hardening, "urlopen", open_response)
+    bars = hardening.load_public_binance_bar_history(
+        "ETHUSDT-PERP.BINANCE",
+        "15m",
+        limit=2,
+        now_ms=2_000_000,
+    )
+
+    assert len(bars) == 2
+    assert all(bar.instrument == "ETHUSDT-PERP.BINANCE" for bar in bars)
+    assert requested and requested[0].startswith("https://fapi.binance.com/fapi/v1/klines?")
+    assert "symbol=ETHUSDT" in requested[0]

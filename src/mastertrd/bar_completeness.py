@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 from urllib.request import urlopen
 
 from .streaming import MarketStream, MarketStreamEvent
+from .venue import BinanceProduct
 
 
 _SUPPORTED_FIXED_TIMEFRAMES_MS: dict[str, int] = {
@@ -79,8 +80,9 @@ def load_public_binance_closed_kline(
     *,
     now_ms: int | None = None,
     urlopen_fn=urlopen,
+    product: str | BinanceProduct = BinanceProduct.SPOT,
 ) -> dict[str, object]:
-    """Load one exact already-closed Binance spot candle from the public API.
+    """Load one exact already-closed Binance SPOT or USD-M candle from the public API.
 
     This is a recovery primitive, not a history search. It refuses a nearby or
     still-open candle so the forward PAPER runtime can never silently substitute
@@ -100,6 +102,13 @@ def load_public_binance_closed_kline(
     if cutoff < 0:
         raise ValueError("now_ms cannot be negative")
 
+    try:
+        normalized_product = BinanceProduct(str(product).strip().upper())
+    except ValueError as exc:
+        raise ValueError("unsupported Binance closed-candle product") from exc
+    if normalized_product not in {BinanceProduct.SPOT, BinanceProduct.USD_M}:
+        raise ValueError("unsupported Binance closed-candle product")
+
     query = urlencode(
         {
             "symbol": normalized_symbol,
@@ -109,7 +118,10 @@ def load_public_binance_closed_kline(
             "limit": 1,
         }
     )
-    url = f"https://data-api.binance.vision/api/v3/klines?{query}"
+    if normalized_product is BinanceProduct.SPOT:
+        url = f"https://data-api.binance.vision/api/v3/klines?{query}"
+    else:
+        url = f"https://fapi.binance.com/fapi/v1/klines?{query}"
     try:
         with urlopen_fn(url, timeout=15) as response:
             payload = json.loads(response.read().decode("utf-8"))
