@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Iterable, Sequence
+
+from .venue import BinanceProduct
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,10 +25,11 @@ class NautilusStrategyReplaySummary:
     fill_count: int
 
 
-def _build_binance_spot_engine_for_instruments(
+def _build_binance_engine_for_instruments(
     *,
     instruments: Sequence[object],
     starting_balances: Sequence[str],
+    product: str | BinanceProduct,
 ):
     if not instruments:
         raise ValueError("at least one instrument is required")
@@ -40,17 +44,58 @@ def _build_binance_spot_engine_for_instruments(
     from nautilus_trader.model.identifiers import Venue
     from nautilus_trader.model.objects import Money
 
+    try:
+        normalized_product = BinanceProduct(str(product).strip().upper())
+    except ValueError as exc:
+        raise ValueError("unsupported Binance backtest product") from exc
+    if normalized_product not in {BinanceProduct.SPOT, BinanceProduct.USD_M}:
+        raise ValueError("unsupported Binance backtest product")
+
     engine = BacktestEngine(config=BacktestEngineConfig())
-    engine.add_venue(
-        venue=Venue("BINANCE"),
-        oms_type=OmsType.NETTING,
-        account_type=AccountType.CASH,
-        base_currency=None,
-        starting_balances=[Money.from_str(value) for value in starting_balances],
-    )
+    venue_kwargs = {
+        "venue": Venue("BINANCE"),
+        "base_currency": None,
+        "starting_balances": [Money.from_str(value) for value in starting_balances],
+    }
+    if normalized_product is BinanceProduct.SPOT:
+        venue_kwargs.update(
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.CASH,
+        )
+    else:
+        venue_kwargs.update(
+            oms_type=OmsType.HEDGING,
+            account_type=AccountType.MARGIN,
+            default_leverage=Decimal("2"),
+        )
+    engine.add_venue(**venue_kwargs)
     for instrument in instruments:
         engine.add_instrument(instrument)
     return engine
+
+
+def _build_binance_spot_engine_for_instruments(
+    *,
+    instruments: Sequence[object],
+    starting_balances: Sequence[str],
+):
+    return _build_binance_engine_for_instruments(
+        instruments=instruments,
+        starting_balances=starting_balances,
+        product=BinanceProduct.SPOT,
+    )
+
+
+def _build_binance_usdm_engine_for_instruments(
+    *,
+    instruments: Sequence[object],
+    starting_balances: Sequence[str],
+):
+    return _build_binance_engine_for_instruments(
+        instruments=instruments,
+        starting_balances=starting_balances,
+        product=BinanceProduct.USD_M,
+    )
 
 
 def _build_binance_spot_engine(*, instrument, starting_balances: Sequence[str]):

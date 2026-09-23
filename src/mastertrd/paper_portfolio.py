@@ -18,6 +18,7 @@ from .reconciliation import ExecutionState
 from .risk_state import RiskStateProvider
 from .risk_runtime import RiskRuntime
 from .streaming import MarketStreamEvent
+from .venue import BinanceProduct, infer_binance_product
 
 
 class PaperPortfolioJournal:
@@ -234,8 +235,9 @@ class NautilusStreamingPaperPortfolioExecution:
         instruments: Mapping[str, object],
         initial_bars: Mapping[str, Sequence[MarketBar]] | None = None,
         telemetry_provider: Callable[[StrategyGenome], Mapping[str, object] | None] | None = None,
+        product: str | BinanceProduct | None = None,
     ) -> None:
-        from .nautilus_backtest import _build_binance_spot_engine_for_instruments
+        from .nautilus_backtest import _build_binance_engine_for_instruments
         from .nautilus_strategy import compile_genome_to_nautilus
 
         candidates = tuple(candidates)
@@ -243,8 +245,26 @@ class NautilusStreamingPaperPortfolioExecution:
             raise ValueError("paper portfolio requires at least two candidates")
         if len({candidate.strategy_id for candidate in candidates}) != len(candidates):
             raise ValueError("paper portfolio strategy identities must be unique")
+        candidate_instrument_ids = tuple(
+            candidate.instruments[0]
+            for candidate in candidates
+            if len(candidate.instruments) == 1
+        )
+        if len(candidate_instrument_ids) != len(candidates):
+            raise RuntimeError("shared PAPER portfolio currently admits single-leg BAR strategies only")
+        inferred_product = infer_binance_product(candidate_instrument_ids)
+        normalized_product = (
+            inferred_product
+            if product is None
+            else BinanceProduct(str(product).strip().upper())
+        )
+        if normalized_product is not inferred_product:
+            raise ValueError("PAPER portfolio product does not match candidate instruments")
+        if normalized_product not in {BinanceProduct.SPOT, BinanceProduct.USD_M}:
+            raise RuntimeError("shared PAPER portfolio supports SPOT and USD_M only")
+
         for candidate in candidates:
-            if len(candidate.instruments) != 1 or tuple(candidate.data_requirements) != ("BAR",):
+            if tuple(candidate.data_requirements) != ("BAR",):
                 raise RuntimeError("shared PAPER portfolio currently admits single-leg BAR strategies only")
             if candidate.strategy_id not in journal.strategy_ids:
                 raise ValueError("paper portfolio journal is missing a candidate")
@@ -258,20 +278,29 @@ class NautilusStreamingPaperPortfolioExecution:
         balances: list[str] = []
         seen_currency: set[str] = set()
         for instrument in unique_instruments:
-            base = str(instrument.base_currency)
             quote = str(instrument.quote_currency)
-            if base not in seen_currency:
-                balances.append(f"10 {base}")
-                seen_currency.add(base)
+            if normalized_product is BinanceProduct.SPOT:
+                base = str(instrument.base_currency)
+                if base not in seen_currency:
+                    balances.append(f"10 {base}")
+                    seen_currency.add(base)
             if quote not in seen_currency:
                 balances.append(f"100000 {quote}")
                 seen_currency.add(quote)
 
-        self._engine = _build_binance_spot_engine_for_instruments(
+        self._product = normalized_product
+        self._engine = _build_binance_engine_for_instruments(
             instruments=unique_instruments,
             starting_balances=tuple(balances),
+            product=normalized_product,
         )
         self._instruments = dict(instruments)
+        self._instrument_id_by_raw_symbol = {
+            str(instrument.raw_symbol).upper(): instrument_id
+            for instrument_id, instrument in self._instruments.items()
+        }
+        if len(self._instrument_id_by_raw_symbol) != len(self._instruments):
+            raise ValueError("paper portfolio instruments must have unique raw Binance symbols")
         self._journal = journal
         self._risk_runtime = risk_runtime
         self._telemetry_provider = telemetry_provider
@@ -349,9 +378,18 @@ class NautilusStreamingPaperPortfolioExecution:
         self._last_telemetry.clear()
 
     def _instrument_id(self, raw: str, venue: str) -> str:
-        qualified = raw if "." in raw else f"{raw}.{venue}"
+        value = str(raw).strip().upper()
+        normalized_venue = str(venue).strip().upper()
+        if normalized_venue != "BINANCE":
+            raise RuntimeError(f"paper portfolio received an unconfigured venue: {venue}")
+        if "." in value:
+            qualified = value
+        else:
+            qualified = self._instrument_id_by_raw_symbol.get(value, "")
         if qualified not in self._instruments:
-            raise RuntimeError(f"paper portfolio received an unconfigured instrument: {qualified}")
+            raise RuntimeError(
+                f"paper portfolio received an unconfigured instrument: {raw}.{normalized_venue}"
+            )
         return qualified
 
     def _bar(self, event: MarketStreamEvent):

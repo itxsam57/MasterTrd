@@ -15,6 +15,7 @@ from .paper_session import JsonPaperSessionStore, PaperSessionJournal
 from .reconciliation import ExecutionState
 from .risk_runtime import RiskRuntime
 from .streaming import MarketStreamEvent
+from .venue import BinanceProduct, infer_binance_product
 
 
 TelemetryProvider = Callable[[], Mapping[str, object] | None]
@@ -125,27 +126,30 @@ def open_persistent_paper_session(
     return PersistentPaperSession(journal=journal, store=store, resumed=False)
 
 
-def fixture_binance_spot_instrument(instrument_id: str):
-    """Return pinned Nautilus metadata for deterministic recorded-feed fixtures.
-
-    This helper is deliberately limited to the checked-in fixture universe. Real
-    public-network PAPER must load exchange metadata through the Binance adapter
-    rather than guessing tick/size precision.
-    """
-
+def fixture_binance_instrument(instrument_id: str):
+    """Return pinned Nautilus metadata for the deterministic PAPER fixture universe."""
     from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
     providers = {
         "ETHUSDT.BINANCE": TestInstrumentProvider.ethusdt_binance,
         "BTCUSDT.BINANCE": TestInstrumentProvider.btcusdt_binance,
+        "ETHUSDT-PERP.BINANCE": TestInstrumentProvider.ethusdt_perp_binance,
+        "BTCUSDT-PERP.BINANCE": TestInstrumentProvider.btcusdt_perp_binance,
     }
     try:
-        provider = providers[instrument_id]
+        provider = providers[str(instrument_id).strip().upper()]
     except KeyError as exc:
         raise RuntimeError(
             f"no deterministic Binance instrument fixture is registered for {instrument_id}"
         ) from exc
     return provider()
+
+
+def fixture_binance_spot_instrument(instrument_id: str):
+    """Backward-compatible SPOT-only deterministic fixture loader."""
+    if infer_binance_product((instrument_id,)) is not BinanceProduct.SPOT:
+        raise RuntimeError(f"no deterministic Binance spot fixture is registered for {instrument_id}")
+    return fixture_binance_instrument(instrument_id)
 
 
 def _build_public_binance_futures_provider(*, product: str):
@@ -271,20 +275,37 @@ class NautilusStreamingPaperExecution:
         instrument,
         initial_bars: Sequence[MarketBar] = (),
         telemetry_provider: TelemetryProvider | None = None,
+        product: str | BinanceProduct | None = None,
     ) -> None:
         if len(candidate.instruments) != 1:
             raise RuntimeError("streaming PAPER bridge currently requires one instrument")
         if instrument.id.value != candidate.instruments[0]:
             raise ValueError("paper instrument does not match candidate identity")
 
-        from .nautilus_backtest import _build_binance_spot_engine
+        from .nautilus_backtest import _build_binance_engine_for_instruments
         from .nautilus_strategy import compile_genome_to_nautilus
 
-        base_code = str(instrument.base_currency)
+        inferred_product = infer_binance_product(candidate.instruments)
+        normalized_product = (
+            inferred_product
+            if product is None
+            else BinanceProduct(str(product).strip().upper())
+        )
+        if normalized_product is not inferred_product:
+            raise ValueError("PAPER product does not match candidate instrument identity")
         quote_code = str(instrument.quote_currency)
-        self._engine = _build_binance_spot_engine(
-            instrument=instrument,
-            starting_balances=(f"10 {base_code}", f"100000 {quote_code}"),
+        if normalized_product is BinanceProduct.SPOT:
+            base_code = str(instrument.base_currency)
+            balances = (f"10 {base_code}", f"100000 {quote_code}")
+        elif normalized_product is BinanceProduct.USD_M:
+            balances = (f"100000 {quote_code}",)
+        else:
+            raise RuntimeError("PAPER execution supports SPOT and USD_M only")
+        self._product = normalized_product
+        self._engine = _build_binance_engine_for_instruments(
+            instruments=(instrument,),
+            starting_balances=balances,
+            product=normalized_product,
         )
         self._instrument = instrument
         self._journal = journal

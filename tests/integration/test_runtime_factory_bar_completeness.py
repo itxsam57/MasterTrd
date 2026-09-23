@@ -6,7 +6,7 @@ import pytest
 import mastertrd.runtime_factory as runtime_factory_module
 from mastertrd.binance_stream import BinancePublicMarketSource
 from mastertrd.contracts import MarketBar, RuntimeMode
-from mastertrd.nautilus_paper import fixture_binance_spot_instrument
+from mastertrd.nautilus_paper import fixture_binance_instrument
 from mastertrd.runtime import RuntimeConfig
 from mastertrd.runtime_factory import build_execution_runtime
 
@@ -66,8 +66,8 @@ def _environment(candidate_path, session_path) -> dict[str, str]:
 def _patch_public_dependencies(monkeypatch, history: tuple[MarketBar, ...]) -> None:
     monkeypatch.setattr(
         runtime_factory_module,
-        "load_public_binance_spot_instrument",
-        lambda instrument_id: fixture_binance_spot_instrument(instrument_id),
+        "load_public_binance_instrument",
+        lambda instrument_id, *, product: fixture_binance_instrument(instrument_id),
     )
     monkeypatch.setattr(
         runtime_factory_module,

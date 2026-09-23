@@ -24,8 +24,8 @@ from .nautilus_binance import (
 from .nautilus_paper import (
     NautilusStreamingPaperExecution,
     PersistentPaperSession,
-    fixture_binance_spot_instrument,
-    load_public_binance_spot_instrument,
+    fixture_binance_instrument,
+    load_public_binance_instrument,
     open_persistent_paper_session,
 )
 from .paper_archive import JsonPaperReportArchive
@@ -48,7 +48,7 @@ from .risk_runtime import RiskRuntime
 from .risk_state import RiskStateProvider
 from .runtime import RuntimeConfig
 from .streaming import MarketStream, RawMarketPayload
-from .venue import BinanceProduct
+from .venue import BinanceProduct, infer_binance_product
 
 
 def _required(environ: Mapping[str, str], name: str) -> str:
@@ -154,6 +154,29 @@ def _paper_risk_limits() -> RiskLimits:
         max_api_latency_ms=3_000.0,
         max_reconciliation_age_seconds=60.0,
     )
+
+
+def _paper_product(
+    instrument_ids: Sequence[str],
+    environ: Mapping[str, str],
+) -> BinanceProduct:
+    try:
+        inferred = infer_binance_product(instrument_ids)
+    except ValueError as exc:
+        raise RuntimeError("PAPER instrument product identity is invalid") from exc
+    if inferred not in {BinanceProduct.SPOT, BinanceProduct.USD_M}:
+        raise RuntimeError("PAPER supports Binance SPOT and USD_M only")
+    configured = environ.get("MASTERTRD_BINANCE_PRODUCT", "").strip().upper()
+    if configured:
+        try:
+            configured_product = BinanceProduct(configured)
+        except ValueError as exc:
+            raise RuntimeError("MASTERTRD_BINANCE_PRODUCT is invalid") from exc
+        if configured_product is not inferred:
+            raise RuntimeError(
+                "MASTERTRD_BINANCE_PRODUCT does not match PAPER candidate instruments"
+            )
+    return inferred
 
 
 def _paper_evidence_paths(
@@ -301,14 +324,18 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
 
     if len(candidate.instruments) != 1:
         raise RuntimeError("PAPER runtime currently requires one instrument")
+    product = _paper_product(candidate.instruments, environ)
 
     fixture_path = environ.get("MASTERTRD_PUBLIC_FEED_FIXTURE", "").strip()
     initial_bars: Sequence[MarketBar] = ()
     first_expected_start_ms: int | None = None
     if fixture_path:
-        instrument = fixture_binance_spot_instrument(candidate.instruments[0])
+        instrument = fixture_binance_instrument(candidate.instruments[0])
     else:
-        instrument = load_public_binance_spot_instrument(candidate.instruments[0])
+        instrument = load_public_binance_instrument(
+            candidate.instruments[0],
+            product=product.value,
+        )
         initial_bars = load_public_binance_bar_history(
             candidate.instruments[0],
             candidate.timeframe,
@@ -395,6 +422,7 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
             timeframe=candidate.timeframe,
             first_expected_start_ms=first_expected_start_ms,
             recovery_grace_ms=0,
+            product=product,
         )
         stream = MarketStream(public_source)
         state_provider = RiskStateProvider()
@@ -431,6 +459,7 @@ def _paper_runtime(runtime: RuntimeConfig, environ: Mapping[str, str]) -> Execut
         instrument=instrument,
         initial_bars=initial_bars,
         telemetry_provider=telemetry_provider,
+        product=product,
     )
     account_id_ref = {"value": f"paper:{session.journal.session_id}"}
 
@@ -589,6 +618,7 @@ def _paper_portfolio_runtime(
     instrument_ids = tuple(dict.fromkeys(
         candidate.instruments[0] for candidate in candidates
     ))
+    product = _paper_product(instrument_ids, environ)
     timeframes = tuple(dict.fromkeys(candidate.timeframe for candidate in candidates))
     subscriptions = {
         timeframe: tuple(dict.fromkeys(
@@ -605,13 +635,16 @@ def _paper_portfolio_runtime(
 
     if fixture_path:
         instruments = {
-            instrument_id: fixture_binance_spot_instrument(instrument_id)
+            instrument_id: fixture_binance_instrument(instrument_id)
             for instrument_id in instrument_ids
         }
         stream = MarketStream(_fixture_source(fixture_path))
     else:
         instruments = {
-            instrument_id: load_public_binance_spot_instrument(instrument_id)
+            instrument_id: load_public_binance_instrument(
+                instrument_id,
+                product=product.value,
+            )
             for instrument_id in instrument_ids
         }
         anchors: dict[str, int] = {}
@@ -660,6 +693,7 @@ def _paper_portfolio_runtime(
                 anchors[timeframes[0]] if len(timeframes) == 1 else anchors
             ),
             recovery_grace_ms=0,
+            product=product,
         )
         stream = MarketStream(public_source)
 
@@ -766,6 +800,7 @@ def _paper_portfolio_runtime(
         instruments=instruments,
         initial_bars=initial_bars,
         telemetry_provider=telemetry_provider,
+        product=product,
     )
     account_id = f"paper-portfolio:{portfolio_id}"
     state = lambda: execution.execution_state(account_id=account_id)

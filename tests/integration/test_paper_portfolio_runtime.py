@@ -286,3 +286,48 @@ def test_portfolio_paper_runtime_rotates_each_strategy_into_forward_evidence(tmp
     assert {item.session_id for item in archived} == set(initial.values())
     assert all(item.provenance_verified for item in archived)
     assert len(list(history_dir.glob("*/*.json"))) == 2
+
+
+def test_usdm_portfolio_runtime_routes_raw_symbols_to_perpetual_instruments(tmp_path):
+    portfolio_path = tmp_path / "portfolio-usdm.json"
+    state_path = tmp_path / "portfolio-usdm-state.json"
+    feed_path = tmp_path / "feed-usdm.jsonl"
+    eth = _candidate("paper-eth-perp", "ETHUSDT-PERP.BINANCE", 3, 8)
+    btc = _candidate("paper-btc-perp", "BTCUSDT-PERP.BINANCE", 4, 9)
+    eth["allow_short"] = True
+    btc["allow_short"] = True
+    portfolio_path.write_text(
+        json.dumps(_portfolio_payload("paper-usdm", [eth, btc])),
+        encoding="utf-8",
+    )
+    events = []
+    for index in range(12):
+        events.append(_bar("ETHUSDT", index, 2000.0 + index * 3.0))
+        events.append(_bar("BTCUSDT", index, 60000.0 + index * 80.0))
+    feed_path.write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8",
+    )
+
+    runtime = build_execution_runtime(
+        RuntimeConfig(mode=RuntimeMode.PAPER, live_trading_enabled=False),
+        {
+            "MASTERTRD_PORTFOLIO_MANIFEST": str(portfolio_path),
+            "MASTERTRD_SESSION_STATE": str(state_path),
+            "MASTERTRD_CODE_HASH": "portfolio-code",
+            "MASTERTRD_PAPER_START_NS": str(START_NS),
+            "MASTERTRD_PUBLIC_FEED_FIXTURE": str(feed_path),
+            "MASTERTRD_BINANCE_PRODUCT": "USD_M",
+        },
+    )
+
+    execution = runtime._dispatch.__self__
+    assert execution._product.value == "USD_M"
+    assert execution._instrument_id("ETHUSDT", "BINANCE") == "ETHUSDT-PERP.BINANCE"
+    state = runtime._engine_state()
+    assert set(state.balances) == {"USDT"}
+
+    report = runtime.run()
+    assert report.processed_events == len(events)
+    assert report.reconciliation_errors == 0
+    assert report.system_killed is False

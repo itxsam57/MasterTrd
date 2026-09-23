@@ -5,7 +5,7 @@ import mastertrd.runtime_factory as runtime_factory_module
 from mastertrd.binance_stream import BinancePublicMarketSource
 from mastertrd.contracts import RuntimeMode
 from mastertrd.execution_runtime import ExecutionRuntime
-from mastertrd.nautilus_paper import fixture_binance_spot_instrument
+from mastertrd.nautilus_paper import fixture_binance_instrument
 from mastertrd.reconciliation import ExecutionState
 from mastertrd.runtime import RuntimeConfig
 from mastertrd.runtime_factory import build_execution_runtime
@@ -206,13 +206,13 @@ def test_paper_factory_defaults_to_checked_in_binance_public_stream_without_fixt
     candidate_path.write_text(json.dumps(_candidate_manifest()), encoding="utf-8")
     loaded_instruments: list[str] = []
 
-    def fake_public_metadata_loader(instrument_id: str):
-        loaded_instruments.append(instrument_id)
-        return fixture_binance_spot_instrument(instrument_id)
+    def fake_public_metadata_loader(instrument_id: str, *, product: str):
+        loaded_instruments.append(f"{product}:{instrument_id}")
+        return fixture_binance_instrument(instrument_id)
 
     monkeypatch.setattr(
         runtime_factory_module,
-        "load_public_binance_spot_instrument",
+        "load_public_binance_instrument",
         fake_public_metadata_loader,
     )
 
@@ -226,7 +226,7 @@ def test_paper_factory_defaults_to_checked_in_binance_public_stream_without_fixt
     assert isinstance(built._stream._source, BinancePublicMarketSource)
     assert built._stream._source.symbols == ("ETHUSDT",)
     assert built._stream._source.timeframe == "1m"
-    assert loaded_instruments == ["ETHUSDT.BINANCE"]
+    assert loaded_instruments == ["SPOT:ETHUSDT.BINANCE"]
 
 
 def _exchange_environment(candidate_path, *, mode: str) -> dict[str, str]:
@@ -312,4 +312,54 @@ def test_exchange_factory_fails_closed_without_explicit_product_or_live_enable(t
                 live_trading_enabled=False,
                 ),
             _exchange_environment(candidate_path, mode="LIVE"),
+        )
+
+
+def test_usdm_paper_factory_uses_margin_engine_and_perpetual_fixture_identity(tmp_path):
+    candidate = _candidate_manifest()
+    candidate["strategy_id"] = "paper-factory-usdm-1"
+    candidate["instruments"] = ["ETHUSDT-PERP.BINANCE"]
+    candidate["allow_short"] = True
+    candidate_path = tmp_path / "candidate-usdm.json"
+    feed_path = tmp_path / "public-feed-usdm.jsonl"
+    session_path = tmp_path / "paper-session-usdm.json"
+    candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+    event = _feed_event()
+    event["instrument"] = "ETHUSDT"
+    feed_path.write_text(json.dumps(event) + "\n", encoding="utf-8")
+
+    environ = _factory_environment(candidate_path, feed_path, session_path)
+    environ["MASTERTRD_BINANCE_PRODUCT"] = "USD_M"
+    built = build_execution_runtime(
+        RuntimeConfig(mode=RuntimeMode.PAPER, live_trading_enabled=False),
+        environ,
+    )
+
+    state = built._engine_state()
+    assert "USDT" in state.balances
+    assert "ETH" not in state.balances
+    execution = built._dispatch.__self__
+    assert execution._product.value == "USD_M"
+    assert execution._instrument.id.value == "ETHUSDT-PERP.BINANCE"
+
+    report = built.run()
+    assert report.processed_events == 1
+    assert report.reconciliation_errors == 0
+
+
+def test_paper_factory_rejects_configured_product_mismatch(tmp_path):
+    candidate_path = tmp_path / "candidate.json"
+    feed_path = tmp_path / "feed.jsonl"
+    session_path = tmp_path / "state.json"
+    candidate_path.write_text(json.dumps(_candidate_manifest()), encoding="utf-8")
+    feed_path.write_text(json.dumps(_feed_event()) + "\n", encoding="utf-8")
+    environ = _factory_environment(candidate_path, feed_path, session_path)
+    environ["MASTERTRD_BINANCE_PRODUCT"] = "USD_M"
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="does not match PAPER candidate"):
+        build_execution_runtime(
+            RuntimeConfig(mode=RuntimeMode.PAPER, live_trading_enabled=False),
+            environ,
         )
