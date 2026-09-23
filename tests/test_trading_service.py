@@ -412,6 +412,9 @@ def test_configure_paper_portfolio_accepts_only_current_validated_finalists(tmp_
     settings = json.loads(config_path.read_text(encoding="utf-8"))
     assert settings["MASTERTRD_MODE"] == "PAPER"
     assert settings["LIVE_TRADING_ENABLED"] == "false"
+    assert settings["MASTERTRD_BINANCE_PRODUCT"] == "SPOT"
+    assert payload["product"] == "SPOT"
+    assert configured["product"] == "SPOT"
     assert settings["MASTERTRD_PORTFOLIO_MANIFEST"] == configured["manifest"]
     assert settings["MASTERTRD_SESSION_STATE"] == configured["session_state"]
     assert settings["MASTERTRD_CODE_HASH"] == "code-current"
@@ -419,6 +422,63 @@ def test_configure_paper_portfolio_accepts_only_current_validated_finalists(tmp_
     assert settings["MASTERTRD_PAPER_HISTORY_DIR"].endswith("-history")
     assert settings["MASTERTRD_PAPER_ROTATION_REQUEST"].endswith("-rotate.request")
 
+
+
+def test_configure_paper_portfolio_supports_usdm_and_rejects_mixed_products(tmp_path, monkeypatch):
+    import json
+    from pathlib import Path
+
+    import pytest
+
+    from mastertrd.genome import StrategyGenome
+    from mastertrd.trading_service import TradingService
+
+    config_path = tmp_path / "runtime.json"
+    monkeypatch.setenv("MASTERTRD_LOCAL_CONFIG", str(config_path))
+    service = TradingService()
+    monkeypatch.setattr(service, "_current_code_hash", lambda: "code-current")
+    monkeypatch.setattr(service, "_current_lock_hash", lambda: "lock-current")
+
+    def manifest(strategy_id, instrument):
+        candidate = StrategyGenome(
+            strategy_id=strategy_id,
+            family="trend",
+            style="day",
+            instruments=(instrument,),
+            timeframe="1m",
+            entry={"kind": "ema_cross", "fast_period": 3, "slow_period": 8},
+            exit={"kind": "cross_reverse"},
+            allow_short=True,
+        )
+        return {
+            "candidate": candidate.canonical_payload(),
+            "strategy_id": candidate.strategy_id,
+            "genome_hash": candidate.genome_hash,
+            "state": "PAPER",
+            "code_hash": "code-current",
+            "dataset_hash": f"data-{strategy_id}",
+            "lock_hash": "lock-current",
+            "recipe_id": "ema-cross-fast",
+        }
+
+    first = manifest("perp-a", "ETHUSDT-PERP.BINANCE")
+    second = manifest("perp-b", "BTCUSDT-PERP.BINANCE")
+    configured = service.configure_paper_portfolio(
+        [first, second],
+        root=tmp_path / "trading-usdm",
+    )
+    settings = json.loads(config_path.read_text(encoding="utf-8"))
+    payload = json.loads(Path(configured["manifest"]).read_text(encoding="utf-8"))
+    assert configured["product"] == "USD_M"
+    assert settings["MASTERTRD_BINANCE_PRODUCT"] == "USD_M"
+    assert payload["product"] == "USD_M"
+
+    spot = manifest("spot-a", "ETHUSDT.BINANCE")
+    with pytest.raises(ValueError, match="share one admitted Binance product"):
+        service.configure_paper_portfolio(
+            [first, spot],
+            root=tmp_path / "mixed",
+        )
 
 def test_configure_paper_portfolio_rejects_unqualified_or_stale_finalists(tmp_path, monkeypatch):
     import pytest

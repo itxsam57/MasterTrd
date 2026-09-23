@@ -206,11 +206,6 @@ def _next_action(
         return "Wait for the research worker to finish."
     if status == "FAILED":
         return "Choose a strategy marked Runnable now, or add the missing provider/data capability."
-    if product != "SPOT":
-        return (
-            "Keep this as research evidence. USD-M PAPER execution remains fail-closed "
-            "until its forward execution bridge is admitted."
-        )
     raw = str(reason or "")
     if history_months is not None and history_months < recommended_months:
         return f"Rerun with at least {recommended_months} months before treating this as a serious validation result."
@@ -396,8 +391,6 @@ def local_result_rows(root: Path) -> list[dict[str, object]]:
 def local_paper_candidates(root: Path) -> list[dict[str, object]]:
     candidates: dict[str, dict[str, object]] = {}
     for receipt in list_local_jobs(root):
-        if receipt.product != "SPOT":
-            continue
         report_path = Path(receipt.job_dir) / "research" / "research-report.json"
         if not report_path.is_file():
             continue
@@ -416,6 +409,7 @@ def local_paper_candidates(root: Path) -> list[dict[str, object]]:
                     continue
                 candidates[genome_hash] = {
                     "job_id": receipt.job_id,
+                    "product": receipt.product,
                     "recipe_id": run.get("recipe_id") or receipt.recipe_id,
                     "timeframe": run.get("timeframe") or receipt.timeframe,
                     "strategy_id": manifest.get("strategy_id"),

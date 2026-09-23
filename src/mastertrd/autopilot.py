@@ -233,22 +233,79 @@ def _auto_prepare_paper(
     job_root: Path,
 ) -> dict[str, object]:
     candidates = local_paper_candidates(job_root)
-    if len(candidates) < 2:
-        return {"configured": False, "reason": "fewer_than_two_qualified_spot_candidates"}
+    grouped: dict[str, list[dict[str, object]]] = {}
+    source_matcher = getattr(service, "paper_candidate_matches_current_source", None)
+    for candidate in candidates:
+        manifest = candidate.get("manifest")
+        if callable(source_matcher) and (
+            not isinstance(manifest, Mapping) or not source_matcher(manifest)
+        ):
+            continue
+        product = str(candidate.get("product") or "").strip().upper()
+        if product not in {"SPOT", "USD_M"}:
+            continue
+        grouped.setdefault(product, []).append(candidate)
+
+    eligible = {
+        product: rows
+        for product, rows in grouped.items()
+        if len(rows) >= 2
+    }
+    if not eligible:
+        return {
+            "configured": False,
+            "reason": "fewer_than_two_qualified_same_product_candidates",
+            "candidate_counts": {
+                product: len(rows)
+                for product, rows in sorted(grouped.items())
+            },
+        }
 
     if service.paper_portfolio_configured():
         return {
             "configured": False,
             "reason": "portfolio_already_configured",
             "candidate_count": len(candidates),
+            "candidate_counts": {
+                product: len(rows)
+                for product, rows in sorted(grouped.items())
+            },
         }
 
+    configured_product = ""
+    provider_rows = getattr(service, "provider_rows", None)
+    if callable(provider_rows):
+        try:
+            rows = provider_rows()
+        except Exception:
+            rows = []
+        for row in rows:
+            if row.get("provider_id") == "binance":
+                configured_product = str(row.get("product") or "").strip().upper()
+                break
+
+    preference = tuple(
+        dict.fromkeys(
+            product
+            for product in (configured_product, "SPOT", "USD_M")
+            if product
+        )
+    )
+    selected_product = next(
+        product for product in preference if product in eligible
+    )
+    selected = eligible[selected_product][: min(4, len(eligible[selected_product]))]
     configured = service.configure_paper_portfolio(
-        [candidate["manifest"] for candidate in candidates[: min(4, len(candidates))]]
+        [candidate["manifest"] for candidate in selected]
     )
     return {
         "configured": True,
         "candidate_count": len(candidates),
+        "candidate_counts": {
+            product: len(rows)
+            for product, rows in sorted(grouped.items())
+        },
+        "selected_product": selected_product,
         **configured,
     }
 

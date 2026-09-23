@@ -304,4 +304,56 @@ def test_local_paper_candidates_discovers_only_paper_handoffs(tmp_path):
     rows = local_paper_candidates(tmp_path)
     assert len(rows) == 1
     assert rows[0]["strategy_id"] == "paper-a"
+    assert rows[0]["product"] == "SPOT"
+    assert rows[0]["manifest"] == manifest
+
+
+def test_local_paper_candidates_includes_usdm_handoffs(tmp_path):
+    from mastertrd.local_jobs import LocalJobReceipt, local_paper_candidates, save_receipt
+
+    job_dir = tmp_path / "job-usdm-paper"
+    receipt = LocalJobReceipt(
+        job_id="job-usdm-paper",
+        kind="RESEARCH",
+        recipe_id="ema-cross-futures",
+        status="SUCCEEDED",
+        pid=2,
+        created_at="2026-09-23T00:00:00+00:00",
+        finished_at="2026-09-23T00:01:00+00:00",
+        job_dir=str(job_dir),
+        error=None,
+        timeframe="15m",
+        product="USD_M",
+    )
+    save_receipt(receipt)
+    report_path = job_dir / "research" / "research-report.json"
+    report_path.parent.mkdir(parents=True)
+    manifest = {
+        "candidate": {"strategy_id": "perp-paper-a"},
+        "strategy_id": "perp-paper-a",
+        "genome_hash": "g-perp-a",
+        "state": "PAPER",
+        "code_hash": "c",
+        "dataset_hash": "d",
+        "lock_hash": "l",
+        "recipe_id": "ema-cross-futures",
+    }
+    report_path.write_text(
+        json.dumps(
+            {
+                "runs": [
+                    {
+                        "recipe_id": "ema-cross-futures",
+                        "timeframe": "15m",
+                        "paper_candidates": [manifest],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rows = local_paper_candidates(tmp_path)
+    assert len(rows) == 1
+    assert rows[0]["product"] == "USD_M"
     assert rows[0]["manifest"] == manifest

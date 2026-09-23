@@ -20,6 +20,7 @@ from .runtime import RuntimeConfig
 from .runtime_factory import build_execution_runtime
 from .source_identity import git_head as _source_git_head, lock_hash as _source_lock_hash
 from .strategy_universe import STRATEGY_RECIPES
+from .venue import infer_binance_product
 
 
 class TradingReadiness(StrEnum):
@@ -285,6 +286,22 @@ class TradingService:
     def _current_lock_hash() -> str:
         return _source_lock_hash()
 
+    def paper_candidate_matches_current_source(
+        self,
+        manifest: Mapping[str, object],
+    ) -> bool:
+        """Return whether a research handoff matches the exact current source and lock."""
+        try:
+            code_hash = self._current_code_hash()
+            lock_hash = self._current_lock_hash()
+        except RuntimeError:
+            return False
+        return (
+            manifest.get("state") == "PAPER"
+            and manifest.get("code_hash") == code_hash
+            and manifest.get("lock_hash") == lock_hash
+        )
+
     def configure_paper_portfolio(
         self,
         manifests: list[Mapping[str, object]],
@@ -315,6 +332,10 @@ class TradingService:
                 raise ValueError("PAPER finalist strategy identity mismatch")
             if manifest.get("genome_hash") != candidate.genome_hash:
                 raise ValueError("PAPER finalist genome identity mismatch")
+            if len(candidate.instruments) != 1:
+                raise ValueError(
+                    "PAPER portfolio currently accepts single-instrument finalists only"
+                )
             candidates.append(candidate)
             provenance.append(
                 {
@@ -326,6 +347,14 @@ class TradingService:
             )
         if len({candidate.strategy_id for candidate in candidates}) != len(candidates):
             raise ValueError("PAPER portfolio strategy identities must be unique")
+        try:
+            product = infer_binance_product(
+                candidate.instruments[0] for candidate in candidates
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "PAPER portfolio finalists must share one admitted Binance product"
+            ) from exc
         identity = hashlib.sha256(
             (
                 code_hash
@@ -342,6 +371,7 @@ class TradingService:
             "portfolio_id": portfolio_id,
             "code_hash": code_hash,
             "lock_hash": lock_hash,
+            "product": product.value,
             "candidates": [candidate.canonical_payload() for candidate in candidates],
             "provenance": provenance,
         }
@@ -354,7 +384,7 @@ class TradingService:
         settings = {
             "MASTERTRD_MODE": "PAPER",
             "LIVE_TRADING_ENABLED": "false",
-            "MASTERTRD_BINANCE_PRODUCT": "SPOT",
+            "MASTERTRD_BINANCE_PRODUCT": product.value,
             "MASTERTRD_PORTFOLIO_MANIFEST": str(manifest_path),
             "MASTERTRD_SESSION_STATE": str(state_path),
             "MASTERTRD_CODE_HASH": code_hash,
@@ -369,6 +399,7 @@ class TradingService:
             "session_state": str(state_path),
             "code_hash": code_hash,
             "lock_hash": lock_hash,
+            "product": product.value,
         }
 
     def _runtime_config(self) -> RuntimeConfig:

@@ -216,12 +216,14 @@ The initial admitted discovery products are Binance SPOT and Binance USD-M perpe
 
 The local scheduler runs an Opportunity Autopilot cycle every six hours. Each cycle refreshes the liquid market universe when its cache is stale, rotates through the currently executable strategy catalog rather than repeatedly testing a fixed shortlist, launches only a bounded number of isolated research workers, uses multiple deterministic seeds, starts with a bounded history window for broad discovery, escalates promising shallow results to their full promotion-oriented history window, and preserves losing, blocked, and failed results.
 
-The autopilot automatically prepares a shared SPOT PAPER portfolio only from candidates that actually reached the PAPER state and may start the persistent PAPER worker after a valid portfolio exists. The autonomous path never enables LIVE and never weakens the Promotion Governor.
+The autopilot automatically prepares a shared same-product PAPER portfolio only from candidates that actually reached the PAPER state and match the exact current source/lock identity. SPOT and USD-M finalists are never mixed in one account. It may start the persistent PAPER worker after a valid portfolio exists. The autonomous path never enables LIVE and never weakens the Promotion Governor.
 
-### USD-M research boundary
+### USD-M research and PAPER boundary
 
-Public checksum-verified Binance USD-M perpetual kline archives and exact Nautilus CryptoPerpetual metadata are admitted for BAR research and Nautilus validation.
+Public checksum-verified Binance USD-M perpetual kline archives and exact Nautilus CryptoPerpetual metadata are admitted for BAR research and Nautilus validation. Qualified USD-M single-leg BAR candidates may now enter credential-free forward PAPER through a Nautilus margin-account sandbox, using public USD-M WebSocket klines/book tickers, exact REST recovery, closed-bar completeness tracking, reconciliation, and the shared MasterTrd risk path.
 
-USD-M research remains fail-closed at the forward-execution boundary: candidates are not automatically queued into PAPER until the dedicated USD-M PAPER streaming/execution bridge is admitted. Funding/basis, tick, L2, order-book, market-making, options, and cross-venue strategies still require their specialist data and validation paths.
+SPOT and USD-M PAPER portfolios remain product-isolated. USD-M PAPER does not imply TESTNET or LIVE eligibility, and no exchange credentials are used by this path. Genuine TESTNET evidence, the Promotion Governor, and deliberate owner activation remain required before LIVE can unlock.
+
+Funding/basis, tick, L2, order-book, market-making, options, delivery futures, and cross-venue strategies still require their specialist data and validation paths.
 
 This expansion increases opportunity coverage without pretending that NautilusTrader itself supplies profitable signals. Nautilus remains the authoritative execution engine; MasterTrd owns search, strategy semantics, validation, promotion, portfolio selection, and risk.

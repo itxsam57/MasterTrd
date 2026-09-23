@@ -132,3 +132,90 @@ def test_autopilot_maintenance_reconciles_without_launching_research(tmp_path, m
     assert state["maintenance_paper_action"]["reason"] == "waiting"
     assert state["maintenance_paper_worker"]["reason"] == "waiting"
     assert calls == {"paper": 1, "worker": 1}
+
+
+def test_auto_prepare_paper_never_mixes_spot_and_usdm_candidates(tmp_path, monkeypatch):
+    candidates = [
+        {"product": "SPOT", "manifest": {"strategy_id": "spot-a"}},
+        {"product": "SPOT", "manifest": {"strategy_id": "spot-b"}},
+        {"product": "USD_M", "manifest": {"strategy_id": "perp-a"}},
+        {"product": "USD_M", "manifest": {"strategy_id": "perp-b"}},
+        {"product": "USD_M", "manifest": {"strategy_id": "perp-c"}},
+    ]
+    monkeypatch.setattr(autopilot, "local_paper_candidates", lambda root: candidates)
+
+    class Service:
+        def __init__(self):
+            self.received = None
+
+        def paper_portfolio_configured(self):
+            return False
+
+        def provider_rows(self):
+            return [{"provider_id": "binance", "product": "USD_M"}]
+
+        def configure_paper_portfolio(self, manifests):
+            self.received = list(manifests)
+            return {"portfolio_id": "paper-usdm", "product": "USD_M"}
+
+    service = Service()
+    result = autopilot._auto_prepare_paper(service, job_root=tmp_path)
+
+    assert result["configured"] is True
+    assert result["selected_product"] == "USD_M"
+    assert [item["strategy_id"] for item in service.received] == [
+        "perp-a",
+        "perp-b",
+        "perp-c",
+    ]
+
+
+def test_auto_prepare_paper_requires_two_candidates_from_same_product(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        autopilot,
+        "local_paper_candidates",
+        lambda root: [
+            {"product": "SPOT", "manifest": {"strategy_id": "spot-a"}},
+            {"product": "USD_M", "manifest": {"strategy_id": "perp-a"}},
+        ],
+    )
+
+    class Service:
+        def paper_portfolio_configured(self):
+            return False
+
+    result = autopilot._auto_prepare_paper(Service(), job_root=tmp_path)
+    assert result["configured"] is False
+    assert result["reason"] == "fewer_than_two_qualified_same_product_candidates"
+    assert result["candidate_counts"] == {"SPOT": 1, "USD_M": 1}
+
+
+def test_auto_prepare_paper_ignores_stale_source_handoffs(tmp_path, monkeypatch):
+    candidates = [
+        {"product": "SPOT", "manifest": {"strategy_id": "stale", "current": False}},
+        {"product": "SPOT", "manifest": {"strategy_id": "spot-a", "current": True}},
+        {"product": "SPOT", "manifest": {"strategy_id": "spot-b", "current": True}},
+    ]
+    monkeypatch.setattr(autopilot, "local_paper_candidates", lambda root: candidates)
+
+    class Service:
+        def __init__(self):
+            self.received = None
+
+        def paper_candidate_matches_current_source(self, manifest):
+            return bool(manifest.get("current"))
+
+        def paper_portfolio_configured(self):
+            return False
+
+        def provider_rows(self):
+            return [{"provider_id": "binance", "product": "SPOT"}]
+
+        def configure_paper_portfolio(self, manifests):
+            self.received = list(manifests)
+            return {"portfolio_id": "paper-spot", "product": "SPOT"}
+
+    service = Service()
+    result = autopilot._auto_prepare_paper(service, job_root=tmp_path)
+    assert result["configured"] is True
+    assert [item["strategy_id"] for item in service.received] == ["spot-a", "spot-b"]

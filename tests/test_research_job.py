@@ -509,3 +509,66 @@ def test_usdm_archive_uses_futures_path_and_perpetual_identity(monkeypatch, tmp_
     )
     assert seen["market"] == "um"
     assert seen["instrument_id"] == "BTCUSDT-PERP.BINANCE"
+
+
+def test_usdm_research_job_can_queue_qualified_candidate_for_paper(monkeypatch, tmp_path):
+    from dataclasses import replace
+
+    plan = research_job.research_job_plan_for_recipe(
+        "ema-cross-futures",
+        product="USD_M",
+    )
+    plan = replace(
+        plan,
+        seed_start=40,
+        seed_stop=41,
+        archive_months=2,
+        timeframes=("15m",),
+    )
+    captured = {}
+
+    class Memory:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(research_job, "DuckDbResearchMemory", lambda path: Memory())
+    monkeypatch.setattr(
+        research_job,
+        "_stable_archive_periods",
+        lambda count: ("2026-05", "2026-06"),
+    )
+    monkeypatch.setattr(
+        research_job,
+        "_load_public_instruments",
+        lambda ids, **kwargs: {instrument_id: object() for instrument_id in ids},
+    )
+    dataset = SimpleNamespace(dataset_hash="dataset-usdm")
+    monkeypatch.setattr(
+        research_job,
+        "_dataset_for_timeframe",
+        lambda **kwargs: (dataset, ({"file_sha256": "f" * 64},)),
+    )
+
+    def fake_run(config, *_args, **_kwargs):
+        captured["paper_queue_cap"] = config.paper_queue_cap
+        captured["starting_balances"] = config.starting_balances
+        return SimpleNamespace(
+            run_id="run-usdm",
+            generated=1,
+            stored=1,
+            paper_queued=0,
+            resumed=False,
+            finalists=(),
+        )
+
+    monkeypatch.setattr(research_job, "run_research_brain", fake_run)
+    report = research_job.run_research_job(
+        plan,
+        artifact_dir=tmp_path,
+        code_hash="code-usdm",
+        lock_hash="lock-usdm",
+    )
+
+    assert report["plan"]["product"] == "USD_M"
+    assert captured["paper_queue_cap"] == 1
+    assert captured["starting_balances"] == ("100000 USDT",)

@@ -635,7 +635,7 @@ def run_research_job(
                         evolution_generations=1,
                         evolution_population=4,
                         validation_budget=len(plan.instruments),
-                        paper_queue_cap=1 if plan.product == "SPOT" else 0,
+                        paper_queue_cap=1,
                         hidden_fraction=0.20,
                         validation_window=_scheduled_validation_window(recipe_id) if recipe_id is not None else 150,
                         trade_size="0.01000",

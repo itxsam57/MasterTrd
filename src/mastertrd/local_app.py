@@ -161,8 +161,8 @@ def _autopilot_controls(config: AutopilotConfig) -> AutopilotConfig:
     st.subheader("Autopilot")
     st.caption(
         "Autopilot rotates through the runnable strategy catalog, selects liquid Binance markets, "
-        "runs isolated validation jobs, and only hands fully qualified SPOT candidates to PAPER. "
-        "LIVE remains locked."
+        "runs isolated validation jobs, and only hands fully qualified same-product candidates to PAPER. "
+        "SPOT and USD-M PAPER are credential-free; LIVE remains locked."
     )
     a1, a2, a3 = st.columns(3)
     enabled = a1.toggle("Continuous search", value=config.enabled)
@@ -197,7 +197,7 @@ def _autopilot_controls(config: AutopilotConfig) -> AutopilotConfig:
         )
     )
     c1, c2 = st.columns(2)
-    auto_prepare = c1.toggle("Auto-prepare qualified SPOT PAPER portfolio", value=config.auto_prepare_paper)
+    auto_prepare = c1.toggle("Auto-prepare qualified PAPER portfolio", value=config.auto_prepare_paper)
     auto_start = c2.toggle("Auto-start PAPER worker when portfolio exists", value=config.auto_start_paper)
     products = tuple(
         product
@@ -684,18 +684,43 @@ def render_app() -> None:
                     st.rerun()
 
         st.subheader("Validated PAPER finalists")
+        paper_products = sorted(
+            {
+                str(row.get("product") or "SPOT")
+                for row in paper_candidates
+            }
+        )
+        selected_paper_product = (
+            st.selectbox(
+                "PAPER product",
+                paper_products,
+                help="A shared PAPER portfolio cannot mix SPOT and USD-M instruments.",
+            )
+            if paper_products
+            else None
+        )
+        visible_paper_candidates = [
+            row
+            for row in paper_candidates
+            if selected_paper_product is None
+            or str(row.get("product") or "SPOT") == selected_paper_product
+        ]
         finalist_labels = {
             (
+                f'{row.get("product") or "SPOT"} · '
                 f'{row.get("recipe_id") or "generated"} · '
                 f'{row.get("strategy_id")} · {row.get("timeframe")} · '
                 f'{str(row.get("genome_hash"))[:10]}'
             ): row
-            for row in paper_candidates
+            for row in visible_paper_candidates
         }
         selected_finalist_labels = st.multiselect(
             "Shared PAPER portfolio",
             list(finalist_labels),
-            help="Only candidates that completed the research pipeline into PAPER are listed.",
+            help=(
+                "Only candidates that completed the research pipeline into PAPER are listed. "
+                "All selected finalists must use the same Binance product."
+            ),
         )
         if st.button("Prepare shared PAPER portfolio"):
             selected_manifests = [
@@ -712,10 +737,10 @@ def render_app() -> None:
                     f'{configured["portfolio_id"]}. Start or restart mastertrd trading.'
                 )
                 st.rerun()
-        if len(paper_candidates) < 2:
+        if len(visible_paper_candidates) < 2:
             st.info(
-                "Run research until at least two current-code candidates qualify for PAPER "
-                "before creating a shared portfolio."
+                "Run research until at least two current-code candidates for the same product "
+                "qualify for PAPER before creating a shared portfolio."
             )
         st.caption("The app never submits orders directly; the persistent trading worker owns execution.")
 
