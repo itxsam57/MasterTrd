@@ -398,6 +398,15 @@ class TradingService:
             raise RuntimeError("cannot clear emergency stop while LIVE")
         self._emergency_stop_path().unlink(missing_ok=True)
 
+    def paper_portfolio_configured(self) -> bool:
+        return bool(
+            self._environment().get("MASTERTRD_PORTFOLIO_MANIFEST", "").strip()
+        )
+
+    def paper_session_started(self) -> bool:
+        raw = self._environment().get("MASTERTRD_SESSION_STATE", "").strip()
+        return bool(raw and Path(raw).is_file())
+
     def paper_evidence_rotation_requested(self) -> bool:
         raw = self._environment().get("MASTERTRD_PAPER_ROTATION_REQUEST", "").strip()
         return bool(raw and Path(raw).is_file())

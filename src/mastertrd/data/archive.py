@@ -129,6 +129,7 @@ def read_binance_archive(
     symbol: str,
     interval: str,
     venue: str = "BINANCE",
+    instrument_id: str | None = None,
 ) -> ArchiveReadResult:
     archive_path = Path(path)
     file_sha = verify_archive(archive_path, expected_sha256=expected_sha256)
@@ -149,9 +150,18 @@ def read_binance_archive(
     for row_number, row in enumerate(reader, start=1):
         if not row or all(not str(value).strip() for value in row):
             continue
+        first = str(row[0]).strip().lower()
+        if row_number == 1 and first in {"open_time", "open time", "opentime"}:
+            continue
         try:
             bars.append(
-                parse_kline_row(row, symbol=symbol, interval=interval, venue=venue)
+                parse_kline_row(
+                    row,
+                    symbol=symbol,
+                    interval=interval,
+                    venue=venue,
+                    instrument_id=instrument_id,
+                )
             )
         except (TypeError, ValueError) as exc:
             raise ValueError(f"invalid Binance kline row {row_number}: {exc}") from exc

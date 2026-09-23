@@ -63,7 +63,7 @@ def test_research_job_exports_recoverable_public_paper_candidate_manifest(monkey
     monkeypatch.setattr(
         research_job,
         "_load_public_instruments",
-        lambda ids: {instrument_id: object() for instrument_id in ids},
+        lambda ids, **kwargs: {instrument_id: object() for instrument_id in ids},
     )
     monkeypatch.setattr(
         research_job,

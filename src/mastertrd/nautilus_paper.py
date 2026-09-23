@@ -148,6 +148,40 @@ def fixture_binance_spot_instrument(instrument_id: str):
     return provider()
 
 
+def _build_public_binance_futures_provider(*, product: str):
+    """Build Nautilus's credential-free LIVE futures instrument provider."""
+    from nautilus_trader.adapters.binance.common.enums import BinanceAccountType
+    from nautilus_trader.adapters.binance.common.enums import BinanceEnvironment
+    from nautilus_trader.adapters.binance.factories import get_cached_binance_http_client
+    from nautilus_trader.adapters.binance.futures.providers import BinanceFuturesInstrumentProvider
+    from nautilus_trader.common.component import LiveClock
+
+    normalized = str(product).strip().upper()
+    account_types = {
+        "USD_M": BinanceAccountType.USDT_FUTURES,
+        "COIN_M": BinanceAccountType.COIN_FUTURES,
+    }
+    try:
+        account_type = account_types[normalized]
+    except KeyError as exc:
+        raise ValueError("futures product must be USD_M or COIN_M") from exc
+
+    clock = LiveClock()
+    environment = BinanceEnvironment.LIVE
+    client = get_cached_binance_http_client(
+        clock=clock,
+        account_type=account_type,
+        api_key=None,
+        api_secret=None,
+        environment=environment,
+    )
+    return BinanceFuturesInstrumentProvider(
+        client=client,
+        clock=clock,
+        account_type=account_type,
+    )
+
+
 def _build_public_binance_spot_provider():
     """Build Nautilus's credential-free LIVE spot instrument provider.
 
@@ -181,25 +215,25 @@ def _build_public_binance_spot_provider():
     )
 
 
-def load_public_binance_spot_instrument(instrument_id: str):
-    """Load exact current Binance spot metadata without credentials.
-
-    The loader intentionally fails closed if the candidate is not a Binance
-    instrument, the public exchange-info request fails, or Nautilus cannot
-    resolve the requested identity after loading it. There is no fallback to
-    deterministic test-kit metadata on the public PAPER path.
-    """
-
+def load_public_binance_instrument(instrument_id: str, *, product: str = "SPOT"):
+    """Load exact current Binance metadata without credentials for an admitted public product."""
     from nautilus_trader.model.identifiers import InstrumentId
 
+    normalized_product = str(product).strip().upper()
+    if normalized_product not in {"SPOT", "USD_M", "COIN_M"}:
+        raise ValueError("public Binance product must be SPOT, USD_M, or COIN_M")
     try:
         requested = InstrumentId.from_str(instrument_id)
     except (TypeError, ValueError) as exc:
         raise RuntimeError("public Binance instrument identity is invalid") from exc
     if str(requested.venue) != "BINANCE":
-        raise RuntimeError("public PAPER instrument must use the BINANCE venue")
+        raise RuntimeError("public Binance instrument must use the BINANCE venue")
 
-    provider = _build_public_binance_spot_provider()
+    provider = (
+        _build_public_binance_spot_provider()
+        if normalized_product == "SPOT"
+        else _build_public_binance_futures_provider(product=normalized_product)
+    )
     try:
         asyncio.run(provider.load_async(requested))
     except Exception as exc:
@@ -211,6 +245,11 @@ def load_public_binance_spot_instrument(instrument_id: str):
     if instrument.id != requested:
         raise RuntimeError("public Binance instrument metadata identity mismatch")
     return instrument
+
+
+def load_public_binance_spot_instrument(instrument_id: str):
+    """Backward-compatible credential-free SPOT metadata loader."""
+    return load_public_binance_instrument(instrument_id, product="SPOT")
 
 
 class NautilusStreamingPaperExecution:

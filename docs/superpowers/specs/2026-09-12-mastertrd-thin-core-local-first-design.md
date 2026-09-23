@@ -194,3 +194,34 @@ Real-market milestone:
 - deleting safety controls to reduce line count
 
 Success is measured by a simpler user flow and smaller ownership surface, not by an arbitrary LOC target.
+
+
+## Opportunity Autopilot expansion (2026-09-23)
+
+The local-first product now treats broad opportunity discovery as a first-class workflow rather than requiring the owner to manually assemble every backtest matrix.
+
+### Simple and advanced control surfaces
+
+The Streamlit app defaults to a Simple view centered on current opportunity-search status, the liquid-market universe, understandable research verdicts, and PAPER readiness/risk state. Advanced mode retains direct control over strategy selection, market product, symbols, timeframes, seeds, history windows, validation profiles, and matrix launches.
+
+Research scores are explicitly presented as internal ranking signals, not expected profit or expected return.
+
+### Liquid crypto universe
+
+MasterTrd may discover a credential-free Binance universe from public exchange metadata and 24-hour quote volume. Liquidity ranking is a search-space filter only; it is never treated as alpha.
+
+The initial admitted discovery products are Binance SPOT and Binance USD-M perpetual futures. Stablecoin bases and leveraged-token style products are excluded from the automatic liquid-market universe. Manual advanced selection remains available.
+
+### Autonomous search
+
+The local scheduler runs an Opportunity Autopilot cycle every six hours. Each cycle refreshes the liquid market universe when its cache is stale, rotates through the currently executable strategy catalog rather than repeatedly testing a fixed shortlist, launches only a bounded number of isolated research workers, uses multiple deterministic seeds, starts with a bounded history window for broad discovery, escalates promising shallow results to their full promotion-oriented history window, and preserves losing, blocked, and failed results.
+
+The autopilot automatically prepares a shared SPOT PAPER portfolio only from candidates that actually reached the PAPER state and may start the persistent PAPER worker after a valid portfolio exists. The autonomous path never enables LIVE and never weakens the Promotion Governor.
+
+### USD-M research boundary
+
+Public checksum-verified Binance USD-M perpetual kline archives and exact Nautilus CryptoPerpetual metadata are admitted for BAR research and Nautilus validation.
+
+USD-M research remains fail-closed at the forward-execution boundary: candidates are not automatically queued into PAPER until the dedicated USD-M PAPER streaming/execution bridge is admitted. Funding/basis, tick, L2, order-book, market-making, options, and cross-venue strategies still require their specialist data and validation paths.
+
+This expansion increases opportunity coverage without pretending that NautilusTrader itself supplies profitable signals. Nautilus remains the authoritative execution engine; MasterTrd owns search, strategy semantics, validation, promotion, portfolio selection, and risk.

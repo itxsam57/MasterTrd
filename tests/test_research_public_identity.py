@@ -25,7 +25,7 @@ def test_public_archive_parser_uses_raw_binance_symbol_not_venue_qualified_id(mo
     monkeypatch.setattr(research_job, "urlopen", lambda url, timeout: _Response())
     monkeypatch.setattr(research_job, "_download", lambda url, destination: None)
 
-    def fake_read(path, *, expected_sha256, symbol, interval):
+    def fake_read(path, *, expected_sha256, symbol, interval, instrument_id=None):
         calls["symbol"] = symbol
         return object()
 

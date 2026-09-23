@@ -23,7 +23,7 @@ class ScheduledTask:
 def default_tasks() -> tuple[ScheduledTask, ...]:
     return (
         ScheduledTask("public-canary", 6 * 60 * 60, "mastertrd.public_market_canary"),
-        ScheduledTask("research", 7 * 24 * 60 * 60, "mastertrd.research_job"),
+        ScheduledTask("autopilot", 6 * 60 * 60, "mastertrd.autopilot"),
     )
 
 
@@ -61,8 +61,8 @@ def _launch_task(task: ScheduledTask, artifact_root: Path) -> subprocess.Popen[b
     env["MASTERTRD_CODE_HASH"] = _git_head()
     if task.name == "public-canary":
         env["MASTERTRD_CANARY_RECEIPT"] = str(task_root / f"{stamp}.json")
-    elif task.name == "research":
-        env["MASTERTRD_RESEARCH_ARTIFACT_DIR"] = str(task_root / stamp)
+    elif task.name == "autopilot":
+        env["MASTERTRD_AUTOPILOT_ARTIFACT_DIR"] = str(task_root / stamp)
 
     log = (task_root / f"{stamp}.log").open("ab")
     return subprocess.Popen(

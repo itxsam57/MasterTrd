@@ -48,6 +48,20 @@ def ema(values: Sequence[float], period: int) -> float:
     return current
 
 
+def ema_series(values: Sequence[float], period: int) -> list[float | None]:
+    if period <= 0:
+        raise ValueError("EMA period must be positive")
+    if len(values) < period:
+        return [None] * len(values)
+    alpha = 2.0 / (period + 1.0)
+    current = fmean(float(value) for value in values[:period])
+    output: list[float | None] = [None] * (period - 1) + [current]
+    for value in values[period:]:
+        current = alpha * float(value) + (1.0 - alpha) * current
+        output.append(current)
+    return output
+
+
 def rsi(values: Sequence[float], period: int) -> float:
     if period <= 0:
         raise ValueError("RSI period must be positive")
@@ -130,6 +144,98 @@ def evaluate_bar_signal(genome: StrategyGenome, bars: Sequence[MarketBar]) -> Si
         slow_value = ema(closes, slow)
         direction = SignalDirection.LONG if fast_value > slow_value else SignalDirection.SHORT
         return SignalDecision(direction, "ema_cross", fast_value - slow_value)
+
+    if kind == "macd_trend":
+        fast = int(genome.entry["fast"])
+        slow = int(genome.entry["slow"])
+        signal_period = int(genome.entry["signal"])
+        if fast <= 0 or slow <= 0 or signal_period <= 0 or fast >= slow:
+            return _flat("macd_warmup")
+        fast_values = ema_series(closes, fast)
+        slow_values = ema_series(closes, slow)
+        macd_values = [
+            float(fast_value) - float(slow_value)
+            for fast_value, slow_value in zip(fast_values, slow_values, strict=True)
+            if fast_value is not None and slow_value is not None
+        ]
+        if len(macd_values) < signal_period:
+            return _flat("macd_warmup")
+        signal_value = ema(macd_values, signal_period)
+        macd_value = macd_values[-1]
+        direction = SignalDirection.LONG if macd_value > signal_value else SignalDirection.SHORT
+        return SignalDecision(direction, "macd_trend", macd_value - signal_value)
+
+    if kind == "absolute_momentum":
+        lookback = int(genome.entry["lookback"])
+        threshold = float(genome.entry["threshold"])
+        if lookback <= 0 or threshold < 0.0 or len(closes) <= lookback:
+            return _flat("absolute_momentum_warmup")
+        anchor = closes[-lookback - 1]
+        if anchor <= 0.0:
+            return _flat("absolute_momentum_invalid_anchor")
+        momentum = closes[-1] / anchor - 1.0
+        if momentum >= threshold:
+            return SignalDecision(SignalDirection.LONG, "absolute_momentum", momentum)
+        if momentum <= -threshold:
+            return SignalDecision(SignalDirection.SHORT, "absolute_momentum", -momentum)
+        return _flat("absolute_momentum_neutral")
+
+    if kind == "bollinger_reversion":
+        window = int(genome.entry["window"])
+        deviations = float(genome.entry["deviations"])
+        if window < 2 or deviations <= 0.0 or len(closes) <= window:
+            return _flat("bollinger_warmup")
+        history = closes[-window - 1 : -1]
+        mean = fmean(history)
+        variance = fmean((value - mean) ** 2 for value in history)
+        deviation = sqrt(variance)
+        if deviation == 0.0:
+            return _flat("bollinger_flat")
+        current = closes[-1]
+        lower = mean - deviations * deviation
+        upper = mean + deviations * deviation
+        if current <= lower:
+            return SignalDecision(SignalDirection.LONG, "bollinger_reversion", lower - current)
+        if current >= upper:
+            return SignalDecision(SignalDirection.SHORT, "bollinger_reversion", current - upper)
+        return _flat("bollinger_neutral")
+
+    if kind == "rsi_reversion":
+        period = int(genome.entry["period"])
+        lower = float(genome.entry["lower"])
+        upper = float(genome.entry["upper"])
+        if period <= 0 or len(closes) <= period:
+            return _flat("rsi_reversion_warmup")
+        value = rsi(closes, period)
+        if value <= lower:
+            return SignalDecision(SignalDirection.LONG, "rsi_reversion", lower - value)
+        if value >= upper:
+            return SignalDecision(SignalDirection.SHORT, "rsi_reversion", value - upper)
+        return _flat("rsi_reversion_neutral")
+
+    if kind == "bollinger_squeeze_breakout":
+        window = int(genome.entry["window"])
+        deviations = float(genome.entry["deviations"])
+        squeeze_width = float(genome.entry["squeeze_width"])
+        if window < 2 or deviations <= 0.0 or squeeze_width <= 0.0 or len(closes) <= window:
+            return _flat("bollinger_squeeze_warmup")
+        history = closes[-window - 1 : -1]
+        mean = fmean(history)
+        variance = fmean((value - mean) ** 2 for value in history)
+        deviation = sqrt(variance)
+        if mean <= 0.0 or deviation == 0.0:
+            return _flat("bollinger_squeeze_flat")
+        band_width = (2.0 * deviations * deviation) / mean
+        if band_width > squeeze_width:
+            return _flat("bollinger_not_squeezed")
+        current = closes[-1]
+        lower = mean - deviations * deviation
+        upper = mean + deviations * deviation
+        if current > upper:
+            return SignalDecision(SignalDirection.LONG, "bollinger_squeeze_breakout", current - upper)
+        if current < lower:
+            return SignalDecision(SignalDirection.SHORT, "bollinger_squeeze_breakout", lower - current)
+        return _flat("bollinger_squeeze_inside")
 
     if kind == "rsi_momentum":
         period = int(genome.entry["period"])

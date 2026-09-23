@@ -114,7 +114,7 @@ def test_read_verified_public_archive_uses_checksum_and_download(monkeypatch, tm
     )
     sentinel = object()
 
-    def fake_read(path, *, expected_sha256, symbol, interval):
+    def fake_read(path, *, expected_sha256, symbol, interval, instrument_id=None):
         calls.update(
             read_path=path,
             expected_sha256=expected_sha256,
@@ -166,13 +166,13 @@ def test_load_public_instruments_uses_repository_loader(monkeypatch):
     seen = []
     monkeypatch.setattr(
         research_job,
-        "load_public_binance_spot_instrument",
-        lambda instrument_id: seen.append(instrument_id) or f"instrument:{instrument_id}",
+        "load_public_binance_instrument",
+        lambda instrument_id, *, product="SPOT": seen.append((instrument_id, product)) or f"instrument:{instrument_id}",
     )
 
     loaded = research_job._load_public_instruments(("BTCUSDT.BINANCE", "ETHUSDT.BINANCE"))
 
-    assert seen == ["BTCUSDT.BINANCE", "ETHUSDT.BINANCE"]
+    assert seen == [("BTCUSDT.BINANCE", "SPOT"), ("ETHUSDT.BINANCE", "SPOT")]
     assert loaded["BTCUSDT.BINANCE"] == "instrument:BTCUSDT.BINANCE"
 
 
@@ -325,7 +325,7 @@ def test_run_research_job_executes_all_runnable_family_seed_pairs_and_reuses_tim
     monkeypatch.setattr(
         research_job,
         "_load_public_instruments",
-        lambda ids: {instrument_id: object() for instrument_id in ids},
+        lambda ids, **kwargs: {instrument_id: object() for instrument_id in ids},
     )
     monkeypatch.setattr(
         research_job,
@@ -388,7 +388,7 @@ def test_main_writes_public_safe_json_report(monkeypatch, tmp_path, capsys):
     Path("uv.lock").write_bytes(b"locked")
     monkeypatch.setenv("GITHUB_SHA", "code-v1")
     monkeypatch.setenv("MASTERTRD_RESEARCH_ARTIFACT_DIR", str(tmp_path / "out"))
-    monkeypatch.setattr(research_job, "default_research_job_plan", lambda: object())
+    monkeypatch.setattr(research_job, "default_research_job_plan", lambda **kwargs: object())
     monkeypatch.setattr(
         research_job,
         "run_research_job",
@@ -466,3 +466,46 @@ def test_scheduled_validation_depth_covers_slow_strategy_warmup_and_hidden_folds
     assert _archive_months_for_recipe("pullback-balanced") >= 26
     assert _scheduled_validation_window("long-trend-balanced") >= 350
     assert _archive_months_for_recipe("long-trend-balanced") >= 60
+
+
+def test_usdm_public_plan_uses_perpetual_instruments():
+    plan = research_job.research_job_plan_for_recipe("ema-cross-futures", product="USD_M")
+    assert plan.product == "USD_M"
+    assert plan.instruments == ("BTCUSDT-PERP.BINANCE", "ETHUSDT-PERP.BINANCE")
+    assert "ema-cross-futures" in research_job.scheduled_public_recipe_ids("USD_M")
+
+
+def test_usdm_archive_uses_futures_path_and_perpetual_identity(monkeypatch, tmp_path):
+    checksum = "a" * 64
+    seen = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def read(self):
+            return f"{checksum} file.zip\n".encode()
+
+    monkeypatch.setattr(research_job, "_read_url_text_with_retry", lambda *args, **kwargs: f"{checksum} file.zip")
+    monkeypatch.setattr(research_job, "_download", lambda url, destination: None)
+    monkeypatch.setattr(
+        research_job,
+        "binance_kline_url",
+        lambda **kwargs: seen.update(kwargs) or "https://data.example/BTCUSDT-15m.zip",
+    )
+    monkeypatch.setattr(
+        research_job,
+        "read_binance_archive",
+        lambda path, **kwargs: seen.update(kwargs) or object(),
+    )
+    research_job._read_verified_public_archive(
+        data_dir=tmp_path,
+        symbol="BTCUSDT",
+        instrument_id="BTCUSDT-PERP.BINANCE",
+        interval="15m",
+        period="2026-06",
+        product="USD_M",
+    )
+    assert seen["market"] == "um"
+    assert seen["instrument_id"] == "BTCUSDT-PERP.BINANCE"

@@ -112,21 +112,26 @@ _EXECUTABLE_RECIPES: tuple[StrategyRecipe, ...] = (
     _exact("ema-cross-crypto", "EMA Cross Crypto", "trend", "ema_cross", "cross_reverse", assets=(AssetClass.CRYPTO,)),
     _exact("ema-cross-futures", "EMA Cross Futures", "trend", "ema_cross", "cross_reverse", assets=(AssetClass.FUTURES, AssetClass.COMMODITY, AssetClass.RATES)),
     _exact("ema-cross-fx", "EMA Cross FX", "trend", "ema_cross", "cross_reverse", assets=(AssetClass.FX,)),
+    _exact("trend-05", "MACD Trend", "trend", "macd_trend", "cross_reverse", sources=("mastertrd-native", "moskowitz-tsmom")),
     _exact("rsi-momentum-fast", "RSI Momentum Fast", "momentum", "rsi_momentum", "atr_bracket", sources=("mastertrd-native", "jegadeesh-titman")),
     _exact("rsi-momentum-balanced", "RSI Momentum Balanced", "momentum", "rsi_momentum", "atr_bracket", sources=("mastertrd-native", "jegadeesh-titman")),
     _exact("rsi-momentum-slow", "RSI Momentum Slow", "momentum", "rsi_momentum", "atr_bracket", horizons=(TradingHorizon.SWING, TradingHorizon.POSITION)),
     _exact("rsi-momentum-crypto", "RSI Momentum Crypto", "momentum", "rsi_momentum", "atr_bracket", assets=(AssetClass.CRYPTO,), sources=("mastertrd-native", "crypto-factors")),
     _exact("rsi-momentum-equity", "RSI Momentum Equity", "momentum", "rsi_momentum", "atr_bracket", assets=(AssetClass.EQUITY,)),
+    _exact("momentum-10", "Absolute Momentum", "momentum", "absolute_momentum", "atr_bracket", sources=("mastertrd-native", "moskowitz-tsmom")),
     _exact("donchian-20", "Donchian Breakout 20", "breakout", "donchian_breakout", "atr_bracket", sources=("mastertrd-native", "moskowitz-tsmom")),
     _exact("donchian-55", "Donchian Breakout 55", "breakout", "donchian_breakout", "atr_bracket", sources=("mastertrd-native", "moskowitz-tsmom")),
     _exact("donchian-fast", "Donchian Breakout Fast", "breakout", "donchian_breakout", "atr_bracket"),
     _exact("donchian-crypto", "Donchian Breakout Crypto", "breakout", "donchian_breakout", "atr_bracket", assets=(AssetClass.CRYPTO,)),
     _exact("donchian-futures", "Donchian Breakout Futures", "breakout", "donchian_breakout", "atr_bracket", assets=(AssetClass.FUTURES, AssetClass.COMMODITY, AssetClass.RATES)),
+    _exact("breakout-03", "Bollinger Squeeze Breakout", "breakout", "bollinger_squeeze_breakout", "atr_bracket", sources=("mastertrd-native", "quantconnect-library")),
     _exact("zscore-fast", "Z-Score Reversion Fast", "mean_reversion", "zscore_reversion", "mean_or_atr_stop"),
     _exact("zscore-balanced", "Z-Score Reversion Balanced", "mean_reversion", "zscore_reversion", "mean_or_atr_stop"),
     _exact("zscore-slow", "Z-Score Reversion Slow", "mean_reversion", "zscore_reversion", "mean_or_atr_stop", horizons=(TradingHorizon.SWING, TradingHorizon.POSITION)),
     _exact("zscore-crypto", "Z-Score Reversion Crypto", "mean_reversion", "zscore_reversion", "mean_or_atr_stop", assets=(AssetClass.CRYPTO,)),
     _exact("zscore-equity", "Z-Score Reversion Equity", "mean_reversion", "zscore_reversion", "mean_or_atr_stop", assets=(AssetClass.EQUITY,)),
+    _exact("reversion-01", "Bollinger Reversion", "mean_reversion", "bollinger_reversion", "mean_or_atr_stop", sources=("mastertrd-native", "quantconnect-library")),
+    _exact("reversion-02", "RSI-2 Reversion", "mean_reversion", "rsi_reversion", "mean_or_atr_stop", sources=("mastertrd-native", "quantconnect-library")),
     _exact("atr-breakout-fast", "ATR Volatility Breakout Fast", "volatility", "volatility_breakout", "atr_bracket"),
     _exact("atr-breakout-balanced", "ATR Volatility Breakout Balanced", "volatility", "volatility_breakout", "atr_bracket"),
     _exact("atr-breakout-slow", "ATR Volatility Breakout Slow", "volatility", "volatility_breakout", "atr_bracket", horizons=(TradingHorizon.SWING, TradingHorizon.POSITION)),
@@ -194,7 +199,13 @@ _TARGET_RECIPES: tuple[StrategyRecipe, ...] = (
 )
 
 
-STRATEGY_RECIPES: tuple[StrategyRecipe, ...] = (*_EXECUTABLE_RECIPES, *_SPECIALIST_RECIPES, *_TARGET_RECIPES)
+_PROMOTED_TARGET_IDS = frozenset({"trend-05", "momentum-10", "reversion-01", "reversion-02", "breakout-03"})
+
+STRATEGY_RECIPES: tuple[StrategyRecipe, ...] = (
+    *_EXECUTABLE_RECIPES,
+    *_SPECIALIST_RECIPES,
+    *(recipe for recipe in _TARGET_RECIPES if recipe.recipe_id not in _PROMOTED_TARGET_IDS),
+)
 
 
 def strategy_recipe(recipe_id: str) -> StrategyRecipe:
@@ -228,6 +239,75 @@ def _validate_recipe_instruments(recipe: StrategyRecipe, instruments: Sequence[s
         raise ValueError(f"recipe {recipe.recipe_id} accepts at most {spec.max_instruments} instruments")
 
 
+def _named_recipe_rules(recipe_id: str, family: str, rng: random.Random):
+    from mastertrd.research import generator
+
+    if recipe_id == "trend-05":
+        fast = rng.randint(8, 16)
+        slow = rng.randint(max(fast + 8, 20), 40)
+        signal = rng.randint(5, 12)
+        return (
+            {"type": "macd_trend", "fast": fast, "slow": slow, "signal": signal},
+            {"type": "cross_reverse"},
+            {"trend_confirmation": True},
+        )
+    if recipe_id == "momentum-10":
+        atr = round(rng.uniform(1.0, 3.0), 2)
+        return (
+            {
+                "type": "absolute_momentum",
+                "lookback": rng.randint(10, 80),
+                "threshold": round(rng.uniform(0.005, 0.05), 4),
+            },
+            {
+                "type": "atr_bracket",
+                "stop_atr": atr,
+                "target_atr": round(atr * rng.uniform(1.2, 2.5), 2),
+            },
+            {"absolute_return": True},
+        )
+    if recipe_id == "reversion-01":
+        return (
+            {
+                "type": "bollinger_reversion",
+                "window": rng.randint(15, 40),
+                "deviations": round(rng.uniform(1.5, 2.5), 2),
+            },
+            {"type": "mean_or_atr_stop", "stop_atr": round(rng.uniform(1.0, 3.0), 2)},
+            {"volatility_band": True},
+        )
+    if recipe_id == "reversion-02":
+        lower = rng.randint(5, 20)
+        return (
+            {
+                "type": "rsi_reversion",
+                "period": 2,
+                "lower": lower,
+                "upper": 100 - lower,
+                "window": rng.randint(10, 30),
+            },
+            {"type": "mean_or_atr_stop", "stop_atr": round(rng.uniform(1.0, 3.0), 2)},
+            {"short_horizon_rsi": True},
+        )
+    if recipe_id == "breakout-03":
+        atr = round(rng.uniform(1.0, 3.0), 2)
+        return (
+            {
+                "type": "bollinger_squeeze_breakout",
+                "window": rng.randint(15, 40),
+                "deviations": round(rng.uniform(1.5, 2.5), 2),
+                "squeeze_width": round(rng.uniform(0.02, 0.08), 3),
+            },
+            {
+                "type": "atr_bracket",
+                "stop_atr": atr,
+                "target_atr": round(atr * rng.uniform(1.2, 2.5), 2),
+            },
+            {"squeeze_required": True},
+        )
+    return generator._rules(family, rng)
+
+
 def compile_strategy_recipe(recipe_id: str, *, instruments: Sequence[str], seed: int, trade_size: str | None = None, timeframe: str | None = None) -> StrategyGenome:
     """Compile one admitted recipe using the existing shared family semantics.
 
@@ -247,7 +327,7 @@ def compile_strategy_recipe(recipe_id: str, *, instruments: Sequence[str], seed:
     digest = sha256(f"{recipe_id}|{seed}".encode()).digest()
     recipe_seed = int.from_bytes(digest[:8], "big", signed=False)
     rng = random.Random(recipe_seed)
-    entry, exit_rule, filters = generator._rules(recipe.family, rng)
+    entry, exit_rule, filters = _named_recipe_rules(recipe_id, recipe.family, rng)
     if entry.get("type") != recipe.entry_kind or exit_rule.get("type") != recipe.exit_kind:
         raise RuntimeError(f"recipe {recipe_id} no longer matches executable family semantics")
     if trade_size is not None:

@@ -25,6 +25,11 @@ def genome(entry: dict, exit_rule: dict) -> StrategyGenome:
     ("entry", "exit_rule", "expected"),
     [
         ({"kind": "ema_cross", "fast": 11, "slow": 34}, {"kind": "cross_reverse"}, 34),
+        ({"kind": "macd_trend", "fast": 12, "slow": 26, "signal": 9}, {"kind": "cross_reverse"}, 35),
+        ({"kind": "absolute_momentum", "lookback": 20, "threshold": 0.02}, {"kind": "atr_bracket", "stop_atr": 2, "target_atr": 3}, 21),
+        ({"kind": "bollinger_reversion", "window": 20, "deviations": 2}, {"kind": "mean_or_atr_stop", "stop_atr": 2}, 21),
+        ({"kind": "rsi_reversion", "period": 2, "lower": 10, "upper": 90, "window": 20}, {"kind": "mean_or_atr_stop", "stop_atr": 2}, 21),
+        ({"kind": "bollinger_squeeze_breakout", "window": 20, "deviations": 2, "squeeze_width": 0.05}, {"kind": "atr_bracket", "stop_atr": 2, "target_atr": 3}, 21),
         ({"kind": "rsi_momentum", "period": 14, "threshold": 60}, {"kind": "atr_bracket", "stop_atr": 2, "target_atr": 3}, 15),
         ({"kind": "donchian_breakout", "window": 20}, {"kind": "atr_bracket", "stop_atr": 2, "target_atr": 3}, 21),
         ({"kind": "zscore_reversion", "window": 20, "z": 2}, {"kind": "mean_or_atr_stop", "stop_atr": 2}, 21),

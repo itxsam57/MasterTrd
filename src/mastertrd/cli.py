@@ -7,6 +7,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from .autopilot import run_autopilot_cycle
 from .trading_service import TradingService
 from .local_jobs import launch_research_job, list_local_jobs
 from .local_scheduler import run_scheduler
@@ -29,6 +30,7 @@ def _parser() -> argparse.ArgumentParser:
     config.add_argument("--product", choices=("SPOT", "USD_M", "COIN_M"), default="SPOT")
     scheduler = subcommands.add_parser("scheduler", help="Run local recurring checks and research")
     scheduler.add_argument("--poll-seconds", type=float, default=60.0)
+    subcommands.add_parser("autopilot", help="Run one autonomous opportunity-search cycle now")
     return parser
 
 
@@ -65,6 +67,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif args.command == "scheduler":
         run_scheduler(poll_seconds=args.poll_seconds)
         return 0
+    elif args.command == "autopilot":
+        payload = run_autopilot_cycle()
     elif args.command == "trading":
         service.run_forever(
             heartbeat=lambda state: print(f"MasterTrd heartbeat: {state}", file=sys.stderr, flush=True)

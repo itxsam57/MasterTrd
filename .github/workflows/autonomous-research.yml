@@ -35,18 +35,23 @@ jobs:
           - ema-cross-balanced
           - ema-cross-slow
           - ema-cross-crypto
+          - trend-05
           - rsi-momentum-fast
           - rsi-momentum-balanced
           - rsi-momentum-slow
           - rsi-momentum-crypto
+          - momentum-10
           - donchian-20
           - donchian-55
           - donchian-fast
           - donchian-crypto
+          - breakout-03
           - zscore-fast
           - zscore-balanced
           - zscore-slow
           - zscore-crypto
+          - reversion-01
+          - reversion-02
           - atr-breakout-fast
           - atr-breakout-balanced
           - atr-breakout-slow

@@ -100,3 +100,50 @@ def test_hedged_basis_signal_preserves_configured_hedge_ratio() -> None:
     assert decision.direction is SignalDirection.SHORT
     assert decision.legs[instruments[0]] == -1.0
     assert decision.legs[instruments[1]] == ratio
+
+
+def test_macd_trend_turns_long_on_accelerating_market() -> None:
+    genome = _genome("trend", {"type": "macd_trend", "fast": 3, "slow": 6, "signal": 3})
+    decision = evaluate_bar_signal(genome, _bars([10, 10, 10, 10.5, 11, 12, 14, 17, 21, 26]))
+    assert decision.direction is SignalDirection.LONG
+
+
+def test_bollinger_reversion_buys_lower_band_extreme() -> None:
+    genome = _genome(
+        "mean_reversion",
+        {"type": "bollinger_reversion", "window": 5, "deviations": 1.5},
+    )
+    decision = evaluate_bar_signal(genome, _bars([10, 10.2, 9.8, 10.1, 9.9, 6.0]))
+    assert decision.direction is SignalDirection.LONG
+
+
+def test_rsi_reversion_buys_oversold_market() -> None:
+    genome = _genome(
+        "mean_reversion",
+        {"type": "rsi_reversion", "period": 2, "lower": 20, "upper": 80, "window": 5},
+    )
+    decision = evaluate_bar_signal(genome, _bars([12, 11, 10, 9, 8, 7]))
+    assert decision.direction is SignalDirection.LONG
+
+
+def test_absolute_momentum_turns_long_after_large_positive_move() -> None:
+    genome = _genome(
+        "momentum",
+        {"type": "absolute_momentum", "lookback": 4, "threshold": 0.05},
+    )
+    decision = evaluate_bar_signal(genome, _bars([10, 10.2, 10.4, 10.8, 11.5]))
+    assert decision.direction is SignalDirection.LONG
+
+
+def test_bollinger_squeeze_breakout_requires_squeeze_and_breakout() -> None:
+    genome = _genome(
+        "breakout",
+        {
+            "type": "bollinger_squeeze_breakout",
+            "window": 5,
+            "deviations": 1.5,
+            "squeeze_width": 0.08,
+        },
+    )
+    decision = evaluate_bar_signal(genome, _bars([10, 10.05, 9.95, 10.02, 9.98, 10.5]))
+    assert decision.direction is SignalDirection.LONG

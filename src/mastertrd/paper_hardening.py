@@ -55,6 +55,39 @@ def validate_bar_strategy_contract(genome: StrategyGenome) -> None:
         )
         if fast >= slow:
             raise ValueError("fast_period must be less than slow_period")
+    elif kind == "macd_trend":
+        fast = _positive_int(genome.entry.get("fast"), name="fast")
+        slow = _positive_int(genome.entry.get("slow"), name="slow")
+        if fast >= slow:
+            raise ValueError("fast must be less than slow")
+        _positive_int(genome.entry.get("signal"), name="signal")
+    elif kind == "absolute_momentum":
+        _positive_int(genome.entry.get("lookback"), name="lookback")
+        threshold = float(genome.entry.get("threshold"))
+        if not isfinite(threshold) or threshold < 0.0:
+            raise ValueError("threshold must be finite and non-negative")
+    elif kind == "bollinger_reversion":
+        window = _positive_int(genome.entry.get("window"), name="window")
+        if window < 2:
+            raise ValueError("bollinger window must be at least two")
+        _positive_float(genome.entry.get("deviations"), name="deviations")
+    elif kind == "rsi_reversion":
+        _positive_int(genome.entry.get("period"), name="period")
+        window = _positive_int(genome.entry.get("window"), name="window")
+        if window < 2:
+            raise ValueError("rsi reversion window must be at least two")
+        lower = float(genome.entry.get("lower"))
+        upper = float(genome.entry.get("upper"))
+        if not all(isfinite(value) for value in (lower, upper)):
+            raise ValueError("rsi reversion thresholds must be finite")
+        if not 0.0 <= lower < 50.0 < upper <= 100.0:
+            raise ValueError("rsi reversion thresholds must straddle 50")
+    elif kind == "bollinger_squeeze_breakout":
+        window = _positive_int(genome.entry.get("window"), name="window")
+        if window < 2:
+            raise ValueError("bollinger squeeze window must be at least two")
+        _positive_float(genome.entry.get("deviations"), name="deviations")
+        _positive_float(genome.entry.get("squeeze_width"), name="squeeze_width")
     elif kind == "rsi_momentum":
         _positive_int(genome.entry.get("period"), name="period")
         threshold = _positive_float(genome.entry.get("threshold"), name="threshold")
@@ -121,9 +154,20 @@ def _entry_bar_requirement(genome: StrategyGenome) -> int:
     kind = str(genome.entry.get("kind", genome.entry.get("type", "")))
     if kind == "ema_cross":
         return int(genome.entry.get("slow_period", genome.entry.get("slow", 0)))
+    if kind == "macd_trend":
+        return int(genome.entry["slow"]) + int(genome.entry["signal"])
+    if kind == "absolute_momentum":
+        return int(genome.entry["lookback"]) + 1
     if kind == "rsi_momentum":
         return int(genome.entry["period"]) + 1
-    if kind in {"donchian_breakout", "zscore_reversion"}:
+    if kind == "rsi_reversion":
+        return max(int(genome.entry["period"]) + 1, int(genome.entry["window"]) + 1)
+    if kind in {
+        "donchian_breakout",
+        "zscore_reversion",
+        "bollinger_reversion",
+        "bollinger_squeeze_breakout",
+    }:
         return int(genome.entry["window"]) + 1
     if kind == "volatility_breakout":
         return int(genome.entry["lookback"]) + 1

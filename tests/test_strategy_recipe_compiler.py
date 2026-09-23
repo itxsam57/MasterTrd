@@ -102,3 +102,24 @@ def test_family_generator_and_named_recipe_compiler_have_distinct_ownership() ->
     assert generated.style == "trend"
     assert compiled.style == "recipe:ema-cross-balanced"
     assert generated.strategy_id != compiled.strategy_id
+
+
+@pytest.mark.parametrize(
+    ("recipe_id", "entry_kind", "exit_kind"),
+    [
+        ("trend-05", "macd_trend", "cross_reverse"),
+        ("momentum-10", "absolute_momentum", "atr_bracket"),
+        ("reversion-01", "bollinger_reversion", "mean_or_atr_stop"),
+        ("reversion-02", "rsi_reversion", "mean_or_atr_stop"),
+        ("breakout-03", "bollinger_squeeze_breakout", "atr_bracket"),
+    ],
+)
+def test_promoted_catalog_recipes_compile_to_distinct_exact_semantics(recipe_id, entry_kind, exit_kind) -> None:
+    genome = compile_strategy_recipe(
+        recipe_id,
+        instruments=("BTCUSDT.BINANCE",),
+        seed=17,
+    )
+    assert genome.entry["type"] == entry_kind
+    assert genome.exit["type"] == exit_kind
+    assert genome.style == f"recipe:{recipe_id}"

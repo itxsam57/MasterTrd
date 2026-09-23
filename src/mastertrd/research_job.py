@@ -19,7 +19,7 @@ from .data.binance_public import binance_kline_url
 from .genome import StrategyGenome
 from .hidden_gate import HiddenGatePolicy
 from .memory_duckdb import DuckDbResearchMemory
-from .nautilus_paper import load_public_binance_spot_instrument
+from .nautilus_paper import load_public_binance_instrument
 from .research.generator import generate_candidate
 from .research_brain import ResearchBrainConfig, ResearchDataset, run_research_brain
 from .robustness import RobustnessPolicy
@@ -50,6 +50,7 @@ class ResearchJobPlan:
     archive_months: int = 2
     runnable_recipe_ids: tuple[str, ...] = ()
     timeframes: tuple[str, ...] = ()
+    product: str = "SPOT"
 
     def __post_init__(self) -> None:
         if not self.requested_families or not self.runnable_families:
@@ -62,6 +63,8 @@ class ResearchJobPlan:
             raise ValueError("seed_stop must be greater than seed_start")
         if self.archive_months < 2:
             raise ValueError("archive_months must be at least two")
+        if self.product not in {"SPOT", "USD_M"}:
+            raise ValueError("public research product must be SPOT or USD_M")
         if len(set(self.runnable_recipe_ids)) != len(self.runnable_recipe_ids):
             raise ValueError("runnable_recipe_ids must be unique")
         if len(set(self.timeframes)) != len(self.timeframes) or any(not value for value in self.timeframes):
@@ -72,8 +75,8 @@ class ResearchJobPlan:
                 raise ValueError("scheduled recipe must be executable")
             if recipe.family not in self.runnable_families:
                 raise ValueError("scheduled recipe family must be runnable")
-            if AssetClass.CRYPTO not in recipe.asset_classes:
-                raise ValueError("scheduled public recipe must support crypto")
+            if not _recipe_supports_public_product(recipe, self.product):
+                raise ValueError("scheduled public recipe does not support the configured product")
             spec = family_spec(recipe.family)
             if spec.min_data_level is not DataLevel.BAR:
                 raise ValueError("scheduled public recipe must use BAR data")
@@ -81,29 +84,35 @@ class ResearchJobPlan:
                 raise ValueError("scheduled public recipe must be single-leg")
 
 
-def scheduled_public_recipe_ids() -> tuple[str, ...]:
-    """Return every executable recipe that the current public BAR job can test honestly.
+def _recipe_supports_public_product(recipe, product: str) -> bool:
+    normalized = str(product).strip().upper()
+    if normalized == "SPOT":
+        return AssetClass.CRYPTO in recipe.asset_classes
+    if normalized == "USD_M":
+        return (
+            AssetClass.CRYPTO in recipe.asset_classes
+            or AssetClass.FUTURES in recipe.asset_classes
+        )
+    raise ValueError("public research product must be SPOT or USD_M")
 
-    This is intentionally capability-derived rather than a hand-maintained shortlist:
-    an admitted recipe must be executable today, support crypto, require only BAR data,
-    and be single-leg. Everything else remains visible through
-    ``research_recipe_coverage`` with an explicit blocker.
-    """
 
+def scheduled_public_recipe_ids(product: str = "SPOT") -> tuple[str, ...]:
+    """Return executable recipes the selected public Binance BAR path can test honestly."""
+    normalized = str(product).strip().upper()
     return tuple(
         recipe.recipe_id
         for recipe in STRATEGY_RECIPES
         if recipe.readiness is RecipeReadiness.EXECUTABLE
-        and AssetClass.CRYPTO in recipe.asset_classes
+        and _recipe_supports_public_product(recipe, normalized)
         and family_spec(recipe.family).min_data_level is DataLevel.BAR
         and family_spec(recipe.family).max_instruments == 1
     )
 
 
-def research_recipe_coverage() -> dict[str, str]:
-    """Classify every planned recipe as scheduled now or explicitly blocked."""
-
-    scheduled = frozenset(scheduled_public_recipe_ids())
+def research_recipe_coverage(product: str = "SPOT") -> dict[str, str]:
+    """Classify every planned recipe for the selected public Binance product."""
+    normalized = str(product).strip().upper()
+    scheduled = frozenset(scheduled_public_recipe_ids(normalized))
     coverage: dict[str, str] = {}
     for recipe in STRATEGY_RECIPES:
         if recipe.recipe_id in scheduled:
@@ -112,8 +121,8 @@ def research_recipe_coverage() -> dict[str, str]:
         spec = family_spec(recipe.family)
         if recipe.readiness is not RecipeReadiness.EXECUTABLE:
             reason = recipe.blocker or f"{recipe.readiness.value.lower()}_requirements_unsatisfied"
-        elif AssetClass.CRYPTO not in recipe.asset_classes:
-            reason = "public_binance_spot_asset_class_unavailable"
+        elif not _recipe_supports_public_product(recipe, normalized):
+            reason = "public_binance_product_asset_class_unavailable"
         elif spec.min_data_level is not DataLevel.BAR:
             reason = f"qualifying_public_{spec.min_data_level.value.lower()}_data_unavailable"
         elif spec.max_instruments != 1:
@@ -123,11 +132,14 @@ def research_recipe_coverage() -> dict[str, str]:
         coverage[recipe.recipe_id] = f"blocked:{reason}"
     return coverage
 
-
-def _default_runnable_recipe_ids(runnable_families: tuple[str, ...]) -> tuple[str, ...]:
+def _default_runnable_recipe_ids(
+    runnable_families: tuple[str, ...],
+    *,
+    product: str = "SPOT",
+) -> tuple[str, ...]:
     selected = tuple(
         recipe_id
-        for recipe_id in scheduled_public_recipe_ids()
+        for recipe_id in scheduled_public_recipe_ids(product)
         if strategy_recipe(recipe_id).family in runnable_families
     )
     if not selected:
@@ -181,9 +193,10 @@ def _scheduled_validation_policies() -> tuple[
     )
 
 
-def default_research_job_plan() -> ResearchJobPlan:
+def default_research_job_plan(*, product: str = "SPOT") -> ResearchJobPlan:
     requested = tuple(FAMILIES)
-    scheduled = scheduled_public_recipe_ids()
+    normalized_product = str(product).strip().upper()
+    scheduled = scheduled_public_recipe_ids(normalized_product)
     runnable = tuple(
         family
         for family in requested
@@ -213,20 +226,26 @@ def default_research_job_plan() -> ResearchJobPlan:
         requested_families=requested,
         runnable_families=runnable,
         blocked_families=blocked,
-        instruments=("BTCUSDT.BINANCE", "ETHUSDT.BINANCE"),
+        instruments=(
+            ("BTCUSDT.BINANCE", "ETHUSDT.BINANCE")
+            if normalized_product == "SPOT"
+            else ("BTCUSDT-PERP.BINANCE", "ETHUSDT-PERP.BINANCE")
+        ),
         seed_start=40,
         seed_stop=43,
         archive_months=2,
-        runnable_recipe_ids=_default_runnable_recipe_ids(runnable),
+        runnable_recipe_ids=_default_runnable_recipe_ids(runnable, product=normalized_product),
+        product=normalized_product,
     )
 
 
-def research_job_plan_for_recipe(recipe_id: str) -> ResearchJobPlan:
+def research_job_plan_for_recipe(recipe_id: str, *, product: str = "SPOT") -> ResearchJobPlan:
     """Return one fail-closed shard of the complete autonomous public schedule."""
 
-    base = default_research_job_plan()
+    normalized_product = str(product).strip().upper()
+    base = default_research_job_plan(product=normalized_product)
     if recipe_id not in base.runnable_recipe_ids:
-        disposition = research_recipe_coverage().get(recipe_id, "blocked:unknown_recipe")
+        disposition = research_recipe_coverage(normalized_product).get(recipe_id, "blocked:unknown_recipe")
         raise ValueError(f"{recipe_id!r} is not runnable in public BAR research: {disposition}")
     recipe = strategy_recipe(recipe_id)
     return ResearchJobPlan(
@@ -239,6 +258,7 @@ def research_job_plan_for_recipe(recipe_id: str) -> ResearchJobPlan:
         archive_months=_archive_months_for_recipe(recipe_id),
         runnable_recipe_ids=(recipe_id,),
         timeframes=base.timeframes,
+        product=normalized_product,
     )
 
 
@@ -343,13 +363,23 @@ def _read_verified_public_archive(
     instrument_id: str,
     interval: str,
     period: str,
+    product: str = "SPOT",
 ) -> ArchiveReadResult:
     raw_symbol = str(symbol).strip().upper()
     qualified_instrument = str(instrument_id).strip().upper()
-    if qualified_instrument != f"{raw_symbol}.BINANCE":
-        raise ValueError("public archive instrument ID does not match Binance symbol")
+    normalized_product = str(product).strip().upper()
+    expected_id = (
+        f"{raw_symbol}.BINANCE"
+        if normalized_product == "SPOT"
+        else f"{raw_symbol}-PERP.BINANCE"
+    )
+    if qualified_instrument != expected_id:
+        raise ValueError("public archive instrument ID does not match Binance symbol/product")
+    market = {"SPOT": "spot", "USD_M": "um"}.get(normalized_product)
+    if market is None:
+        raise ValueError("public research product must be SPOT or USD_M")
     url = binance_kline_url(
-        market="spot",
+        market=market,
         symbol=raw_symbol,
         interval=interval,
         period=period,
@@ -364,6 +394,7 @@ def _read_verified_public_archive(
         expected_sha256=expected_sha256,
         symbol=raw_symbol,
         interval=interval,
+        instrument_id=qualified_instrument,
     )
 
 
@@ -383,9 +414,13 @@ def _manifest_payload(result: ArchiveReadResult, *, period: str) -> dict[str, ob
     }
 
 
-def _load_public_instruments(instrument_ids: tuple[str, ...]) -> dict[str, object]:
+def _load_public_instruments(
+    instrument_ids: tuple[str, ...],
+    *,
+    product: str = "SPOT",
+) -> dict[str, object]:
     return {
-        instrument_id: load_public_binance_spot_instrument(instrument_id)
+        instrument_id: load_public_binance_instrument(instrument_id, product=product)
         for instrument_id in instrument_ids
     }
 
@@ -397,6 +432,7 @@ def _dataset_for_timeframe(
     timeframe: str,
     periods: tuple[str, ...],
     data_dir: Path,
+    product: str = "SPOT",
 ) -> tuple[ResearchDataset, tuple[dict[str, object], ...]]:
     bars_by_instrument: dict[str, tuple[object, ...]] = {}
     manifests: list[dict[str, object]] = []
@@ -415,6 +451,7 @@ def _dataset_for_timeframe(
                 instrument_id=instrument_id,
                 interval=timeframe,
                 period=period,
+                product=product,
             )
             collected.extend(result.bars)
             manifests.append(_manifest_payload(result, period=period))
@@ -542,7 +579,7 @@ def run_research_job(
     data_dir.mkdir(parents=True, exist_ok=True)
 
     periods = _stable_archive_periods(count=plan.archive_months)
-    instruments = _load_public_instruments(plan.instruments)
+    instruments = _load_public_instruments(plan.instruments, product=plan.product)
     dataset_cache: dict[str, tuple[ResearchDataset, tuple[dict[str, object], ...]]] = {}
     runs: list[dict[str, object]] = []
 
@@ -583,6 +620,7 @@ def run_research_job(
                             timeframe=timeframe,
                             periods=periods,
                             data_dir=data_dir,
+                            product=plan.product,
                         )
                     dataset, manifests = dataset_cache[timeframe]
                     robust_policy, advanced_policy, transfer_policy, hidden_policy = _scheduled_validation_policies()
@@ -597,11 +635,15 @@ def run_research_job(
                         evolution_generations=1,
                         evolution_population=4,
                         validation_budget=len(plan.instruments),
-                        paper_queue_cap=1,
+                        paper_queue_cap=1 if plan.product == "SPOT" else 0,
                         hidden_fraction=0.20,
                         validation_window=_scheduled_validation_window(recipe_id) if recipe_id is not None else 150,
                         trade_size="0.01000",
-                        starting_balances=("10 ETH", "10 BTC", "100000 USDT"),
+                        starting_balances=(
+                            ("10 ETH", "10 BTC", "100000 USDT")
+                            if plan.product == "SPOT"
+                            else ("100000 USDT",)
+                        ),
                         recipe_ids=(recipe_id,) if recipe_id is not None else (),
                         timeframe=requested_timeframe,
                         fees=execution_costs["fees"],
@@ -648,7 +690,7 @@ def run_research_job(
         "code_hash": code_hash,
         "lock_hash": lock_hash,
         "periods": list(periods),
-        "recipe_coverage": research_recipe_coverage(),
+        "recipe_coverage": research_recipe_coverage(plan.product),
         "plan": {
             "requested_families": list(plan.requested_families),
             "runnable_families": list(plan.runnable_families),
@@ -659,6 +701,7 @@ def run_research_job(
             "seed_stop": plan.seed_stop,
             "archive_months": plan.archive_months,
             "timeframes": list(plan.timeframes),
+            "product": plan.product,
         },
         "runs": runs,
     }
@@ -676,7 +719,12 @@ def main() -> int:
     lock_hash = hashlib.sha256(lock_path.read_bytes()).hexdigest()
 
     recipe_id = os.environ.get("MASTERTRD_RESEARCH_RECIPE_ID", "").strip()
-    plan = research_job_plan_for_recipe(recipe_id) if recipe_id else default_research_job_plan()
+    product = os.environ.get("MASTERTRD_RESEARCH_PRODUCT", "SPOT").strip().upper() or "SPOT"
+    plan = (
+        research_job_plan_for_recipe(recipe_id, product=product)
+        if recipe_id
+        else default_research_job_plan(product=product)
+    )
 
     instruments_raw = os.environ.get("MASTERTRD_RESEARCH_INSTRUMENTS", "").strip()
     timeframes_raw = os.environ.get("MASTERTRD_RESEARCH_TIMEFRAMES", "").strip()

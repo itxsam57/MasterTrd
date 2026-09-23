@@ -22,6 +22,7 @@ def run_research_worker(
     seed_start: int | None = None,
     seed_stop: int | None = None,
     archive_months: int | None = None,
+    product: str = "SPOT",
 ) -> int:
     job_dir = Path(job_dir)
     receipt_path = job_dir / "receipt.json"
@@ -37,11 +38,13 @@ def run_research_worker(
         "MASTERTRD_RESEARCH_SEED_START",
         "MASTERTRD_RESEARCH_SEED_STOP",
         "MASTERTRD_RESEARCH_ARCHIVE_MONTHS",
+        "MASTERTRD_RESEARCH_PRODUCT",
     )
     previous_env = {key: os.environ.get(key) for key in env_keys}
     os.environ["MASTERTRD_RESEARCH_RECIPE_ID"] = recipe_id
     os.environ["MASTERTRD_RESEARCH_ARTIFACT_DIR"] = str(artifact_dir)
     os.environ["MASTERTRD_CODE_HASH"] = code_hash
+    os.environ["MASTERTRD_RESEARCH_PRODUCT"] = str(product).strip().upper()
 
     if instruments:
         os.environ["MASTERTRD_RESEARCH_INSTRUMENTS"] = instruments
@@ -96,6 +99,7 @@ def main() -> int:
     parser.add_argument("--seed-start", type=int)
     parser.add_argument("--seed-stop", type=int)
     parser.add_argument("--archive-months", type=int)
+    parser.add_argument("--product", choices=("SPOT", "USD_M"), default="SPOT")
     args = parser.parse_args()
     return run_research_worker(
         Path(args.job_dir),
@@ -106,6 +110,7 @@ def main() -> int:
         seed_start=args.seed_start,
         seed_stop=args.seed_stop,
         archive_months=args.archive_months,
+        product=args.product,
     )
 
 

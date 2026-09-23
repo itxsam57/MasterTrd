@@ -9,6 +9,7 @@ import subprocess
 import sys
 from uuid import uuid4
 
+from .research_job import research_recipe_coverage
 from .source_identity import git_head as _source_git_head
 from .strategy_universe import RecipeReadiness, strategy_recipe, strategy_recipe_timeframes
 
@@ -29,6 +30,7 @@ class LocalJobReceipt:
     seed_start: int | None = None
     seed_stop: int | None = None
     archive_months: int | None = None
+    product: str = "SPOT"
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -64,11 +66,21 @@ def launch_research_job(
     seed_start: int | None = None,
     seed_stop: int | None = None,
     archive_months: int | None = None,
+    product: str = "SPOT",
 ) -> LocalJobReceipt:
     recipe = strategy_recipe(recipe_id)
     if recipe.readiness is not RecipeReadiness.EXECUTABLE:
         raise ValueError(f"recipe {recipe_id} is not executable: {recipe.blocker}")
+    normalized_product = str(product).strip().upper()
+    coverage = research_recipe_coverage(normalized_product).get(recipe_id, "blocked:unknown_recipe")
+    if coverage != "scheduled_public_bar":
+        reason = coverage.removeprefix("blocked:")
+        raise ValueError(
+            f"recipe {recipe_id} is not runnable with the current public Binance {normalized_product} BAR research path: {reason}"
+        )
 
+    if normalized_product not in {"SPOT", "USD_M"}:
+        raise ValueError("public research product must be SPOT or USD_M")
     if instruments and len(instruments) < 2:
         raise ValueError("local research requires at least two instruments for transfer validation")
     if timeframe is not None and timeframe not in strategy_recipe_timeframes(recipe_id):
@@ -98,6 +110,7 @@ def launch_research_job(
         seed_start=seed_start,
         seed_stop=seed_stop,
         archive_months=archive_months,
+        product=normalized_product,
     )
     save_receipt(receipt)
 
@@ -112,6 +125,8 @@ def launch_research_job(
         recipe_id,
         "--code-hash",
         code_hash,
+        "--product",
+        normalized_product,
     ]
     if instruments:
         argv.extend(["--instruments", ",".join(instruments)])
@@ -142,6 +157,84 @@ def list_local_jobs(root: Path) -> list[LocalJobReceipt]:
     return sorted(receipts, key=lambda item: item.created_at, reverse=True)
 
 
+def recommended_archive_months(recipe_id: str) -> int:
+    """Return the current promotion-oriented public-history recommendation for a recipe."""
+    family = strategy_recipe(recipe_id).family
+    if family == "position":
+        return 60
+    if family == "swing":
+        return 26
+    if family in {"trend", "volatility"}:
+        return 6
+    return 2
+
+
+def _friendly_reason(reason: object) -> str:
+    raw = str(reason or "").strip()
+    if not raw:
+        return "No promotion decision was recorded."
+    if raw == "required evidence missing":
+        return (
+            "The candidate completed the run but did not have all evidence required for promotion. "
+            "A short history window is a common cause; failed validation stages can also cause this."
+        )
+    marker = "robustness promotion denied:"
+    if marker in raw:
+        failed = raw.split(marker, 1)[1].replace(",", ", ")
+        return f"Initial results did not survive the required robustness checks: {failed}."
+    if "public_binance_spot_asset_class_unavailable" in raw or "public_binance_product_asset_class_unavailable" in raw:
+        return "This strategy does not match the selected Binance research product."
+    if "scheduled_exact_multi_leg_validation_unavailable" in raw:
+        return "This is a multi-leg strategy; the current public BAR scheduler does not yet run exact multi-leg validation."
+    if "not runnable" in raw:
+        return "The selected strategy is not compatible with the current public research path."
+    return raw.replace("_", " ")
+
+
+def _next_action(
+    *,
+    status: str,
+    paper_queued: int,
+    reason: object,
+    history_months: int | None,
+    recommended_months: int,
+    product: str = "SPOT",
+) -> str:
+    if paper_queued > 0:
+        return "Review the PAPER finalist and add it to a shared PAPER portfolio."
+    if status in {"RUNNING", "STARTING"}:
+        return "Wait for the research worker to finish."
+    if status == "FAILED":
+        return "Choose a strategy marked Runnable now, or add the missing provider/data capability."
+    if product != "SPOT":
+        return (
+            "Keep this as research evidence. USD-M PAPER execution remains fail-closed "
+            "until its forward execution bridge is admitted."
+        )
+    raw = str(reason or "")
+    if history_months is not None and history_months < recommended_months:
+        return f"Rerun with at least {recommended_months} months before treating this as a serious validation result."
+    if "robustness promotion denied:" in raw:
+        return "Do not trade this candidate; mutate or retest it until the failed robustness gates pass."
+    return "Keep it out of PAPER and test other seeds, timeframes, instruments, or strategy families."
+
+
+def _result_verdict(*, status: str, paper_queued: int, best: dict[str, object] | None) -> str:
+    if status in {"RUNNING", "STARTING"}:
+        return "RUNNING"
+    if status == "FAILED":
+        return "BLOCKED / FAILED"
+    if paper_queued > 0:
+        return "READY FOR PAPER"
+    if best is None:
+        return "NO CANDIDATE"
+    reason = str(best.get("reason") or "")
+    score = float(best.get("score", 0.0))
+    if "robustness promotion denied:" in reason and score > 0.0:
+        return "PROMISING, NOT ROBUST"
+    return "NOT READY"
+
+
 def launch_research_matrix(
     recipe_ids: tuple[str, ...],
     root: Path,
@@ -151,6 +244,7 @@ def launch_research_matrix(
     seed_start: int,
     seed_stop: int,
     archive_months: int,
+    product: str = "SPOT",
 ) -> list[LocalJobReceipt]:
     if not recipe_ids or not timeframes:
         raise ValueError("research matrix requires recipes and timeframes")
@@ -169,6 +263,7 @@ def launch_research_matrix(
                     seed_start=seed_start,
                     seed_stop=seed_stop,
                     archive_months=archive_months,
+                    product=product,
                 )
             )
     if not receipts:
@@ -180,16 +275,39 @@ def local_result_rows(root: Path) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for receipt in list_local_jobs(root):
         report_path = Path(receipt.job_dir) / "research" / "research-report.json"
+        recommended_months = recommended_archive_months(receipt.recipe_id)
         if not report_path.is_file():
+            explanation = _friendly_reason(receipt.error)
             rows.append(
                 {
                     "job_id": receipt.job_id,
                     "recipe_id": receipt.recipe_id,
+                    "product": receipt.product,
                     "timeframe": receipt.timeframe,
                     "status": receipt.status,
+                    "verdict": _result_verdict(status=receipt.status, paper_queued=0, best=None),
                     "best_state": None,
                     "best_score": None,
+                    "best_strategy_id": None,
+                    "best_reason": receipt.error,
+                    "explanation": explanation,
+                    "next_action": _next_action(
+                        status=receipt.status,
+                        paper_queued=0,
+                        reason=receipt.error,
+                        history_months=receipt.archive_months,
+                        recommended_months=recommended_months,
+                        product=receipt.product,
+                    ),
+                    "candidate_count": 0,
                     "paper_queued": 0,
+                    "history_months": receipt.archive_months,
+                    "recommended_history_months": recommended_months,
+                    "validation_depth": (
+                        "QUICK / INCOMPLETE"
+                        if receipt.archive_months is not None and receipt.archive_months < recommended_months
+                        else "STANDARD WINDOW"
+                    ),
                     "report": None,
                     "duckdb": str(Path(receipt.job_dir) / "research" / "research.duckdb"),
                     "stdout": str(Path(receipt.job_dir) / "stdout.log"),
@@ -203,26 +321,68 @@ def local_result_rows(root: Path) -> list[dict[str, object]]:
         except (OSError, json.JSONDecodeError):
             report = {}
         runs = report.get("runs", []) if isinstance(report, dict) else []
-        finalists = [
-            finalist
+        finalist_pairs = [
+            (finalist, run)
             for run in runs
             if isinstance(run, dict)
             for finalist in run.get("finalists", [])
             if isinstance(finalist, dict)
         ]
-        best = max(finalists, key=lambda item: float(item.get("score", float("-inf"))), default=None)
+        best_pair = max(
+            finalist_pairs,
+            key=lambda item: float(item[0].get("score", float("-inf"))),
+            default=None,
+        )
+        best = None if best_pair is None else best_pair[0]
+        best_run = None if best_pair is None else best_pair[1]
+        finalists = [item[0] for item in finalist_pairs]
+        paper_queued = sum(
+            int(run.get("paper_queued", 0))
+            for run in runs
+            if isinstance(run, dict)
+        )
+        plan = report.get("plan", {}) if isinstance(report, dict) else {}
+        report_history = plan.get("archive_months") if isinstance(plan, dict) else None
+        history_months = (
+            int(report_history)
+            if isinstance(report_history, int)
+            else receipt.archive_months
+        )
+        best_reason = None if best is None else best.get("reason")
         rows.append(
             {
                 "job_id": receipt.job_id,
                 "recipe_id": receipt.recipe_id,
-                "timeframe": receipt.timeframe,
+                "product": receipt.product,
+                "timeframe": (
+                    receipt.timeframe
+                    if receipt.timeframe is not None
+                    else (None if best_run is None else best_run.get("timeframe"))
+                ),
+                "best_seed": None if best_run is None else best_run.get("seed"),
                 "status": receipt.status,
+                "verdict": _result_verdict(status=receipt.status, paper_queued=paper_queued, best=best),
                 "best_state": None if best is None else best.get("state"),
                 "best_score": None if best is None else best.get("score"),
-                "paper_queued": sum(
-                    int(run.get("paper_queued", 0))
-                    for run in runs
-                    if isinstance(run, dict)
+                "best_strategy_id": None if best is None else best.get("strategy_id"),
+                "best_reason": best_reason,
+                "explanation": _friendly_reason(best_reason if best is not None else receipt.error),
+                "next_action": _next_action(
+                    status=receipt.status,
+                    paper_queued=paper_queued,
+                    reason=best_reason if best is not None else receipt.error,
+                    history_months=history_months,
+                    recommended_months=recommended_months,
+                    product=receipt.product,
+                ),
+                "candidate_count": len(finalists),
+                "paper_queued": paper_queued,
+                "history_months": history_months,
+                "recommended_history_months": recommended_months,
+                "validation_depth": (
+                    "QUICK / INCOMPLETE"
+                    if history_months is not None and history_months < recommended_months
+                    else "STANDARD WINDOW"
                 ),
                 "report": str(report_path),
                 "duckdb": str(Path(receipt.job_dir) / "research" / "research.duckdb"),
@@ -233,10 +393,11 @@ def local_result_rows(root: Path) -> list[dict[str, object]]:
         )
     return rows
 
-
 def local_paper_candidates(root: Path) -> list[dict[str, object]]:
     candidates: dict[str, dict[str, object]] = {}
     for receipt in list_local_jobs(root):
+        if receipt.product != "SPOT":
+            continue
         report_path = Path(receipt.job_dir) / "research" / "research-report.json"
         if not report_path.is_file():
             continue

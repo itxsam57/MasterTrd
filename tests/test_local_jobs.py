@@ -33,6 +33,38 @@ def test_launch_rejects_non_executable_recipe(tmp_path):
         launch_research_job("momentum-01", tmp_path)
 
 
+def test_launch_rejects_engine_ready_recipe_blocked_by_current_public_path(tmp_path):
+    with pytest.raises(ValueError, match="current public Binance SPOT BAR research path"):
+        launch_research_job("ema-cross-futures", tmp_path)
+
+
+
+def test_launch_accepts_futures_recipe_on_usdm_public_path(tmp_path, monkeypatch):
+    monkeypatch.setattr("mastertrd.local_jobs._git_head", lambda: "abc123")
+    launched = {}
+
+    class Process:
+        pid = 4321
+
+    def fake_popen(argv, **kwargs):
+        launched["argv"] = argv
+        return Process()
+
+    monkeypatch.setattr("mastertrd.local_jobs.subprocess.Popen", fake_popen)
+    receipt = launch_research_job(
+        "ema-cross-futures",
+        tmp_path,
+        instruments=("BTCUSDT-PERP.BINANCE", "ETHUSDT-PERP.BINANCE"),
+        timeframe="15m",
+        seed_start=40,
+        seed_stop=41,
+        archive_months=6,
+        product="USD_M",
+    )
+    assert receipt.product == "USD_M"
+    assert "--product" in launched["argv"]
+    assert "USD_M" in launched["argv"]
+
 def test_receipt_is_persisted_as_json(tmp_path, monkeypatch):
     monkeypatch.setattr("mastertrd.local_jobs._git_head", lambda: "abc123")
     monkeypatch.setattr(
@@ -215,6 +247,8 @@ def test_local_result_rows_preserves_losses_failures_and_report_path(tmp_path):
     assert row["best_score"] == -0.05
     assert row["best_state"] == "QUARANTINED"
     assert row["paper_queued"] == 0
+    assert row["verdict"] == "NOT READY"
+    assert row["validation_depth"] == "STANDARD WINDOW"
     assert row["report"] == str(report)
 
 

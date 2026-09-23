@@ -47,13 +47,14 @@ def parse_kline_row(
     symbol: str,
     interval: str,
     venue: str = "BINANCE",
+    instrument_id: str | None = None,
 ) -> MarketBar:
     if len(row) < 6:
         raise ValueError("Binance kline row requires at least 6 fields")
     return MarketBar(
         timestamp=_timestamp_from_epoch(row[0]),
         venue=venue,
-        instrument=symbol.upper(),
+        instrument=(instrument_id or symbol).upper(),
         timeframe=interval,
         open=float(row[1]),
         high=float(row[2]),

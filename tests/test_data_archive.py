@@ -83,3 +83,25 @@ def test_read_binance_archive_returns_verified_bars_and_hash(tmp_path) -> None:
     assert len(result.manifest.dataset_hash) == 64
     assert result.manifest.instrument == "BTCUSDT"
     assert result.manifest.timeframe == "1m"
+
+
+def test_read_binance_archive_accepts_optional_header_and_explicit_instrument_identity(tmp_path) -> None:
+    rows = [
+        ["open_time", "open", "high", "low", "close", "volume"],
+        [1_700_000_000_000, 100, 101, 99, 100.5, 10],
+        [1_700_000_060_000, 100.5, 102, 100, 101, 11],
+    ]
+    archive = tmp_path / "bars.zip"
+    archive.write_bytes(_zip_bytes("BTCUSDT-1m.csv", rows))
+    checksum = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    result = read_binance_archive(
+        archive,
+        expected_sha256=checksum,
+        symbol="BTCUSDT",
+        interval="1m",
+        instrument_id="BTCUSDT-PERP.BINANCE",
+    )
+
+    assert len(result.bars) == 2
+    assert result.manifest.instrument == "BTCUSDT-PERP.BINANCE"
