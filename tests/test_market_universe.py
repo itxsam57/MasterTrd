@@ -112,3 +112,48 @@ def test_universe_cache_avoids_refetch(tmp_path):
     )
     assert first == second
     assert calls["count"] == 2
+
+
+def test_universe_cache_invalidates_when_policy_version_is_missing(tmp_path):
+    path = tmp_path / "spot.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "generated_at": 1000.0,
+                "product": "SPOT",
+                "quote_asset": "USDT",
+                "limit": 2,
+                "markets": [
+                    {
+                        "product": "SPOT",
+                        "symbol": "USD1USDT",
+                        "instrument_id": "USD1USDT.BINANCE",
+                        "base_asset": "USD1",
+                        "quote_asset": "USDT",
+                        "quote_volume_24h": 9999.0,
+                    },
+                    {
+                        "product": "SPOT",
+                        "symbol": "BTCUSDT",
+                        "instrument_id": "BTCUSDT.BINANCE",
+                        "base_asset": "BTC",
+                        "quote_asset": "USDT",
+                        "quote_volume_24h": 5000.0,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rows = load_or_refresh_universe(
+        path,
+        product="SPOT",
+        limit=2,
+        now=1100.0,
+        opener=_opener_factory(),
+    )
+    assert [row.instrument_id for row in rows] == [
+        "BTCUSDT.BINANCE",
+        "ETHUSDT.BINANCE",
+    ]

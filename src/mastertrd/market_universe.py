@@ -22,6 +22,8 @@ class MarketCandidate:
         return asdict(self)
 
 
+_UNIVERSE_POLICY_VERSION = 2
+
 _ENDPOINTS = {
     "SPOT": (
         "https://data-api.binance.vision/api/v3/exchangeInfo",
@@ -179,6 +181,7 @@ def load_or_refresh_universe(
                 and payload.get("product") == str(product).strip().upper()
                 and payload.get("quote_asset") == str(quote_asset).strip().upper()
                 and int(payload.get("limit", 0)) == int(limit)
+                and int(payload.get("policy_version", 0)) == _UNIVERSE_POLICY_VERSION
             ):
                 rows = payload.get("markets")
                 if isinstance(rows, list) and len(rows) >= 2:
@@ -195,6 +198,7 @@ def load_or_refresh_universe(
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": 1,
+        "policy_version": _UNIVERSE_POLICY_VERSION,
         "generated_at": current,
         "product": str(product).strip().upper(),
         "quote_asset": str(quote_asset).strip().upper(),
