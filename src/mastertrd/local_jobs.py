@@ -81,7 +81,7 @@ def launch_research_job(
 
     if normalized_product not in {"SPOT", "USD_M"}:
         raise ValueError("public research product must be SPOT or USD_M")
-    minimum_instruments = 4 if recipe.family == "stat_arb" else 2
+    minimum_instruments = 4 if recipe.family in {"stat_arb", "portfolio"} else 2
     if instruments and len(instruments) < minimum_instruments:
         raise ValueError(
             f"local {recipe.family} research requires at least {minimum_instruments} "

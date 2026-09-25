@@ -190,3 +190,73 @@ def test_usdm_stat_arb_real_execution_stress_is_derived_from_nautilus_fills() ->
         ),
     )
     assert evidence.passed is True
+
+
+def test_run_nautilus_evaluation_executes_crypto_rotation_on_spot_cash_account() -> None:
+    from nautilus_trader.model.data import Bar, BarType
+    from nautilus_trader.test_kit.providers import TestInstrumentProvider
+
+    from mastertrd.strategy_universe import compile_strategy_recipe
+
+    btc = TestInstrumentProvider.btcusdt_binance()
+    eth = TestInstrumentProvider.ethusdt_binance()
+    candidate = compile_strategy_recipe(
+        "crypto-rotation",
+        instruments=(btc.id.value, eth.id.value),
+        seed=42,
+        trade_size="0.01000",
+        timeframe="1h",
+    )
+
+    def make_bars(instrument, closes):
+        bar_type = BarType.from_str(f"{instrument.id.value}-1-HOUR-LAST-EXTERNAL")
+        base_ns = 1_700_000_000_000_000_000
+        output = []
+        previous = closes[0]
+        for index, close in enumerate(closes):
+            open_value = float(previous)
+            close_value = float(close)
+            timestamp = base_ns + index * 3_600_000_000_000
+            output.append(
+                Bar(
+                    bar_type=bar_type,
+                    open=instrument.make_price(open_value),
+                    high=instrument.make_price(max(open_value, close_value) + 1.0),
+                    low=instrument.make_price(min(open_value, close_value) - 1.0),
+                    close=instrument.make_price(close_value),
+                    volume=instrument.make_qty(10),
+                    ts_event=timestamp,
+                    ts_init=timestamp,
+                )
+            )
+            previous = close
+        return tuple(output)
+
+    count = 400
+    btc_closes = []
+    eth_closes = []
+    for index in range(count):
+        phase = (index // 100) % 4
+        if phase in (0, 2):
+            btc_closes.append(100.0 + (index % 100) * 0.5)
+            eth_closes.append(100.0 + (index % 100) * 0.05)
+        else:
+            btc_closes.append(150.0 - (index % 100) * 0.05)
+            eth_closes.append(105.0 + (index % 100) * 0.5)
+
+    result = nautilus_evaluation.run_nautilus_evaluation(
+        genome=candidate,
+        instruments={btc.id.value: btc, eth.id.value: eth},
+        data_by_instrument={
+            btc.id.value: make_bars(btc, btc_closes),
+            eth.id.value: make_bars(eth, eth_closes),
+        },
+        dataset_hash="rotation-dataset-v1",
+        code_hash="rotation-code-v1",
+        trade_size_override="0.01000",
+        starting_balances=("10 BTC", "10 ETH", "100000 USDT"),
+    )
+
+    assert result.engine == "nautilus_trader"
+    assert result.strategy_id == candidate.strategy_id
+    assert result.trade_count >= 2

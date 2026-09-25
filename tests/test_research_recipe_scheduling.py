@@ -40,7 +40,13 @@ def test_default_public_job_selects_multiple_exact_crypto_bar_recipes_per_runnab
         assert recipe.family in plan.runnable_families
         assert family_spec(recipe.family).min_data_level is DataLevel.BAR
 
-    assert all(family_counts[family] >= 2 for family in plan.runnable_families)
+    assert all(
+        family_counts[family] >= 2
+        for family in plan.runnable_families
+        if family != "portfolio"
+    )
+    assert family_counts["portfolio"] == 1
+    assert "crypto-rotation" in plan.runnable_recipe_ids
 
 
 def test_research_brain_config_rejects_recipe_from_unconfigured_family() -> None:

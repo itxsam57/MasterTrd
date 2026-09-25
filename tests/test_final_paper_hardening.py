@@ -213,7 +213,10 @@ def test_scheduled_public_research_covers_every_compatible_executable_recipe():
         if recipe.readiness is RecipeReadiness.EXECUTABLE
         and AssetClass.CRYPTO in recipe.asset_classes
         and family_spec(recipe.family).min_data_level is DataLevel.BAR
-        and family_spec(recipe.family).max_instruments == 1
+        and (
+            family_spec(recipe.family).max_instruments == 1
+            or recipe.family == "portfolio"
+        )
     }
     scheduled = set(research_job.scheduled_public_recipe_ids())
     assert scheduled == expected

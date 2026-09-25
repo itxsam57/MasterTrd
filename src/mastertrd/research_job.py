@@ -81,15 +81,17 @@ class ResearchJobPlan:
             spec = family_spec(recipe.family)
             if spec.min_data_level is not DataLevel.BAR:
                 raise ValueError("scheduled public recipe must use BAR data")
-            if spec.max_instruments != 1 and not (
-                recipe.family == "stat_arb" and self.product == "USD_M"
-            ):
+            admitted_multileg = (
+                recipe.family == "portfolio"
+                or (recipe.family == "stat_arb" and self.product == "USD_M")
+            )
+            if spec.max_instruments != 1 and not admitted_multileg:
                 raise ValueError(
-                    "scheduled public recipe must be single-leg or admitted USD_M stat_arb"
+                    "scheduled public recipe must be single-leg or an admitted multi-leg BAR family"
                 )
-            if recipe.family == "stat_arb" and len(self.instruments) < 4:
+            if admitted_multileg and len(self.instruments) < 4:
                 raise ValueError(
-                    "scheduled stat_arb research requires at least four instruments "
+                    f"scheduled {recipe.family} research requires at least four instruments "
                     "for independent transfer validation"
                 )
 
@@ -117,6 +119,7 @@ def scheduled_public_recipe_ids(product: str = "SPOT") -> tuple[str, ...]:
         and family_spec(recipe.family).min_data_level is DataLevel.BAR
         and (
             family_spec(recipe.family).max_instruments == 1
+            or recipe.family == "portfolio"
             or (recipe.family == "stat_arb" and normalized == "USD_M")
         )
     )
@@ -257,7 +260,12 @@ def default_research_job_plan(*, product: str = "SPOT") -> ResearchJobPlan:
         runnable_families=runnable,
         blocked_families=blocked,
         instruments=(
-            ("BTCUSDT.BINANCE", "ETHUSDT.BINANCE")
+            (
+                "BTCUSDT.BINANCE",
+                "ETHUSDT.BINANCE",
+                "SOLUSDT.BINANCE",
+                "XRPUSDT.BINANCE",
+            )
             if normalized_product == "SPOT"
             else (
                 "BTCUSDT-PERP.BINANCE",
@@ -279,15 +287,11 @@ def research_job_plan_for_recipe(recipe_id: str, *, product: str = "SPOT") -> Re
 
     normalized_product = str(product).strip().upper()
     base = default_research_job_plan(product=normalized_product)
-    if recipe_id not in base.runnable_recipe_ids:
+    if recipe_id not in scheduled_public_recipe_ids(normalized_product):
         disposition = research_recipe_coverage(normalized_product).get(recipe_id, "blocked:unknown_recipe")
         raise ValueError(f"{recipe_id!r} is not runnable in public BAR research: {disposition}")
     recipe = strategy_recipe(recipe_id)
-    instruments = (
-        base.instruments
-        if recipe.family == "stat_arb"
-        else base.instruments[:2]
-    )
+    instruments = base.instruments
     return ResearchJobPlan(
         requested_families=base.requested_families,
         runnable_families=(recipe.family,),
@@ -639,7 +643,7 @@ def run_research_job(
                 for seed in range(plan.seed_start, plan.seed_stop):
                     spec = family_spec(family)
                     candidate_instrument_sets = ()
-                    if family == "stat_arb":
+                    if family in {"stat_arb", "portfolio"}:
                         usable = plan.instruments[: min(8, len(plan.instruments))]
                         candidate_instrument_sets = tuple(
                             (usable[index], usable[index + 1])

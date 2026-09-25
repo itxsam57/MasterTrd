@@ -372,3 +372,18 @@ def test_stat_arb_local_job_requires_four_markets_for_transfer_validation(tmp_pa
             timeframe="15m",
             product="USD_M",
         )
+
+
+def test_rotation_local_job_requires_four_markets_for_transfer_validation(tmp_path):
+    import pytest
+
+    from mastertrd.local_jobs import launch_research_job
+
+    with pytest.raises(ValueError, match="at least 4"):
+        launch_research_job(
+            "crypto-rotation",
+            tmp_path,
+            instruments=("BTCUSDT.BINANCE", "ETHUSDT.BINANCE"),
+            timeframe="1h",
+            product="SPOT",
+        )
