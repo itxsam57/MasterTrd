@@ -65,8 +65,31 @@ def generate_research_candidates(config: Any, dataset: Any) -> ResearchCandidate
             )
             configured_sets = tuple(getattr(config, "instrument_sets", ()))
             if configured_sets:
-                allowed = set(compatible_sets)
-                invalid = [items for items in configured_sets if tuple(items) not in allowed]
+                invalid = []
+                for raw_items in configured_sets:
+                    items = tuple(raw_items)
+                    if (
+                        not items
+                        or len(set(items)) != len(items)
+                        or any(instrument_id not in metadata for instrument_id in items)
+                    ):
+                        invalid.append(items)
+                        continue
+                    subset_metadata = {
+                        instrument_id: metadata[instrument_id]
+                        for instrument_id in items
+                    }
+                    subset_levels = {
+                        instrument_id: available_levels[instrument_id]
+                        for instrument_id in items
+                    }
+                    structurally_compatible = family_instrument_sets(
+                        family,
+                        subset_metadata,
+                        available_data_levels=subset_levels,
+                    )
+                    if items not in structurally_compatible:
+                        invalid.append(items)
                 if invalid:
                     raise ValueError(
                         "configured research instrument_sets are incompatible with the family/data contract"

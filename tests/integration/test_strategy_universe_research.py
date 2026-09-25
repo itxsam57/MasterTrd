@@ -200,3 +200,44 @@ def test_named_stat_arb_recipe_can_be_bounded_to_explicit_candidate_pairs() -> N
         (btc.id.value, eth.id.value),
         (ada.id.value, ada_btc.id.value),
     }
+
+
+def test_crypto_rotation_recipe_accepts_bounded_independent_portfolio_pairs() -> None:
+    from dataclasses import replace
+
+    from nautilus_trader.test_kit.providers import TestInstrumentProvider
+
+    btc = TestInstrumentProvider.btcusdt_binance()
+    eth = TestInstrumentProvider.ethusdt_binance()
+    ada = TestInstrumentProvider.adausdt_binance()
+    ada_btc = TestInstrumentProvider.adabtc_binance()
+    metadata = {
+        instrument.id.value: instrument
+        for instrument in (btc, eth, ada, ada_btc)
+    }
+    dataset = SimpleNamespace(
+        nautilus_instruments=metadata,
+        available_data_levels={key: frozenset({"BAR"}) for key in metadata},
+    )
+    config = replace(
+        _config(
+            family="portfolio",
+            recipe_id="crypto-rotation",
+            instruments=tuple(metadata),
+        ),
+        instrument_sets=(
+            (btc.id.value, eth.id.value),
+            (ada.id.value, ada_btc.id.value),
+        ),
+    )
+
+    batch = generate_research_candidates(config, dataset)
+
+    assert batch.blockers == ()
+    assert {candidate.instruments for candidate in batch.candidates} == {
+        (btc.id.value, eth.id.value),
+        (ada.id.value, ada_btc.id.value),
+    }
+    assert {candidate.style for candidate in batch.candidates} == {
+        "recipe:crypto-rotation"
+    }
